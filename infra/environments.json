@@ -1,0 +1,20 @@
+{
+  "preview": {
+    "environment": "preview",
+    "database": "isolated-preview",
+    "storage": "isolated-preview",
+    "productionAccess": false
+  },
+  "staging": {
+    "environment": "staging",
+    "database": "persistent-staging",
+    "storage": "persistent-staging",
+    "productionAccess": false
+  },
+  "production": {
+    "environment": "production",
+    "database": "production",
+    "storage": "production",
+    "productionAccess": true
+  }
+}

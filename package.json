@@ -1,0 +1,53 @@
+{
+  "name": "nox-os",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": "24.x",
+    "pnpm": "11.19.0"
+  },
+  "scripts": {
+    "validate": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "architecture:test": "vitest run tests/architecture",
+    "registry:test": "vitest run tests/registry",
+    "ux-contract:test": "vitest run tests/ux-contract",
+    "security:test": "vitest run tests/security",
+    "contracts:check-frozen-inputs": "node scripts/contracts/check-frozen-inputs.mjs",
+    "db:validate": "node scripts/migrations/validate.mjs",
+    "db:migrate:staging": "node scripts/migrations/migrate-staging.mjs",
+    "db:status:staging": "node scripts/migrations/status-staging.mjs",
+    "infra:check": "node scripts/infra/check.mjs",
+    "infra:apply": "pnpm tsx scripts/infra/provision-storage.ts && node scripts/infra/apply-cloudflare.mjs",
+    "deploy:staging": "node scripts/deploy/staging.mjs",
+    "verify:staging": "node scripts/verify/staging.mjs",
+    "secrets:scan": "node scripts/security/scan.mjs",
+    "build": "pnpm --filter @nox-os/web build"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@axe-core/playwright": "4.13.0",
+    "@types/node": "26.4.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@vercel/node": "9.0.1",
+    "@vitest/coverage-v8": "4.1.11",
+    "eslint": "10.9.1",
+    "eslint-config-prettier": "10.1.8",
+    "fast-glob": "3.3.3",
+    "prettier": "3.9.6",
+    "supabase": "2.116.0",
+    "tsx": "4.23.12",
+    "typescript": "7.0.2",
+    "vercel": "59.9.1",
+    "vitest": "4.1.11"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "hostname": "ops.example.invalid",
+  "applicationType": "self_hosted",
+  "purpose": "Privileged NØX-OS foundation diagnostics and operations",
+  "policy": {
+    "action": "allow",
+    "include": ["approved_identity_provider_group"],
+    "requiresAtLeastOneIncludeRule": true
+  },
+  "applicationAuthorization": {
+    "noxAuthenticationRequired": true,
+    "tenantRbacRequired": true,
+    "accessIsNotRbac": true
+  }
+}

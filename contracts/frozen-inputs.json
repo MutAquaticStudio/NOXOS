@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "authority": "External canonical documents; this manifest is a read-only checksum baseline, not a replacement authority.",
+  "inputs": [
+    {
+      "id": "gate-0-architecture",
+      "sourcePath": "/Users/nox/Documents/MD/NOX_OS_GATE_0_ARCHITECTURE_v1.0.md",
+      "sha256": "02dcb885dcce4f7ea0842e05f3cb35d981cc8375eaebb159c3ac56cb17c83606"
+    },
+    {
+      "id": "uxui-guideline",
+      "sourcePath": "/Users/nox/Documents/MD/NOX_OS_UXUI_GUIDELINE_v1.md",
+      "sha256": "790b2a26d395bcf5007599a084c5c16b1c65927d552b53a2a4ed2f2e7d7580b9"
+    }
+  ]
+}

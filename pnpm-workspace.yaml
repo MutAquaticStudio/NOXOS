@@ -1,0 +1,35 @@
+packages:
+  - apps/*
+  - packages/*
+allowBuilds:
+  esbuild: true
+minimumReleaseAgeExclude:
+  - "@types/node@26.4.0"
+  - "@vercel/backends@4.0.1"
+  - "@vercel/build-utils@14.6.1"
+  - "@vercel/cervel@0.1.56"
+  - "@vercel/container@4.0.1"
+  - "@vercel/elysia@4.0.1"
+  - "@vercel/express@4.0.1"
+  - "@vercel/fastify@4.0.1"
+  - "@vercel/gatsby-plugin-vercel-builder@2.2.49"
+  - "@vercel/go@7.0.1"
+  - "@vercel/h3@4.0.1"
+  - "@vercel/hono@4.0.1"
+  - "@vercel/hydrogen@5.0.1"
+  - "@vercel/koa@4.0.1"
+  - "@vercel/nestjs@4.0.1"
+  - "@vercel/next@8.0.1"
+  - "@vercel/node@9.0.1"
+  - "@vercel/python@10.0.1"
+  - "@vercel/redwood@6.0.1"
+  - "@vercel/remix-builder@9.0.1"
+  - "@vercel/ruby@6.0.1"
+  - "@vercel/rust@5.0.1"
+  - "@vercel/static-build@6.0.1"
+  - "@vercel/static-config@3.4.3"
+  - "@vercel/vc-native-darwin-arm64@59.9.1"
+  - "@vercel/vc-native-darwin-x64@59.9.1"
+  - "@vercel/vc-native-linux-arm64@59.9.1"
+  - "@vercel/vc-native-linux-x64@59.9.1"
+  - vercel@59.9.1
