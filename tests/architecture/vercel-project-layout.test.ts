@@ -20,6 +20,10 @@ describe("Vercel project layout", () => {
     expect(appConfig.git?.deploymentEnabled?.main).toBe(false);
     expect(appConfig.functions?.["api/v1/[...route].ts"]).toBeDefined();
     expect(appConfig.functions?.["api/queues/workflow-foundation.ts"]).toBeDefined();
+
+    const reconciliation = readFileSync("scripts/infra/reconcile-vercel-staging.ts", "utf8");
+    expect(reconciliation).toContain('rootDirectory: "apps/nox-os"');
+    expect(reconciliation).toContain("VERCEL_PROJECT_ROOT_READBACK=PASS");
   });
 
   it("keeps workspace exports resolvable after Vercel transpiles TypeScript to JavaScript", () => {

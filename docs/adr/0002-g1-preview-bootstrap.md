@@ -82,3 +82,11 @@ The Staging build creates an ignored `.vercel/project.json` only when absent. It
 the Vercel CLI resolve the configured monorepo root from the repository root without relying on
 an ambient developer link, while leaving GitHub's protected Staging environment as the runtime
 configuration authority. No secret is written to this link and no Production command is executed.
+
+## Amendment B-008: Reconcile the Vercel project root before Staging deployment
+
+The protected Staging workflow reads the existing Vercel project and reconciles only its
+`rootDirectory` to `apps/nox-os` when necessary. It then reads the project again and fails closed
+unless both project identity and root directory match. This is a single existing-project setting,
+not a project recreation; it aligns the Vercel CLI, Preview builds, functions and Vite output with
+the one checked-in application configuration. No Production deployment or promotion is performed.
