@@ -15,6 +15,13 @@ const allowedPublicEnvironmentKeys = new Set([
   "VITE_TURNSTILE_SITE_KEY"
 ]);
 
+export const APPLICATION_PUBLIC_ENVIRONMENT_PREFIXES = ["VITE_NOX_", "VITE_TURNSTILE_"] as const;
+
+const providerPublicSystemMetadataPrefixes = ["VITE_VERCEL_"] as const;
+
+export type ViteEnvironmentKeyClass =
+  "APPLICATION_PUBLIC_CONFIG" | "PROVIDER_PUBLIC_SYSTEM_METADATA" | "SERVER_ONLY_OR_UNAPPROVED";
+
 const serverIdentitySchema = z.object({
   NOX_ENV: environmentSchema.optional(),
   NOX_SOURCE_SHA: z.string().min(1).max(128).optional(),
@@ -82,9 +89,22 @@ export function serverIdentity(raw: Record<string, string | undefined>): ServerI
   };
 }
 
+export function classifyViteEnvironmentKey(key: string): ViteEnvironmentKeyClass {
+  if (allowedPublicEnvironmentKeys.has(key)) {
+    return "APPLICATION_PUBLIC_CONFIG";
+  }
+
+  if (providerPublicSystemMetadataPrefixes.some((prefix) => key.startsWith(prefix))) {
+    return "PROVIDER_PUBLIC_SYSTEM_METADATA";
+  }
+
+  return "SERVER_ONLY_OR_UNAPPROVED";
+}
+
 export function assertNoPublicSecrets(raw: Record<string, string | undefined>): void {
   const forbidden = Object.keys(raw).filter(
-    (key) => key.startsWith("VITE_") && !allowedPublicEnvironmentKeys.has(key)
+    (key) =>
+      key.startsWith("VITE_") && classifyViteEnvironmentKey(key) === "SERVER_ONLY_OR_UNAPPROVED"
   );
 
   if (forbidden.length > 0) {

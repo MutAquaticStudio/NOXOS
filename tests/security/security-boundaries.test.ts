@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { assertNoPublicSecrets, serverIdentity } from "@nox-os/config";
+import {
+  APPLICATION_PUBLIC_ENVIRONMENT_PREFIXES,
+  assertNoPublicSecrets,
+  classifyViteEnvironmentKey,
+  serverIdentity
+} from "@nox-os/config";
 import {
   assertSeparateMigrationConnection,
   assertServerlessPoolerConnection,
@@ -31,6 +36,32 @@ describe("security boundaries", () => {
         VITE_NOX_RUNTIME_DATABASE_URL: "should-never-be-public"
       })
     ).toThrow(/forbidden or unapproved keys/i);
+  });
+
+  it("separates application public config from provider metadata and server-only values", () => {
+    expect(APPLICATION_PUBLIC_ENVIRONMENT_PREFIXES).toEqual(["VITE_NOX_", "VITE_TURNSTILE_"]);
+    expect(classifyViteEnvironmentKey("VITE_NOX_ENV")).toBe("APPLICATION_PUBLIC_CONFIG");
+    expect(classifyViteEnvironmentKey("VITE_NOX_SOURCE_SHA")).toBe("APPLICATION_PUBLIC_CONFIG");
+    expect(classifyViteEnvironmentKey("VITE_TURNSTILE_SITE_KEY")).toBe("APPLICATION_PUBLIC_CONFIG");
+    expect(classifyViteEnvironmentKey("VITE_VERCEL_ENV")).toBe("PROVIDER_PUBLIC_SYSTEM_METADATA");
+    expect(classifyViteEnvironmentKey("VITE_VERCEL_GIT_COMMIT_SHA")).toBe(
+      "PROVIDER_PUBLIC_SYSTEM_METADATA"
+    );
+    expect(classifyViteEnvironmentKey("VITE_DATABASE_URL")).toBe("SERVER_ONLY_OR_UNAPPROVED");
+    expect(classifyViteEnvironmentKey("VITE_SUPABASE_SERVICE_ROLE_KEY")).toBe(
+      "SERVER_ONLY_OR_UNAPPROVED"
+    );
+    expect(classifyViteEnvironmentKey("VITE_CF_API_TOKEN")).toBe("SERVER_ONLY_OR_UNAPPROVED");
+
+    expect(() =>
+      assertNoPublicSecrets({
+        VITE_NOX_ENV: "preview",
+        VITE_NOX_SOURCE_SHA: "sha",
+        VITE_TURNSTILE_SITE_KEY: "public-site-key",
+        VITE_VERCEL_ENV: "preview",
+        VITE_VERCEL_GIT_COMMIT_SHA: "provider-sha"
+      })
+    ).not.toThrow();
   });
 
   it("requires a separate low-privilege connection for serverless runtime traffic", () => {
