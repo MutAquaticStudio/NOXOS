@@ -1,6 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { verifyVercelDeployment } from "../verify/vercel-deployment";
 
 function required(name: string): string {
@@ -9,38 +7,6 @@ function required(name: string): string {
     throw new Error(name + " must be supplied through the cloud secret store.");
   }
   return value;
-}
-
-function prepareVercelProjectLink(): void {
-  const linkDirectory = ".vercel";
-  const linkPath = join(linkDirectory, "project.json");
-  const expectedLink = {
-    orgId: required("VERCEL_ORG_ID"),
-    projectId: required("VERCEL_PROJECT_ID")
-  };
-
-  mkdirSync(linkDirectory, { recursive: true });
-  if (existsSync(linkPath)) {
-    const existingLink = JSON.parse(readFileSync(linkPath, "utf8")) as Partial<typeof expectedLink>;
-    if (
-      existingLink.orgId !== expectedLink.orgId ||
-      existingLink.projectId !== expectedLink.projectId
-    ) {
-      throw new Error(
-        "Existing Vercel project link does not match the protected CI project identity."
-      );
-    }
-    return;
-  }
-
-  writeFileSync(linkPath, JSON.stringify(expectedLink) + "\n", { encoding: "utf8", mode: 0o600 });
-}
-
-function runVercel(args: string[]): void {
-  execFileSync("pnpm", vercelArguments(args), {
-    env: identityEnvironment,
-    stdio: "inherit"
-  });
 }
 
 function deployVercel(args: string[]): string {
@@ -70,6 +36,7 @@ for (const key of [
   "VERCEL_ORG_ID",
   "VERCEL_PROJECT_ID",
   "EXPECTED_SOURCE_SHA",
+  "VITE_TURNSTILE_SITE_KEY",
   "NOX_RUNTIME_DATABASE_URL",
   "NOX_WORKFLOW_DATABASE_URL",
   "NOX_DIAGNOSTIC_PROBE_TOKEN"
@@ -95,16 +62,19 @@ const identityEnvironment = {
   VITE_NOX_SOURCE_SHA: expectedSourceSha
 };
 
-// The Vercel CLI requires a repository-root project link to load the configured monorepo root.
-// This ignored, non-secret link is created only when absent and is checked against protected CI
-// identity before Vercel creates target-aware prebuilt output.
-prepareVercelProjectLink();
-runVercel(["build", "--yes", "--target=" + target]);
+// Deploy source to Vercel's reconciled custom environment. Vercel performs the same remote build
+// path already exercised by Preview; only explicitly public Vite values cross the build boundary.
 const submittedUrl = deployVercel([
   "deploy",
-  "--prebuilt",
   "--target=" + target,
   "--yes",
+  "--force",
+  "--build-env",
+  "VITE_NOX_ENV=" + target,
+  "--build-env",
+  "VITE_NOX_SOURCE_SHA=" + expectedSourceSha,
+  "--build-env",
+  "VITE_TURNSTILE_SITE_KEY=" + required("VITE_TURNSTILE_SITE_KEY"),
   "--env",
   "NOX_ENV=" + target,
   "--env",
