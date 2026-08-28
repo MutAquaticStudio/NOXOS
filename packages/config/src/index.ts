@@ -43,6 +43,46 @@ export type ServerIdentity = {
   sourceSha: string;
 };
 
+function providerBuildEnvironment(raw: Record<string, string | undefined>): NoxEnvironment {
+  if (raw.VERCEL_TARGET_ENV === "staging") {
+    return "staging";
+  }
+  if (raw.VERCEL_ENV === "production") {
+    return "production";
+  }
+  if (raw.VERCEL_ENV === "preview") {
+    return "preview";
+  }
+  return "development";
+}
+
+function providerBuildSourceSha(raw: Record<string, string | undefined>): string {
+  const value = raw.VERCEL_GIT_COMMIT_SHA;
+  if (!value) {
+    return "local";
+  }
+  if (!/^[a-f0-9]{40}$/i.test(value)) {
+    throw new Error("Vercel build source identity must be a full Git commit SHA.");
+  }
+  return value;
+}
+
+/**
+ * Produces the three explicitly approved client values at build time. Vercel's
+ * system metadata is read only as a source and is never exposed as a second
+ * public namespace.
+ */
+export function publicBuildEnvironment(raw: Record<string, string | undefined>): PublicEnvironment {
+  assertNoPublicSecrets(raw);
+  const parsed = publicEnvironmentSchema.parse(raw);
+
+  return {
+    environment: parsed.VITE_NOX_ENV ?? providerBuildEnvironment(raw),
+    sourceSha: parsed.VITE_NOX_SOURCE_SHA ?? providerBuildSourceSha(raw),
+    turnstileSiteKey: parsed.VITE_TURNSTILE_SITE_KEY
+  };
+}
+
 export function publicEnvironment(raw: Record<string, string | undefined>): PublicEnvironment {
   const parsed = publicEnvironmentSchema.parse(raw);
 

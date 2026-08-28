@@ -66,6 +66,17 @@ describe("Vite public-environment boundary", () => {
     expect(output).not.toContain("provider-sha-marker");
   });
 
+  it("maps verified Vercel build identity into the NØX-owned client contract", () => {
+    const sourceSha = "116e83429732f9d35fd816c1b002985923a8856c";
+    const { output, result } = buildWithEnvironment({
+      VERCEL_ENV: "preview",
+      VERCEL_GIT_COMMIT_SHA: sourceSha
+    });
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(output).toContain(sourceSha);
+  });
+
   it.each(["VITE_DATABASE_URL", "VITE_SUPABASE_SERVICE_ROLE_KEY", "VITE_CF_API_TOKEN"])(
     "rejects %s before bundling",
     (key) => {

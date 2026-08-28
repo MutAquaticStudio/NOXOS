@@ -3,6 +3,7 @@ import {
   APPLICATION_PUBLIC_ENVIRONMENT_PREFIXES,
   assertNoPublicSecrets,
   classifyViteEnvironmentKey,
+  publicBuildEnvironment,
   serverIdentity
 } from "@nox-os/config";
 import {
@@ -65,6 +66,26 @@ describe("security boundaries", () => {
         VITE_VERCEL_GIT_COMMIT_SHA: "provider-sha"
       })
     ).not.toThrow();
+  });
+
+  it("maps only verified provider build identity into NØX-owned public values", () => {
+    expect(
+      publicBuildEnvironment({
+        VERCEL_ENV: "preview",
+        VERCEL_GIT_COMMIT_SHA: "116e83429732f9d35fd816c1b002985923a8856c",
+        VITE_VERCEL_ENV: "provider-preview-marker",
+        VITE_VERCEL_GIT_COMMIT_SHA: "provider-sha-marker"
+      })
+    ).toEqual({
+      environment: "preview",
+      sourceSha: "116e83429732f9d35fd816c1b002985923a8856c"
+    });
+    expect(() =>
+      publicBuildEnvironment({
+        VERCEL_ENV: "preview",
+        VERCEL_GIT_COMMIT_SHA: "branch-name-is-not-an-immutable-sha"
+      })
+    ).toThrow(/full Git commit SHA/);
   });
 
   it("requires a separate low-privilege connection for serverless runtime traffic", () => {
