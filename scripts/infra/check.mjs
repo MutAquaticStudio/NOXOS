@@ -30,6 +30,13 @@ if (
 if (configuration["infra/cloudflare/turnstile.json"].serverValidation.singleUse !== true) {
   throw new Error("Turnstile must be verified server-side as a single-use token.");
 }
+if (
+  configuration["infra/cloudflare/turnstile.json"].credentialBootstrap.autoCreateWidget !== false ||
+  configuration["infra/cloudflare/turnstile.json"].credentialBootstrap
+    .externalSecretStoreRequired !== true
+) {
+  throw new Error("Turnstile credentials require explicit one-time secret-store bootstrap.");
+}
 
 const environments = configuration["infra/environments.json"];
 if (

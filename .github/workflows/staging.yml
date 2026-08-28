@@ -5,7 +5,9 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  checks: read
+  contents: write
+  pull-requests: read
 
 concurrency:
   group: nox-os-staging
@@ -42,14 +44,12 @@ jobs:
           GITHUB_VAR__SUPABASE_PRODUCTION_PROJECT_REF: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF }}
           GITHUB_VAR__SUPABASE_STAGING_URL: ${{ vars.SUPABASE_STAGING_URL }}
           GITHUB_VAR__SUPABASE_STAGING_STORAGE_BUCKET: ${{ vars.SUPABASE_STAGING_STORAGE_BUCKET }}
-          GITHUB_VAR__SUPABASE_PRODUCTION_STORAGE_BUCKET: ${{ vars.SUPABASE_PRODUCTION_STORAGE_BUCKET }}
           GITHUB_VAR__VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
           GITHUB_VAR__VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
           GITHUB_VAR__CF_ZONE_ID: ${{ vars.CF_ZONE_ID }}
           GITHUB_VAR__CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
           GITHUB_VAR__NOX_PUBLIC_APP_HOSTNAME: ${{ vars.NOX_PUBLIC_APP_HOSTNAME }}
           GITHUB_VAR__VERCEL_PUBLIC_CNAME_TARGET: ${{ vars.VERCEL_PUBLIC_CNAME_TARGET }}
-          GITHUB_VAR__CF_CREATE_TURNSTILE_WIDGET: ${{ vars.CF_CREATE_TURNSTILE_WIDGET }}
           GITHUB_VAR__CF_PRIVILEGED_PROXY_APPROVED: ${{ vars.CF_PRIVILEGED_PROXY_APPROVED }}
           GITHUB_VAR__NOX_OPS_HOSTNAME: ${{ vars.NOX_OPS_HOSTNAME }}
           GITHUB_VAR__CF_PRIVILEGED_CNAME_TARGET: ${{ vars.CF_PRIVILEGED_CNAME_TARGET }}
@@ -59,13 +59,7 @@ jobs:
           GITHUB_SECRET__FROZEN_UXUI_GUIDELINE_GZIP_BASE64: ${{ secrets.FROZEN_UXUI_GUIDELINE_GZIP_BASE64 }}
           GITHUB_SECRET__NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
           GITHUB_SECRET__NOX_WORKFLOW_DATABASE_URL: ${{ secrets.NOX_WORKFLOW_DATABASE_URL }}
-          GITHUB_SECRET__NOX_STAGING_RUNTIME_DATABASE_URL_SHA256: ${{ secrets.NOX_STAGING_RUNTIME_DATABASE_URL_SHA256 }}
-          GITHUB_SECRET__NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256: ${{ secrets.NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256 }}
-          GITHUB_SECRET__NOX_STAGING_WORKFLOW_DATABASE_URL_SHA256: ${{ secrets.NOX_STAGING_WORKFLOW_DATABASE_URL_SHA256 }}
-          GITHUB_SECRET__NOX_PRODUCTION_WORKFLOW_DATABASE_URL_SHA256: ${{ secrets.NOX_PRODUCTION_WORKFLOW_DATABASE_URL_SHA256 }}
           GITHUB_SECRET__SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          GITHUB_SECRET__NOX_STAGING_SUPABASE_SERVICE_ROLE_KEY_SHA256: ${{ secrets.NOX_STAGING_SUPABASE_SERVICE_ROLE_KEY_SHA256 }}
-          GITHUB_SECRET__NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256: ${{ secrets.NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256 }}
           GITHUB_SECRET__SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           GITHUB_SECRET__SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           GITHUB_SECRET__VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -74,6 +68,21 @@ jobs:
           GITHUB_SECRET__CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           GITHUB_SECRET__TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
       - run: pnpm validate
+      - id: accepted-preview
+        run: |
+          evidence_output="$(pnpm evidence:resolve-merged-preview)"
+          printf '%s\n' "$evidence_output"
+          for field in ACCEPTED_PR_NUMBER ACCEPTED_PREVIEW_SHA ACCEPTED_PREVIEW_URL ACCEPTED_CI_REFERENCE; do
+            value="$(printf '%s\n' "$evidence_output" | sed -n "s/^${field}=//p" | tail -n 1)"
+            test -n "$value"
+            output_name="$(printf '%s' "$field" | tr '[:upper:]' '[:lower:]')"
+            echo "${output_name}=${value}" >> "$GITHUB_OUTPUT"
+          done
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
       - run: pnpm contracts:check-frozen-inputs
         env:
           REQUIRE_EXTERNAL_CONTRACTS: "true"
@@ -86,18 +95,11 @@ jobs:
           NOX_CURRENT_DATABASE_RESOURCE: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
           NOX_PRODUCTION_DATABASE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF }}
           NOX_CURRENT_STORAGE_RESOURCE: ${{ vars.SUPABASE_STAGING_STORAGE_BUCKET }}
-          NOX_PRODUCTION_STORAGE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_STORAGE_BUCKET }}
           SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
           SUPABASE_STORAGE_BUCKET: ${{ vars.SUPABASE_STAGING_STORAGE_BUCKET }}
           NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
           NOX_WORKFLOW_DATABASE_URL: ${{ secrets.NOX_WORKFLOW_DATABASE_URL }}
-          NOX_CURRENT_RUNTIME_DATABASE_URL_SHA256: ${{ secrets.NOX_STAGING_RUNTIME_DATABASE_URL_SHA256 }}
-          NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256: ${{ secrets.NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256 }}
-          NOX_CURRENT_WORKFLOW_DATABASE_URL_SHA256: ${{ secrets.NOX_STAGING_WORKFLOW_DATABASE_URL_SHA256 }}
-          NOX_PRODUCTION_WORKFLOW_DATABASE_URL_SHA256: ${{ secrets.NOX_PRODUCTION_WORKFLOW_DATABASE_URL_SHA256 }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          NOX_CURRENT_SUPABASE_SERVICE_ROLE_KEY_SHA256: ${{ secrets.NOX_STAGING_SUPABASE_SERVICE_ROLE_KEY_SHA256 }}
-          NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256: ${{ secrets.NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256 }}
       - run: pnpm infra:apply
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
@@ -108,7 +110,6 @@ jobs:
           CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
           NOX_PUBLIC_APP_HOSTNAME: ${{ vars.NOX_PUBLIC_APP_HOSTNAME }}
           VERCEL_PUBLIC_CNAME_TARGET: ${{ vars.VERCEL_PUBLIC_CNAME_TARGET }}
-          CF_CREATE_TURNSTILE_WIDGET: ${{ vars.CF_CREATE_TURNSTILE_WIDGET }}
           CF_PRIVILEGED_PROXY_APPROVED: ${{ vars.CF_PRIVILEGED_PROXY_APPROVED }}
           NOX_OPS_HOSTNAME: ${{ vars.NOX_OPS_HOSTNAME }}
           CF_PRIVILEGED_CNAME_TARGET: ${{ vars.CF_PRIVILEGED_CNAME_TARGET }}
@@ -152,18 +153,11 @@ jobs:
           NOX_CURRENT_DATABASE_RESOURCE: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
           NOX_PRODUCTION_DATABASE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF }}
           NOX_CURRENT_STORAGE_RESOURCE: ${{ vars.SUPABASE_STAGING_STORAGE_BUCKET }}
-          NOX_PRODUCTION_STORAGE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_STORAGE_BUCKET }}
           NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
           NOX_WORKFLOW_DATABASE_URL: ${{ secrets.NOX_WORKFLOW_DATABASE_URL }}
-          NOX_CURRENT_RUNTIME_DATABASE_URL_SHA256: ${{ secrets.NOX_STAGING_RUNTIME_DATABASE_URL_SHA256 }}
-          NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256: ${{ secrets.NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256 }}
-          NOX_CURRENT_WORKFLOW_DATABASE_URL_SHA256: ${{ secrets.NOX_STAGING_WORKFLOW_DATABASE_URL_SHA256 }}
-          NOX_PRODUCTION_WORKFLOW_DATABASE_URL_SHA256: ${{ secrets.NOX_PRODUCTION_WORKFLOW_DATABASE_URL_SHA256 }}
           SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_STORAGE_BUCKET: ${{ vars.SUPABASE_STAGING_STORAGE_BUCKET }}
-          NOX_CURRENT_SUPABASE_SERVICE_ROLE_KEY_SHA256: ${{ secrets.NOX_STAGING_SUPABASE_SERVICE_ROLE_KEY_SHA256 }}
-          NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256: ${{ secrets.NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256 }}
           NOX_DEPLOYMENT_URL: ${{ steps.deploy.outputs.staging_url }}
           NOX_DIAGNOSTIC_PROBE_TOKEN: ${{ secrets.NOX_DIAGNOSTIC_PROBE_TOKEN }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -175,3 +169,36 @@ jobs:
         env:
           NOX_STAGING_URL: ${{ steps.deploy.outputs.staging_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      - id: evidence
+        run: |
+          evidence_output="$(pnpm evidence:generate:staging)"
+          printf '%s\n' "$evidence_output"
+          evidence_path="$(printf '%s\n' "$evidence_output" | sed -n 's/^G1_EVIDENCE_PATH=//p' | tail -n 1)"
+          artifact_name="$(printf '%s\n' "$evidence_output" | sed -n 's/^G1_EVIDENCE_ARTIFACT_NAME=//p' | tail -n 1)"
+          test -n "$evidence_path"
+          test -n "$artifact_name"
+          echo "evidence_path=$evidence_path" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+        env:
+          ACCEPTED_PR_NUMBER: ${{ steps.accepted-preview.outputs.accepted_pr_number }}
+          ACCEPTED_PREVIEW_SHA: ${{ steps.accepted-preview.outputs.accepted_preview_sha }}
+          ACCEPTED_PREVIEW_URL: ${{ steps.accepted-preview.outputs.accepted_preview_url }}
+          ACCEPTED_CI_REFERENCE: ${{ steps.accepted-preview.outputs.accepted_ci_reference }}
+          CI_SHA: ${{ steps.accepted-preview.outputs.accepted_preview_sha }}
+          MERGED_MAIN_SHA: ${{ github.sha }}
+          EXPECTED_STAGING_SHA: ${{ github.sha }}
+          DEPLOYED_STAGING_SHA: ${{ github.sha }}
+          STAGING_DEPLOYMENT_URL: ${{ steps.deploy.outputs.staging_url }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.evidence.outputs.artifact_name }}
+          path: ${{ steps.evidence.outputs.evidence_path }}
+          if-no-files-found: error
+          retention-days: 90
+      - run: pnpm evidence:publish:staging-tag
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_STAGING_SHA: ${{ github.sha }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          G1_EVIDENCE_ARTIFACT_NAME: ${{ steps.evidence.outputs.artifact_name }}

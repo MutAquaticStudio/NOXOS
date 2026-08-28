@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { verifyEnvironmentIsolation } from "../../scripts/verify/environment-isolation";
 
@@ -9,10 +8,6 @@ const runtimeDatabaseUrl =
 const workflowDatabaseUrl =
   "postgresql://nox_workflow_runtime.abcdefghijklmno12345:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres";
 
-function fingerprint(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 describe("non-production environment isolation", () => {
   it("requires ordinary Preview to remain secretless", () => {
     expect(() =>
@@ -20,9 +15,7 @@ describe("non-production environment isolation", () => {
         NOX_EXPECTED_ENV: "preview",
         NOX_ISOLATION_MODE: "SECRETLESS_PREVIEW",
         NOX_CURRENT_DATABASE_RESOURCE: stagingProject,
-        NOX_PRODUCTION_DATABASE_RESOURCE: productionProject,
-        NOX_CURRENT_STORAGE_RESOURCE: "preview-private",
-        NOX_PRODUCTION_STORAGE_RESOURCE: "production-private"
+        NOX_PRODUCTION_DATABASE_RESOURCE: productionProject
       })
     ).not.toThrow();
     expect(() =>
@@ -31,32 +24,23 @@ describe("non-production environment isolation", () => {
         NOX_ISOLATION_MODE: "SECRETLESS_PREVIEW",
         NOX_CURRENT_DATABASE_RESOURCE: stagingProject,
         NOX_PRODUCTION_DATABASE_RESOURCE: productionProject,
-        NOX_CURRENT_STORAGE_RESOURCE: "preview-private",
-        NOX_PRODUCTION_STORAGE_RESOURCE: "production-private",
         TURNSTILE_SECRET_KEY: "must-not-reach-preview"
       })
     ).toThrow(/Secretless Preview verification received runtime credentials/);
   });
 
-  it("binds connected Staging credentials to its Supabase project and non-production fingerprint", () => {
+  it("binds connected Staging credentials to its Supabase project without Production secrets", () => {
     const base = {
       NOX_EXPECTED_ENV: "staging",
       NOX_ISOLATION_MODE: "CONNECTED_NON_PRODUCTION",
       NOX_CURRENT_DATABASE_RESOURCE: stagingProject,
       NOX_PRODUCTION_DATABASE_RESOURCE: productionProject,
-      NOX_CURRENT_STORAGE_RESOURCE: "staging-private",
-      NOX_PRODUCTION_STORAGE_RESOURCE: "production-private",
+      NOX_CURRENT_STORAGE_RESOURCE: "nox-private",
       SUPABASE_URL: "https://abcdefghijklmno12345.supabase.co",
-      SUPABASE_STORAGE_BUCKET: "staging-private",
+      SUPABASE_STORAGE_BUCKET: "nox-private",
       NOX_RUNTIME_DATABASE_URL: runtimeDatabaseUrl,
       NOX_WORKFLOW_DATABASE_URL: workflowDatabaseUrl,
-      NOX_CURRENT_RUNTIME_DATABASE_URL_SHA256: fingerprint(runtimeDatabaseUrl),
-      NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256: fingerprint("different-production-runtime-url"),
-      NOX_CURRENT_WORKFLOW_DATABASE_URL_SHA256: fingerprint(workflowDatabaseUrl),
-      NOX_PRODUCTION_WORKFLOW_DATABASE_URL_SHA256: fingerprint("different-production-workflow-url"),
-      SUPABASE_SERVICE_ROLE_KEY: "staging-service-role-key",
-      NOX_CURRENT_SUPABASE_SERVICE_ROLE_KEY_SHA256: fingerprint("staging-service-role-key"),
-      NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256: fingerprint("production-service-role-key")
+      SUPABASE_SERVICE_ROLE_KEY: "staging-service-role-key"
     };
 
     expect(() => verifyEnvironmentIsolation(base)).not.toThrow();
@@ -66,14 +50,13 @@ describe("non-production environment isolation", () => {
         NOX_RUNTIME_DATABASE_URL:
           "postgresql://nox_app_runtime.zyxwvutsrqponm54321:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres"
       })
-    ).toThrow(/does not match the protected non-production fingerprint/);
+    ).toThrow(/does not bind its Supavisor identity/);
     const productionBoundRuntime =
       "postgresql://nox_app_runtime.zyxwvutsrqponm54321:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres";
     expect(() =>
       verifyEnvironmentIsolation({
         ...base,
-        NOX_RUNTIME_DATABASE_URL: productionBoundRuntime,
-        NOX_CURRENT_RUNTIME_DATABASE_URL_SHA256: fingerprint(productionBoundRuntime)
+        NOX_RUNTIME_DATABASE_URL: productionBoundRuntime
       })
     ).toThrow(/does not bind its Supavisor identity/);
     expect(() =>
@@ -83,10 +66,24 @@ describe("non-production environment isolation", () => {
       })
     ).toThrow(/does not identify the expected non-production project/);
     expect(() =>
+      verifyEnvironmentIsolation({ ...base, SUPABASE_STORAGE_BUCKET: "different-bucket" })
+    ).toThrow(/bucket does not match/);
+  });
+
+  it("treats Storage identity as the project reference plus bucket ID", () => {
+    expect(() =>
       verifyEnvironmentIsolation({
-        ...base,
-        SUPABASE_SERVICE_ROLE_KEY: "production-service-role-key"
+        NOX_EXPECTED_ENV: "staging",
+        NOX_ISOLATION_MODE: "CONNECTED_NON_PRODUCTION",
+        NOX_CURRENT_DATABASE_RESOURCE: stagingProject,
+        NOX_PRODUCTION_DATABASE_RESOURCE: productionProject,
+        NOX_CURRENT_STORAGE_RESOURCE: "nox-os-private",
+        SUPABASE_URL: "https://abcdefghijklmno12345.supabase.co",
+        SUPABASE_STORAGE_BUCKET: "nox-os-private",
+        NOX_RUNTIME_DATABASE_URL: runtimeDatabaseUrl,
+        NOX_WORKFLOW_DATABASE_URL: workflowDatabaseUrl,
+        SUPABASE_SERVICE_ROLE_KEY: "staging-service-role-key"
       })
-    ).toThrow(/service-role credential does not match the protected non-production fingerprint/);
+    ).not.toThrow();
   });
 });

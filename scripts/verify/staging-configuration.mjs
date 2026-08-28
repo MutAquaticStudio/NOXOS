@@ -3,14 +3,12 @@ const requiredVariables = [
   "SUPABASE_PRODUCTION_PROJECT_REF",
   "SUPABASE_STAGING_URL",
   "SUPABASE_STAGING_STORAGE_BUCKET",
-  "SUPABASE_PRODUCTION_STORAGE_BUCKET",
   "VERCEL_ORG_ID",
   "VERCEL_PROJECT_ID",
   "CF_ZONE_ID",
   "CF_ACCOUNT_ID",
   "NOX_PUBLIC_APP_HOSTNAME",
   "VERCEL_PUBLIC_CNAME_TARGET",
-  "CF_CREATE_TURNSTILE_WIDGET",
   "CF_PRIVILEGED_PROXY_APPROVED",
   "NOX_OPS_HOSTNAME",
   "CF_PRIVILEGED_CNAME_TARGET",
@@ -23,13 +21,7 @@ const requiredSecrets = [
   "FROZEN_UXUI_GUIDELINE_GZIP_BASE64",
   "NOX_RUNTIME_DATABASE_URL",
   "NOX_WORKFLOW_DATABASE_URL",
-  "NOX_STAGING_RUNTIME_DATABASE_URL_SHA256",
-  "NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256",
-  "NOX_STAGING_WORKFLOW_DATABASE_URL_SHA256",
-  "NOX_PRODUCTION_WORKFLOW_DATABASE_URL_SHA256",
   "SUPABASE_SERVICE_ROLE_KEY",
-  "NOX_STAGING_SUPABASE_SERVICE_ROLE_KEY_SHA256",
-  "NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256",
   "SUPABASE_ACCESS_TOKEN",
   "SUPABASE_DB_PASSWORD",
   "VERCEL_TOKEN",
@@ -38,6 +30,9 @@ const requiredSecrets = [
   "CF_API_TOKEN",
   "TURNSTILE_SECRET_KEY"
 ];
+
+const canonicalStagingProjectRef = "uyfddpmbszjkhdkqvncz";
+const canonicalProductionProjectRef = "soioshmcdwxhlgrjzkoc";
 
 function configured(kind, name) {
   return Boolean(process.env["GITHUB_" + kind + "__" + name]);
@@ -62,20 +57,27 @@ if (missingVariables.length > 0 || missingSecrets.length > 0) {
 const stagingRef = process.env.GITHUB_VAR__SUPABASE_STAGING_PROJECT_REF;
 const productionRef = process.env.GITHUB_VAR__SUPABASE_PRODUCTION_PROJECT_REF;
 const stagingBucket = process.env.GITHUB_VAR__SUPABASE_STAGING_STORAGE_BUCKET;
-const productionBucket = process.env.GITHUB_VAR__SUPABASE_PRODUCTION_STORAGE_BUCKET;
 const stagingUrl = new URL(process.env.GITHUB_VAR__SUPABASE_STAGING_URL);
 
-if (stagingRef === productionRef || stagingBucket === productionBucket) {
-  throw new Error("Protected Staging resources must remain distinct from Production.");
+if (stagingRef === productionRef) {
+  throw new Error("Protected Staging project must remain distinct from Production.");
+}
+if (stagingRef !== canonicalStagingProjectRef) {
+  throw new Error("Protected Staging targets an unexpected Supabase project.");
+}
+if (productionRef !== canonicalProductionProjectRef) {
+  throw new Error(
+    "Protected Production identity does not match the canonical isolation reference."
+  );
+}
+if (!/^[a-z0-9][a-z0-9_-]{2,62}$/i.test(stagingBucket)) {
+  throw new Error("Protected Staging storage bucket ID is invalid.");
 }
 if (stagingUrl.protocol !== "https:" || stagingUrl.hostname !== stagingRef + ".supabase.co") {
   throw new Error("Protected Staging Supabase URL does not match its project reference.");
 }
-if (
-  process.env.GITHUB_VAR__CF_CREATE_TURNSTILE_WIDGET !== "true" ||
-  process.env.GITHUB_VAR__CF_PRIVILEGED_PROXY_APPROVED !== "true"
-) {
-  throw new Error("Cloudflare Turnstile and privileged Access reconciliation must be explicit.");
+if (process.env.GITHUB_VAR__CF_PRIVILEGED_PROXY_APPROVED !== "true") {
+  throw new Error("Cloudflare privileged Access reconciliation must be explicit.");
 }
 if (process.env.GITHUB_VAR__VERCEL_PROJECT_ID !== "prj_FPN9pBNMfvE7pQC9scA9j9HwzQpx") {
   throw new Error("Protected Staging targets an unexpected Vercel project.");

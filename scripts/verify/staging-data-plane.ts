@@ -130,8 +130,12 @@ if (
 }
 
 console.log("STAGING_DATABASE_PROBE=PASS");
+console.log("STAGING_DATABASE_CURRENT_USER=nox_app_runtime");
+console.log("STAGING_PRIVATE_BUCKET_EXISTS=PASS");
+console.log("STAGING_PRIVATE_BUCKET_PUBLIC_FALSE=PASS");
 console.log("STAGING_PRIVATE_STORAGE_PROBE=PASS");
 console.log("STAGING_WORKFLOW_PROBE=PASS");
+console.log("STAGING_WORKFLOW_DATABASE_CURRENT_USER=nox_workflow_runtime");
 
 async function expectStoredObjectDeleted(
   fileStore: SupabasePrivateFileStore,

@@ -56,8 +56,6 @@ jobs:
         env:
           NOX_CURRENT_DATABASE_RESOURCE: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF }}
           NOX_PRODUCTION_DATABASE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF }}
-          NOX_CURRENT_STORAGE_RESOURCE: ${{ vars.SUPABASE_PREVIEW_STORAGE_BUCKET }}
-          NOX_PRODUCTION_STORAGE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_STORAGE_BUCKET }}
       - run: pnpm verify:staging
         env:
           NOX_STAGING_URL: ${{ steps.preview.outputs.preview_url }}

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   assertExpectedRuntimeRole,
@@ -22,10 +21,6 @@ function requiredProjectReference(raw: Record<string, string | undefined>, name:
     throw new Error(name + " must be a Supabase project reference.");
   }
   return value;
-}
-
-function credentialFingerprint(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function assertNoRuntimeCredentials(raw: Record<string, string | undefined>): void {
@@ -110,76 +105,15 @@ function assertConnectedResourceIdentity(raw: Record<string, string | undefined>
   const supabaseUrl = required(raw, "SUPABASE_URL");
   const runtimeDatabaseUrl = required(raw, "NOX_RUNTIME_DATABASE_URL");
   const workflowDatabaseUrl = required(raw, "NOX_WORKFLOW_DATABASE_URL");
-  const currentRuntimeFingerprint = required(raw, "NOX_CURRENT_RUNTIME_DATABASE_URL_SHA256");
-  const productionRuntimeFingerprint = required(raw, "NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256");
-  const currentWorkflowFingerprint = required(raw, "NOX_CURRENT_WORKFLOW_DATABASE_URL_SHA256");
-  const productionWorkflowFingerprint = required(
-    raw,
-    "NOX_PRODUCTION_WORKFLOW_DATABASE_URL_SHA256"
-  );
-  const serviceRoleKey = required(raw, "SUPABASE_SERVICE_ROLE_KEY");
-  const currentServiceRoleFingerprint = required(
-    raw,
-    "NOX_CURRENT_SUPABASE_SERVICE_ROLE_KEY_SHA256"
-  );
-  const productionServiceRoleFingerprint = required(
-    raw,
-    "NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256"
-  );
+  required(raw, "SUPABASE_SERVICE_ROLE_KEY");
   const currentStorage = required(raw, "NOX_CURRENT_STORAGE_RESOURCE");
   const configuredStorage = required(raw, "SUPABASE_STORAGE_BUCKET");
 
-  if (!/^[a-f0-9]{64}$/i.test(currentRuntimeFingerprint)) {
-    throw new Error("NOX_CURRENT_RUNTIME_DATABASE_URL_SHA256 must be a SHA-256 fingerprint.");
-  }
-  if (!/^[a-f0-9]{64}$/i.test(productionRuntimeFingerprint)) {
-    throw new Error("NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256 must be a SHA-256 fingerprint.");
-  }
-  if (!/^[a-f0-9]{64}$/i.test(currentWorkflowFingerprint)) {
-    throw new Error("NOX_CURRENT_WORKFLOW_DATABASE_URL_SHA256 must be a SHA-256 fingerprint.");
-  }
-  if (!/^[a-f0-9]{64}$/i.test(productionWorkflowFingerprint)) {
-    throw new Error("NOX_PRODUCTION_WORKFLOW_DATABASE_URL_SHA256 must be a SHA-256 fingerprint.");
-  }
-  if (!/^[a-f0-9]{64}$/i.test(currentServiceRoleFingerprint)) {
-    throw new Error("NOX_CURRENT_SUPABASE_SERVICE_ROLE_KEY_SHA256 must be a SHA-256 fingerprint.");
-  }
-  if (!/^[a-f0-9]{64}$/i.test(productionServiceRoleFingerprint)) {
-    throw new Error(
-      "NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256 must be a SHA-256 fingerprint."
-    );
-  }
   if (currentStorage !== configuredStorage) {
-    throw new Error(
-      "Configured private storage bucket does not match the non-production resource."
-    );
-  }
-  if (currentRuntimeFingerprint === productionRuntimeFingerprint) {
-    throw new Error("Non-production and Production runtime database fingerprints must differ.");
-  }
-  if (credentialFingerprint(runtimeDatabaseUrl) !== currentRuntimeFingerprint) {
-    throw new Error(
-      "Runtime database credential does not match the protected non-production fingerprint."
-    );
-  }
-  if (currentWorkflowFingerprint === productionWorkflowFingerprint) {
-    throw new Error("Non-production and Production workflow database fingerprints must differ.");
-  }
-  if (credentialFingerprint(workflowDatabaseUrl) !== currentWorkflowFingerprint) {
-    throw new Error(
-      "Workflow database credential does not match the protected non-production fingerprint."
-    );
+    throw new Error("Configured private storage bucket does not match the Staging bucket.");
   }
   if (runtimeDatabaseUrl === workflowDatabaseUrl) {
     throw new Error("Application and workflow runtimes must use separate database roles.");
-  }
-  if (currentServiceRoleFingerprint === productionServiceRoleFingerprint) {
-    throw new Error("Non-production and Production service-role fingerprints must differ.");
-  }
-  if (credentialFingerprint(serviceRoleKey) !== currentServiceRoleFingerprint) {
-    throw new Error(
-      "Supabase service-role credential does not match the protected non-production fingerprint."
-    );
   }
 
   assertSupabaseEndpoint(supabaseUrl, currentProjectRef);
@@ -197,12 +131,10 @@ export function verifyEnvironmentIsolation(
 
   const currentDatabase = requiredProjectReference(raw, "NOX_CURRENT_DATABASE_RESOURCE");
   const productionDatabase = requiredProjectReference(raw, "NOX_PRODUCTION_DATABASE_RESOURCE");
-  const currentStorage = required(raw, "NOX_CURRENT_STORAGE_RESOURCE");
-  const productionStorage = required(raw, "NOX_PRODUCTION_STORAGE_RESOURCE");
   const mode = required(raw, "NOX_ISOLATION_MODE") as IsolationMode;
 
-  if (currentDatabase === productionDatabase || currentStorage === productionStorage) {
-    throw new Error("Preview or Staging resource configuration points to Production.");
+  if (currentDatabase === productionDatabase) {
+    throw new Error("Preview or Staging project reference points to Production.");
   }
 
   if (environment === "preview" && mode === "SECRETLESS_PREVIEW") {

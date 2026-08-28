@@ -50,14 +50,12 @@ SUPABASE_STAGING_PROJECT_REF
 SUPABASE_PRODUCTION_PROJECT_REF
 SUPABASE_STAGING_URL
 SUPABASE_STAGING_STORAGE_BUCKET
-SUPABASE_PRODUCTION_STORAGE_BUCKET
 VERCEL_ORG_ID
 VERCEL_PROJECT_ID
 CF_ZONE_ID
 CF_ACCOUNT_ID
 NOX_PUBLIC_APP_HOSTNAME
 VERCEL_PUBLIC_CNAME_TARGET
-CF_CREATE_TURNSTILE_WIDGET
 CF_PRIVILEGED_PROXY_APPROVED
 NOX_OPS_HOSTNAME
 CF_PRIVILEGED_CNAME_TARGET
@@ -72,13 +70,7 @@ FROZEN_G0_ARCHITECTURE_GZIP_BASE64
 FROZEN_UXUI_GUIDELINE_GZIP_BASE64
 NOX_RUNTIME_DATABASE_URL
 NOX_WORKFLOW_DATABASE_URL
-NOX_STAGING_RUNTIME_DATABASE_URL_SHA256
-NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256
-NOX_STAGING_WORKFLOW_DATABASE_URL_SHA256
-NOX_PRODUCTION_WORKFLOW_DATABASE_URL_SHA256
 SUPABASE_SERVICE_ROLE_KEY
-NOX_STAGING_SUPABASE_SERVICE_ROLE_KEY_SHA256
-NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256
 SUPABASE_ACCESS_TOKEN
 SUPABASE_DB_PASSWORD
 VERCEL_TOKEN
@@ -110,19 +102,39 @@ Provider/account owners may need to perform the following one-time actions when 
 automation session exists. Values must be entered directly into the provider UI or approved
 secret-store tooling, never into an issue, pull request, workflow log, or chat:
 
-1. Set independent passwords for the two limited Staging Postgres roles, then store their
-   Supavisor transaction-pooler URLs and SHA-256 fingerprints in the `staging` environment.
-2. Store the Staging Supabase service-role key, migration access token/password, and the
-   corresponding non-production/Production comparison fingerprints.
-3. Enable a Vercel automation bypass secret for protected Preview/Staging verification and
+1. In an approved Supabase Staging administrator session, set independent strong passwords for
+   `nox_app_runtime` and `nox_workflow_runtime`. Do not put either password in a migration,
+   repository file, issue, workflow input, log, or chat.
+2. Build the two Staging Supavisor transaction-pool URLs from the provider's current Connect
+   panel using port 6543 and project-qualified usernames
+   `nox_app_runtime.uyfddpmbszjkhdkqvncz` and
+   `nox_workflow_runtime.uyfddpmbszjkhdkqvncz`. Store only the complete URLs directly as the
+   protected GitHub `staging` secrets `NOX_RUNTIME_DATABASE_URL` and
+   `NOX_WORKFLOW_DATABASE_URL`. Do not retain a second plaintext password copy.
+3. Store the Staging Supabase service-role key and the separate migration access token/database
+   password. Staging receives no Production database URL, service-role key, or credential
+   fingerprint; isolation is proven through distinct project references and live Staging probes.
+4. Enable a Vercel automation bypass secret for protected Preview/Staging verification and
    store it in the matching GitHub environments.
-4. Authorize a narrowly scoped Cloudflare token for DNS record/DNSSEC, Turnstile widget, and
-   Zero Trust Access reconciliation; configure the approved hostnames, identity group, public
-   Turnstile site key, and server secret.
-5. Store encrypted canonical document mirrors in `frozen-contracts` and `staging`.
+5. Bootstrap the canonical Turnstile widget once when needed, copy its public site key and server
+   secret directly to protected GitHub configuration, and select an existing Access identity
+   group. Then authorize a narrowly scoped Cloudflare token for routine DNS/DNSSEC, widget, and
+   Access application/policy reconciliation. The automation deliberately refuses to auto-create
+   a widget when it cannot persist the returned secret.
+6. Store encrypted canonical document mirrors in `frozen-contracts` and `staging`.
 
 After this bootstrap, provider mutation, migrations, deployments, and acceptance run through
 the versioned workflows; routine dashboard mutation is not part of the operating model.
+
+## SHA-bound Gate evidence
+
+The protected Staging workflow generates the per-SHA JSON evidence only after every migration,
+deployment, data-plane, Cloudflare, browser, and exact-source check passes. It uploads the JSON as
+the Actions artifact `g1-staging-evidence-<accepted-main-sha>` and creates the annotated Git tag
+`g1-staging-accepted-<accepted-main-sha>` on that exact commit. The tag records the Actions run and
+artifact name. A future Production promotion skeleton verifies this immutable tag instead of
+trusting a mutable environment variable. Neither evidence mechanism writes current provider state
+back into the accepted source commit.
 
 The public Vercel hostname stays Cloudflare DNS-only. A future privileged hostname may
 be proxied only after an explicit architecture approval so that Cloudflare Access can be
@@ -146,6 +158,11 @@ Production -> production-only resources
 ```
 
 No Preview or Staging credential may point to Production.
+
+Supabase Storage identity is the pair `(project_ref, bucket_id)`. A bucket ID may be identical in
+Staging and Production without identifying the same object store because the projects are
+distinct. The Staging workflow validates the project reference, reconciles the existing bucket,
+and proves private object behavior against that project; it never compares bucket names alone.
 
 An ordinary Preview receives no runtime database, Storage, workflow, migration,
 service-role, diagnostic, Cloudflare, or Vercel-management credential. Preview acceptance is

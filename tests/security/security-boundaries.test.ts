@@ -103,12 +103,17 @@ describe("security boundaries", () => {
     ).toThrow();
     expect(() =>
       assertServerlessPoolerConnection(
-        "postgres://app_runtime:password@pooler.example:6543/postgres"
+        "postgres://app_runtime.projectref:password@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres"
       )
     ).not.toThrow();
     expect(() =>
       assertServerlessPoolerConnection("postgres://app_runtime:password@db.example:5432/postgres")
-    ).toThrow(/serverless pooler/);
+    ).toThrow(/transaction pooler/);
+    expect(() =>
+      assertServerlessPoolerConnection(
+        "postgres://app_runtime.projectref:password@aws-0-ap-southeast-2.pooler.supabase.com:5432/postgres"
+      )
+    ).toThrow(/port 6543/);
     expect(
       runtimeRoleFromConnectionUrl(
         "postgres://nox_app_runtime.projectref:password@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres"

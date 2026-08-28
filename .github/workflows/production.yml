@@ -41,10 +41,11 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-      - run: test "$NOX_STAGING_ACCEPTED_SHA" = "$SOURCE_SHA"
-        env:
-          NOX_STAGING_ACCEPTED_SHA: ${{ vars.NOX_STAGING_ACCEPTED_SHA }}
       - run: pnpm install --frozen-lockfile
+      - run: pnpm evidence:verify:staging-tag
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_STAGING_SHA: ${{ env.SOURCE_SHA }}
       - run: pnpm validate
       - run: pnpm contracts:check-frozen-inputs
         env:

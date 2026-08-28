@@ -1,6 +1,10 @@
 import { QueueClient } from "@vercel/queue";
 import { requiredServerValue } from "@nox-os/config";
-import { createRuntimeDatabase, recordWorkflowProbeCompletion } from "@nox-os/database";
+import {
+  createRuntimeDatabase,
+  probeDatabase,
+  recordWorkflowProbeCompletion
+} from "@nox-os/database";
 import {
   FOUNDATION_WORKFLOW_REGION,
   PermanentFoundationWorkflowError,
@@ -16,11 +20,16 @@ const queue = new QueueClient({ region: FOUNDATION_WORKFLOW_REGION });
 
 export default queue.handleNodeCallback(
   async (message, metadata) => {
+    const databaseProbe = await probeDatabase(workflowDatabase, "nox_workflow_runtime");
+    if (!databaseProbe.healthy || databaseProbe.role !== "nox_workflow_runtime") {
+      throw new Error("Workflow runtime database role probe failed.");
+    }
     await processFoundationWorkflowMessage(message, metadata, {
       currentEnvironment: process.env.NOX_ENV,
       diagnosticsEnabled: process.env.NOX_FOUNDATION_DIAGNOSTICS_ENABLED,
       recordCompletion: (completion) => recordWorkflowProbeCompletion(workflowDatabase, completion)
     });
+    console.log("STAGING_WORKFLOW_DATABASE_CURRENT_USER=nox_workflow_runtime");
   },
   {
     visibilityTimeoutSeconds: 60,

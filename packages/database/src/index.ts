@@ -61,9 +61,11 @@ export function assertExpectedRuntimeRole(
 }
 
 export function assertServerlessPoolerConnection(connectionUrl: string): void {
-  const hostname = new URL(connectionUrl).hostname;
-  if (!hostname.includes("pooler.")) {
-    throw new Error("Runtime database connection must use the Supabase serverless pooler host.");
+  const url = new URL(connectionUrl);
+  if (!url.hostname.endsWith(".pooler.supabase.com") || url.port !== "6543") {
+    throw new Error(
+      "Runtime database connection must use the Supabase transaction pooler on port 6543."
+    );
   }
 }
 

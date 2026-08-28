@@ -113,53 +113,62 @@ await verifyDnsRecord(zoneId, {
 });
 await ensureDnssec(zoneId);
 
-if (process.env.CF_CREATE_TURNSTILE_WIDGET === "true") {
-  const accountId = required("CF_ACCOUNT_ID");
-  const configuredSiteKey = required("VITE_TURNSTILE_SITE_KEY");
-  const widgets = await cloudflare("/accounts/" + accountId + "/challenges/widgets", {
-    method: "GET"
-  });
-  const namedWidgets = widgets.filter((widget) => widget.name === turnstile.name);
-  if (namedWidgets.length > 1) {
-    throw new Error("Multiple Cloudflare Turnstile widgets claim the canonical name.");
-  }
-  let configured = namedWidgets[0];
-  const widgetPayload = {
-    name: turnstile.name,
-    domains: [publicHostname],
-    mode: turnstile.mode
-  };
-  if (!configured) {
-    configured = await cloudflare("/accounts/" + accountId + "/challenges/widgets", {
-      method: "POST",
-      body: JSON.stringify(widgetPayload)
-    });
-  } else if (
-    configured.mode !== turnstile.mode ||
-    configured.domains?.length !== 1 ||
-    !configured.domains.includes(publicHostname)
-  ) {
-    configured = await cloudflare(
-      "/accounts/" + accountId + "/challenges/widgets/" + configured.sitekey,
-      { method: "PUT", body: JSON.stringify(widgetPayload) }
-    );
-  }
-  if (configured.sitekey !== configuredSiteKey) {
-    throw new Error("Configured public Turnstile site key does not match the reconciled widget.");
-  }
-  await verifyTurnstileSecret(required("TURNSTILE_SECRET_KEY"));
-  console.log("CLOUDFLARE_TURNSTILE=PASS");
-} else {
-  throw new Error("Cloudflare Turnstile reconciliation must be explicitly enabled.");
+const accountId = required("CF_ACCOUNT_ID");
+const configuredSiteKey = required("VITE_TURNSTILE_SITE_KEY");
+const widgets = await cloudflare("/accounts/" + accountId + "/challenges/widgets", {
+  method: "GET"
+});
+const namedWidgets = widgets.filter((widget) => widget.name === turnstile.name);
+if (namedWidgets.length !== 1 || namedWidgets[0].sitekey !== configuredSiteKey) {
+  throw new Error(
+    "The canonical Turnstile widget and protected site key require one-time provider bootstrap."
+  );
 }
+const widgetPayload = {
+  name: turnstile.name,
+  domains: [publicHostname],
+  mode: turnstile.mode
+};
+let configured = namedWidgets[0];
+if (
+  configured.mode !== turnstile.mode ||
+  configured.domains?.length !== 1 ||
+  !configured.domains.includes(publicHostname)
+) {
+  configured = await cloudflare(
+    "/accounts/" + accountId + "/challenges/widgets/" + configuredSiteKey,
+    { method: "PUT", body: JSON.stringify(widgetPayload) }
+  );
+}
+const verifiedWidget = await cloudflare(
+  "/accounts/" + accountId + "/challenges/widgets/" + configuredSiteKey,
+  { method: "GET" }
+);
+if (
+  configured.sitekey !== configuredSiteKey ||
+  verifiedWidget.sitekey !== configuredSiteKey ||
+  verifiedWidget.name !== turnstile.name ||
+  verifiedWidget.mode !== turnstile.mode ||
+  verifiedWidget.domains?.length !== 1 ||
+  !verifiedWidget.domains.includes(publicHostname)
+) {
+  throw new Error("Cloudflare Turnstile widget read-back verification failed.");
+}
+await verifyTurnstileSecret(required("TURNSTILE_SECRET_KEY"));
+console.log("CLOUDFLARE_TURNSTILE=PASS");
 
 if (process.env.CF_PRIVILEGED_PROXY_APPROVED === "true") {
-  const accountId = required("CF_ACCOUNT_ID");
   const privilegedHostname = required("NOX_OPS_HOSTNAME");
   const privilegedTarget = required("CF_PRIVILEGED_CNAME_TARGET");
   const groupId = required(access.policy.identityGroupEnvironmentKey);
   if (access.applicationAuthorization.accessIsNotRbac !== true) {
     throw new Error("Cloudflare Access can never replace NØX RBAC.");
+  }
+  const selectedGroup = await cloudflare("/accounts/" + accountId + "/access/groups/" + groupId, {
+    method: "GET"
+  });
+  if (selectedGroup.id !== groupId) {
+    throw new Error("Cloudflare Access identity-group read-back verification failed.");
   }
 
   await upsertDnsRecord(zoneId, {
