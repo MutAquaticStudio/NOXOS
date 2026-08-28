@@ -110,12 +110,7 @@ jobs:
           NOX_WORKFLOW_DATABASE_URL: ${{ secrets.NOX_WORKFLOW_DATABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       - id: vercel-staging-environment
-        run: |
-          reconciliation_output="$(pnpm infra:vercel-staging:reconcile)"
-          printf '%s\n' "$reconciliation_output"
-          environment_id="$(printf '%s\n' "$reconciliation_output" | sed -n 's/^VERCEL_STAGING_ENVIRONMENT_ID=//p' | tail -n 1)"
-          test -n "$environment_id"
-          echo "environment_id=$environment_id" >> "$GITHUB_OUTPUT"
+        run: pnpm infra:vercel-staging:reconcile
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
@@ -162,7 +157,6 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
-          NOX_VERCEL_STAGING_ENVIRONMENT_ID: ${{ steps.vercel-staging-environment.outputs.environment_id }}
           NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
           NOX_WORKFLOW_DATABASE_URL: ${{ secrets.NOX_WORKFLOW_DATABASE_URL }}
           NOX_DIAGNOSTIC_PROBE_TOKEN: ${{ secrets.NOX_DIAGNOSTIC_PROBE_TOKEN }}
@@ -189,7 +183,6 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
-          NOX_VERCEL_STAGING_ENVIRONMENT_ID: ${{ steps.vercel-staging-environment.outputs.environment_id }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
       - id: browser-install
         run: pnpm exec playwright install --with-deps chromium

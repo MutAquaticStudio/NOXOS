@@ -67,20 +67,14 @@ describe("Vercel project layout", () => {
     expect(productionDeployer).toContain('"--prebuilt"');
   });
 
-  it("binds each Staging deployment verifier to the reconciled custom-environment ID", () => {
+  it("proves each Staging deployment belongs to the reconciled custom environment", () => {
     const workflow = readFileSync(".github/workflows/staging.yml", "utf8");
     const stagingDeployer = readFileSync("scripts/deploy/staging.ts", "utf8");
     const dataPlaneVerifier = readFileSync("scripts/verify/staging-data-plane.ts", "utf8");
 
-    expect(workflow).toContain("VERCEL_STAGING_ENVIRONMENT_ID=");
-    expect(workflow).toContain(
-      "NOX_VERCEL_STAGING_ENVIRONMENT_ID: ${{ steps.vercel-staging-environment.outputs.environment_id }}"
-    );
-    expect(stagingDeployer).toContain(
-      'customEnvironmentId: required("NOX_VERCEL_STAGING_ENVIRONMENT_ID")'
-    );
-    expect(dataPlaneVerifier).toContain(
-      'customEnvironmentId: requiredServerValue(raw, "NOX_VERCEL_STAGING_ENVIRONMENT_ID")'
-    );
+    expect(workflow).toContain("pnpm infra:vercel-staging:reconcile");
+    expect(stagingDeployer).toContain('"--environment=" + target');
+    expect(stagingDeployer).toContain("assertVercelCustomEnvironmentMembership");
+    expect(dataPlaneVerifier).toContain('target: "staging"');
   });
 });

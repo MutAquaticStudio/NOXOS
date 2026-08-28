@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  assertVercelCustomEnvironmentMembership,
   assertExpectedVercelDeployment,
   type ExpectedVercelDeployment
 } from "../../scripts/verify/vercel-deployment";
@@ -215,11 +216,10 @@ describe("trusted Preview verification", () => {
     ).not.toThrow();
   });
 
-  it("accepts a Staging custom environment only when its immutable provider ID matches", () => {
+  it("accepts the current custom-environment response only with a separate scoped provider listing", () => {
     const expectedStaging: ExpectedVercelDeployment = {
       ...expectedPreview,
-      target: "staging",
-      customEnvironmentId: "env_staging"
+      target: "staging"
     };
     const deployment = {
       project: { id: "project_1" },
@@ -230,7 +230,6 @@ describe("trusted Preview verification", () => {
         githubCommitRef: "feature/g1-cloud-foundation"
       },
       target: null,
-      customEnvironmentId: "env_staging",
       readyState: "READY",
       url: "candidate.vercel.app"
     };
@@ -246,12 +245,14 @@ describe("trusted Preview verification", () => {
       )
     ).toThrow(/does not match/);
     expect(() =>
-      assertExpectedVercelDeployment(
-        { ...deployment, customEnvironmentId: undefined },
-        expectedStaging,
-        "candidate.vercel.app"
+      assertVercelCustomEnvironmentMembership(
+        "candidate.vercel.app",
+        "candidate.vercel.app  READY  1m"
       )
-    ).toThrow(/does not match/);
+    ).not.toThrow();
+    expect(() =>
+      assertVercelCustomEnvironmentMembership("candidate.vercel.app", "other.vercel.app  READY  1m")
+    ).toThrow(/listing does not contain/);
   });
 
   it("keeps ordinary pull-request Preview secretless and executes only trusted base verifier code", () => {
