@@ -27,6 +27,7 @@
     "db:status:cloud": "node scripts/migrations/status-cloud.mjs",
     "infra:check": "node scripts/infra/check.mjs",
     "infra:apply": "pnpm tsx scripts/infra/provision-storage.ts && node scripts/infra/apply-cloudflare.mjs",
+    "infra:vercel-staging:reconcile": "pnpm tsx scripts/infra/reconcile-vercel-staging.ts",
     "infra:storage:apply": "pnpm tsx scripts/infra/provision-storage.ts",
     "verify:environment-isolation": "pnpm tsx scripts/verify/environment-isolation.ts",
     "verify:staging:configuration": "node scripts/verify/staging-configuration.mjs",

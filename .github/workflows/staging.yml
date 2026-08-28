@@ -109,6 +109,12 @@ jobs:
           NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
           NOX_WORKFLOW_DATABASE_URL: ${{ secrets.NOX_WORKFLOW_DATABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      - id: vercel-staging-environment
+        run: pnpm infra:vercel-staging:reconcile
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
       - id: infrastructure
         run: pnpm infra:apply
         env:

@@ -31,3 +31,14 @@ creates the first valid attestation and is the first commit eligible for Staging
 This keeps Preview secretless, preserves the normal Preview-before-Staging rule after bootstrap,
 and makes a failed or forged status check insufficient for Staging. The bootstrap exception is
 auditable and cannot be reused as a general merge policy.
+
+## Amendment B-002: Persistent Staging is a Vercel custom environment
+
+The NØX-OS Vercel project disables automatic Git deployment for `main`. A merge to `main` is
+therefore not a Production deployment. The protected Staging workflow reconciles exactly one
+Vercel custom environment with slug `staging`, then performs the exact-SHA deployment through
+that environment from the configured application root (`apps/nox-os`).
+
+The reconciliation reads first, creates only when absent, reads back after creation, and stops
+on duplicate `staging` environments. Production deployment remains an explicit, separate
+pipeline concern and is not exercised by Gate 1.

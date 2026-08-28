@@ -10,7 +10,7 @@ function required(name: string): string {
 }
 
 function runVercel(args: string[]): void {
-  execFileSync("pnpm", ["exec", "vercel", ...args], {
+  execFileSync("pnpm", vercelArguments(args), {
     env: identityEnvironment,
     stdio: "inherit"
   });
@@ -18,12 +18,26 @@ function runVercel(args: string[]): void {
 
 function deployVercel(args: string[]): string {
   return String(
-    execFileSync("pnpm", ["exec", "vercel", ...args], {
+    execFileSync("pnpm", vercelArguments(args), {
       env: identityEnvironment,
       stdio: ["ignore", "pipe", "inherit"],
       encoding: "utf8"
     })
   ).trim();
+}
+
+function vercelArguments(args: string[]): string[] {
+  return [
+    "exec",
+    "vercel",
+    "--cwd",
+    "apps/nox-os",
+    "--scope",
+    required("VERCEL_ORG_ID"),
+    "--token",
+    required("VERCEL_TOKEN"),
+    ...args
+  ];
 }
 
 for (const key of [
