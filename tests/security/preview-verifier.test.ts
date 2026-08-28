@@ -215,6 +215,45 @@ describe("trusted Preview verification", () => {
     ).not.toThrow();
   });
 
+  it("accepts a Staging custom environment only when its immutable provider ID matches", () => {
+    const expectedStaging: ExpectedVercelDeployment = {
+      ...expectedPreview,
+      target: "staging",
+      customEnvironmentId: "env_staging"
+    };
+    const deployment = {
+      project: { id: "project_1" },
+      meta: {
+        githubCommitSha: "expected-sha",
+        githubCommitOrg: "MutAquaticStudio",
+        githubCommitRepo: "NOXOS",
+        githubCommitRef: "feature/g1-cloud-foundation"
+      },
+      target: null,
+      customEnvironmentId: "env_staging",
+      readyState: "READY",
+      url: "candidate.vercel.app"
+    };
+
+    expect(() =>
+      assertExpectedVercelDeployment(deployment, expectedStaging, "candidate.vercel.app")
+    ).not.toThrow();
+    expect(() =>
+      assertExpectedVercelDeployment(
+        { ...deployment, customEnvironmentId: "env_other" },
+        expectedStaging,
+        "candidate.vercel.app"
+      )
+    ).toThrow(/does not match/);
+    expect(() =>
+      assertExpectedVercelDeployment(
+        { ...deployment, customEnvironmentId: undefined },
+        expectedStaging,
+        "candidate.vercel.app"
+      )
+    ).toThrow(/does not match/);
+  });
+
   it("keeps ordinary pull-request Preview secretless and executes only trusted base verifier code", () => {
     const workflow = readFileSync(".github/workflows/preview.yml", "utf8");
 

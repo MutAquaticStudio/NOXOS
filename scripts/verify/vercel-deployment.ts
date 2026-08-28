@@ -11,6 +11,7 @@ export type VercelDeployment = {
   readyState?: string;
   state?: string;
   target?: string | null;
+  customEnvironmentId?: string | null;
   url?: string;
   gitSource?: {
     type?: string;
@@ -33,6 +34,7 @@ export type ExpectedVercelDeployment = {
   sourceSha: string;
   target: "preview" | "staging" | "production";
   token: string;
+  customEnvironmentId?: string;
   gitSource?: ExpectedGitSource;
 };
 
@@ -58,13 +60,19 @@ function isReady(deployment: VercelDeployment): boolean {
   return deployment.readyState === "READY" || deployment.state === "READY";
 }
 
-function targetMatches(
-  deployment: VercelDeployment,
-  target: ExpectedVercelDeployment["target"]
-): boolean {
+function targetMatches(deployment: VercelDeployment, expected: ExpectedVercelDeployment): boolean {
   // Vercel represents its generated Preview environment with an explicit null target;
   // do not accept an arbitrary custom environment as Preview.
-  return target === "preview" ? deployment.target === null : deployment.target === target;
+  if (expected.target === "preview") {
+    return deployment.target === null && !deployment.customEnvironmentId;
+  }
+  if (expected.target === "staging") {
+    if (expected.customEnvironmentId) {
+      return deployment.customEnvironmentId === expected.customEnvironmentId;
+    }
+    return deployment.target === "staging" && !deployment.customEnvironmentId;
+  }
+  return deployment.target === expected.target;
 }
 
 function deploymentProjectId(deployment: VercelDeployment): string | undefined {
@@ -107,7 +115,7 @@ export function assertExpectedVercelDeployment(
   const normalizedUrl = normalizeVercelDeploymentUrl(deploymentUrl);
   if (
     !isReady(deployment) ||
-    !targetMatches(deployment, expected.target) ||
+    !targetMatches(deployment, expected) ||
     deploymentProjectId(deployment) !== expected.projectId ||
     deployment.meta?.githubCommitSha !== expected.sourceSha ||
     !gitSourceMatches(deployment, expected.gitSource, expected.sourceSha) ||

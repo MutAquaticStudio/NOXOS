@@ -24,8 +24,12 @@ const result = await reconcileVercelCustomEnvironment({
   slug: "staging",
   description: "NØX-OS persistent non-production acceptance environment"
 });
+if (!result.environment.id) {
+  throw new Error("Vercel staging custom-environment read-back did not include an immutable ID.");
+}
 
 console.log(`VERCEL_PROJECT_ROOT=${project.updated ? "UPDATED" : "RECONCILED"}`);
 console.log("VERCEL_PROJECT_ROOT_READBACK=PASS");
 console.log(`VERCEL_STAGING_ENVIRONMENT=${result.created ? "CREATED" : "RECONCILED"}`);
 console.log("VERCEL_STAGING_ENVIRONMENT_READBACK=PASS");
+console.log("VERCEL_STAGING_ENVIRONMENT_ID=" + result.environment.id);
