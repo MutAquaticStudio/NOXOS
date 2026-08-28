@@ -30,8 +30,6 @@ function vercelArguments(args: string[]): string[] {
   return [
     "exec",
     "vercel",
-    "--cwd",
-    "apps/nox-os",
     "--project",
     required("VERCEL_PROJECT_ID"),
     "--token",
