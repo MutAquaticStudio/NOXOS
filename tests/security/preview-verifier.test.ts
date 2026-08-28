@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  assertVercelCustomEnvironmentMembership,
   assertExpectedVercelDeployment,
   type ExpectedVercelDeployment
 } from "../../scripts/verify/vercel-deployment";
@@ -216,7 +215,7 @@ describe("trusted Preview verification", () => {
     ).not.toThrow();
   });
 
-  it("accepts the current custom-environment response only with a separate scoped provider listing", () => {
+  it("accepts the current custom-environment response only without a foreign environment ID", () => {
     const expectedStaging: ExpectedVercelDeployment = {
       ...expectedPreview,
       target: "staging"
@@ -244,15 +243,6 @@ describe("trusted Preview verification", () => {
         "candidate.vercel.app"
       )
     ).toThrow(/does not match/);
-    expect(() =>
-      assertVercelCustomEnvironmentMembership(
-        "candidate.vercel.app",
-        "candidate.vercel.app  READY  1m"
-      )
-    ).not.toThrow();
-    expect(() =>
-      assertVercelCustomEnvironmentMembership("candidate.vercel.app", "other.vercel.app  READY  1m")
-    ).toThrow(/listing does not contain/);
   });
 
   it("keeps ordinary pull-request Preview secretless and executes only trusted base verifier code", () => {

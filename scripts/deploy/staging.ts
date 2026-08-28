@@ -1,8 +1,5 @@
 import { execFileSync } from "node:child_process";
-import {
-  assertVercelCustomEnvironmentMembership,
-  verifyVercelDeployment
-} from "../verify/vercel-deployment";
+import { verifyVercelDeployment } from "../verify/vercel-deployment";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -22,29 +19,6 @@ function deployVercel(args: string[]): string {
   ).trim();
 }
 
-function listVercelProjectDeployments(args: string[]): string {
-  return String(
-    execFileSync(
-      "pnpm",
-      [
-        "exec",
-        "vercel",
-        "list",
-        required("VERCEL_PROJECT_ID"),
-        "--token",
-        required("VERCEL_TOKEN"),
-        "--no-color",
-        ...args
-      ],
-      {
-        env: identityEnvironment,
-        stdio: ["ignore", "pipe", "inherit"],
-        encoding: "utf8"
-      }
-    )
-  ).trim();
-}
-
 function vercelArguments(args: string[]): string[] {
   return [
     "exec",
@@ -53,7 +27,6 @@ function vercelArguments(args: string[]): string[] {
     required("VERCEL_PROJECT_ID"),
     "--token",
     required("VERCEL_TOKEN"),
-    "--no-color",
     ...args
   ];
 }
@@ -107,8 +80,6 @@ const submittedUrl = deployVercel([
   "--env",
   "NOX_SOURCE_SHA=" + expectedSourceSha,
   "--env",
-  "VERCEL_TARGET_ENV=" + target,
-  "--env",
   "NOX_RUNTIME_DATABASE_URL=" + required("NOX_RUNTIME_DATABASE_URL"),
   "--env",
   "NOX_WORKFLOW_DATABASE_URL=" + required("NOX_WORKFLOW_DATABASE_URL"),
@@ -132,15 +103,6 @@ const deploymentUrl = await verifyVercelDeployment(
   },
   submittedUrl
 );
-const customEnvironmentListing = listVercelProjectDeployments([
-  "--environment",
-  target,
-  "--meta",
-  "githubCommitSha=" + expectedSourceSha,
-  "--format",
-  "json"
-]);
-assertVercelCustomEnvironmentMembership(deploymentUrl, customEnvironmentListing);
 
 console.log("STAGING_DEPLOY=SUBMITTED_AND_VERIFIED");
 console.log("STAGING_DEPLOY_URL=" + deploymentUrl);

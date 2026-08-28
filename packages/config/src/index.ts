@@ -41,6 +41,7 @@ export type PublicEnvironment = {
 export type ServerIdentity = {
   environment: NoxEnvironment;
   sourceSha: string;
+  providerTargetEnvironment?: string;
 };
 
 function providerBuildEnvironment(raw: Record<string, string | undefined>): NoxEnvironment {
@@ -125,7 +126,8 @@ export function serverIdentity(raw: Record<string, string | undefined>): ServerI
 
   return {
     environment,
-    sourceSha: parsed.NOX_SOURCE_SHA ?? parsed.VERCEL_GIT_COMMIT_SHA ?? "local"
+    sourceSha: parsed.NOX_SOURCE_SHA ?? parsed.VERCEL_GIT_COMMIT_SHA ?? "local",
+    providerTargetEnvironment: parsed.VERCEL_TARGET_ENV
   };
 }
 

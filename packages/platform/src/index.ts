@@ -222,7 +222,8 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
       service: "nox-api",
       version: "0.1.0",
       environment: request.context.environment,
-      sourceSha: request.context.sourceSha
+      sourceSha: request.context.sourceSha,
+      providerTargetEnvironment: identity.providerTargetEnvironment
     }
   }));
 
