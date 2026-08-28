@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const appConfigPath = "apps/nox-os/vercel.json";
 const appConfig = JSON.parse(readFileSync(appConfigPath, "utf8")) as {
+  git?: { deploymentEnabled?: Record<string, boolean> };
   outputDirectory?: string;
   regions?: string[];
   functions?: Record<string, unknown>;
@@ -16,6 +17,7 @@ describe("Vercel project layout", () => {
     expect(existsSync("vercel.json")).toBe(false);
     expect(appConfig.outputDirectory).toBe("dist");
     expect(appConfig.regions).toEqual(["syd1"]);
+    expect(appConfig.git?.deploymentEnabled?.main).toBe(false);
     expect(appConfig.functions?.["api/v1/[...route].ts"]).toBeDefined();
     expect(appConfig.functions?.["api/queues/workflow-foundation.ts"]).toBeDefined();
   });
