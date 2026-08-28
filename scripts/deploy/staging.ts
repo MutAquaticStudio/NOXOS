@@ -22,6 +22,29 @@ function deployVercel(args: string[]): string {
   ).trim();
 }
 
+function listVercelProjectDeployments(args: string[]): string {
+  return String(
+    execFileSync(
+      "pnpm",
+      [
+        "exec",
+        "vercel",
+        "list",
+        required("VERCEL_PROJECT_ID"),
+        "--token",
+        required("VERCEL_TOKEN"),
+        "--no-color",
+        ...args
+      ],
+      {
+        env: identityEnvironment,
+        stdio: ["ignore", "pipe", "inherit"],
+        encoding: "utf8"
+      }
+    )
+  ).trim();
+}
+
 function vercelArguments(args: string[]): string[] {
   return [
     "exec",
@@ -109,11 +132,13 @@ const deploymentUrl = await verifyVercelDeployment(
   },
   submittedUrl
 );
-const customEnvironmentListing = deployVercel([
-  "list",
-  "--environment=" + target,
+const customEnvironmentListing = listVercelProjectDeployments([
+  "--environment",
+  target,
   "--meta",
-  "githubCommitSha=" + expectedSourceSha
+  "githubCommitSha=" + expectedSourceSha,
+  "--format",
+  "json"
 ]);
 assertVercelCustomEnvironmentMembership(deploymentUrl, customEnvironmentListing);
 

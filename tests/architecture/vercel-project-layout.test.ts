@@ -73,7 +73,8 @@ describe("Vercel project layout", () => {
     const dataPlaneVerifier = readFileSync("scripts/verify/staging-data-plane.ts", "utf8");
 
     expect(workflow).toContain("pnpm infra:vercel-staging:reconcile");
-    expect(stagingDeployer).toContain('"--environment=" + target');
+    expect(stagingDeployer).toContain('"--environment",\n  target');
+    expect(stagingDeployer).toContain("function listVercelProjectDeployments");
     expect(stagingDeployer).toContain("assertVercelCustomEnvironmentMembership");
     expect(dataPlaneVerifier).toContain('target: "staging"');
   });

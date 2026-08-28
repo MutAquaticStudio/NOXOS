@@ -105,7 +105,7 @@ build-output path without changing the application project, provider ownership o
 The current Vercel deployment lookup represents a custom-environment deployment with
 `target: null` and does not return its `customEnvironmentId`. Staging first reconciles exactly one
 `staging` environment and reads its immutable provider ID. It then requires Vercel's own
-`list --environment=staging --meta githubCommitSha=<exact-SHA>` result to contain the generated
+`list <project-id> --environment staging --meta githubCommitSha=<exact-SHA>` result to contain the generated
 deployment URL. The deployment verifier independently requires project identity, exact source SHA,
 Git provenance, READY state and generated URL. Preview verification continues to reject every
 custom environment.
