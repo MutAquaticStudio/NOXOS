@@ -34,6 +34,7 @@ jobs:
       - run: pnpm db:validate
       - run: pnpm infra:check
       - run: pnpm build
+      - run: pnpm verify:runtime-packages
       - run: pnpm secrets:scan
 
   browser-foundation:

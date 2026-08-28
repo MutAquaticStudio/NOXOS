@@ -60,7 +60,7 @@ function defineModule({
     ui: {
       moduleId: descriptor.id,
       icon,
-      load: () => import("./foundation-module")
+      load: () => import("./foundation-module.js")
     },
     api: {
       moduleId: descriptor.id,

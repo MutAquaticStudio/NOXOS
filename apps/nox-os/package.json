@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "pnpm --workspace-root build:packages && vite build",
     "dev": "vite",
     "preview": "vite preview"
   },

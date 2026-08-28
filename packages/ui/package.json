@@ -4,7 +4,11 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.tsx",
+    ".": {
+      "types": "./src/index.tsx",
+      "development": "./src/index.tsx",
+      "default": "./dist/index.js"
+    },
     "./styles.css": "./src/styles.css"
   },
   "peerDependencies": {

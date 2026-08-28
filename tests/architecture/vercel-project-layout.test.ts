@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
 
 const appConfigPath = "apps/nox-os/vercel.json";
@@ -14,5 +15,29 @@ describe("Vercel project layout", () => {
     expect(existsSync("vercel.json")).toBe(false);
     expect(appConfig.outputDirectory).toBe("dist");
     expect(appConfig.functions?.["api/v1/[...route].ts"]).toBeDefined();
+  });
+
+  it("keeps workspace exports resolvable after Vercel transpiles TypeScript to JavaScript", () => {
+    for (const packageJsonPath of fg.sync("packages/*/package.json")) {
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+        name: string;
+        exports?: Record<
+          string,
+          string | { types?: string; development?: string; default?: string }
+        >;
+      };
+      const rootExport = packageJson.exports?.["."];
+
+      expect(rootExport, packageJson.name).toEqual({
+        types: packageJson.name === "@nox-os/ui" ? "./src/index.tsx" : "./src/index.ts",
+        development: packageJson.name === "@nox-os/ui" ? "./src/index.tsx" : "./src/index.ts",
+        default: "./dist/index.js"
+      });
+      expect(
+        existsSync(packageJsonPath.replace("package.json", "src/index.ts")) ||
+          existsSync(packageJsonPath.replace("package.json", "src/index.tsx")),
+        packageJson.name
+      ).toBe(true);
+    }
   });
 });
