@@ -9,8 +9,7 @@ if (!stagingUrl || !expectedSha) {
 
 const headers = protectionBypass
   ? {
-      "x-vercel-protection-bypass": protectionBypass,
-      "x-vercel-set-bypass-cookie": "true"
+      "x-vercel-protection-bypass": protectionBypass
     }
   : undefined;
 const healthResponse = await fetch(new URL("/api/v1/health", stagingUrl), { headers });
