@@ -50,21 +50,20 @@ describe("Vercel project layout", () => {
     }
   });
 
-  it("creates a verified repository-root link before using Vercel's configured project root", () => {
-    for (const deployer of ["scripts/deploy/staging.ts", "scripts/deploy/production.ts"]) {
-      const source = readFileSync(deployer, "utf8");
-      expect(source).not.toContain('"--cwd"');
-      expect(source).toContain('"--project"');
-      expect(source).toContain('"--token"');
-      expect(source).not.toContain('"--scope"');
-      expect(source).toContain("function prepareVercelProjectLink");
-      expect(source).toContain('join(linkDirectory, "project.json")');
-      expect(source).toContain("Existing Vercel project link does not match");
-    }
-
+  it("deploys Staging source through the reconciled Vercel project without a local prebuilt artifact", () => {
     const stagingDeployer = readFileSync("scripts/deploy/staging.ts", "utf8");
-    expect(stagingDeployer).toContain("prepareVercelProjectLink();");
-    expect(stagingDeployer).toContain('runVercel(["build", "--yes", "--target=" + target])');
-    expect(stagingDeployer).not.toContain('runVercel(["pull"');
+    expect(stagingDeployer).not.toContain('"--cwd"');
+    expect(stagingDeployer).toContain('"--project"');
+    expect(stagingDeployer).toContain('"--token"');
+    expect(stagingDeployer).not.toContain('"--scope"');
+    expect(stagingDeployer).not.toContain('"--prebuilt"');
+    expect(stagingDeployer).not.toContain("function prepareVercelProjectLink");
+    expect(stagingDeployer).toContain('"--build-env"');
+    expect(stagingDeployer).toContain('"VITE_TURNSTILE_SITE_KEY="');
+    expect(stagingDeployer).not.toContain('"--build-env",\n  "NOX_RUNTIME_DATABASE_URL=');
+
+    const productionDeployer = readFileSync("scripts/deploy/production.ts", "utf8");
+    expect(productionDeployer).toContain("function prepareVercelProjectLink");
+    expect(productionDeployer).toContain('"--prebuilt"');
   });
 });

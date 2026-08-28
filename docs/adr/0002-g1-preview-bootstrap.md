@@ -90,3 +90,12 @@ The protected Staging workflow reads the existing Vercel project and reconciles 
 unless both project identity and root directory match. This is a single existing-project setting,
 not a project recreation; it aligns the Vercel CLI, Preview builds, functions and Vite output with
 the one checked-in application configuration. No Production deployment or promotion is performed.
+
+## Amendment B-009: Staging uses Vercel remote source deployment
+
+The Vercel CLI's local prebuilt path did not honor the reconciled custom-environment build
+settings, although Vercel's remote Preview build did. Staging therefore sends source to the
+already reconciled `staging` custom environment and verifies the resulting exact-SHA deployment.
+Only the three public Vite values are passed as build inputs; database URLs, diagnostic token and
+other protected values remain runtime-only environment values. This removes the anomalous local
+build-output path without changing the application project, provider ownership or Production flow.
