@@ -13,33 +13,55 @@ import type {
   WorkflowLauncher
 } from "@nox-os/contracts";
 import { serverIdentity, type ServerIdentity } from "@nox-os/config";
-import { createLogger } from "@nox-os/observability";
+import { createLogger, type LogSink } from "@nox-os/observability";
 import { createOpaqueId } from "@nox-os/shared";
 
 type RouteKey = string;
+type RouteRegistration = {
+  handler: ApiRouteHandler;
+  moduleId?: string;
+};
+type DatabaseHealth = { healthy: boolean; unconfigured?: boolean };
 
 function key(method: string, path: string): RouteKey {
   return method.toUpperCase() + " " + path;
 }
 
 export class InternalApiRouter implements ApiRouteRegistrar {
-  private readonly routes = new Map<RouteKey, ApiRouteHandler>();
+  private readonly routes = new Map<RouteKey, RouteRegistration>();
 
   get(path: string, handler: ApiRouteHandler): void {
     this.register("GET", path, handler);
   }
 
   register(method: string, path: string, handler: ApiRouteHandler): void {
+    this.registerRoute(method, path, handler);
+  }
+
+  registerModule(method: string, path: string, moduleId: string, handler: ApiRouteHandler): void {
+    this.registerRoute(method, path, handler, moduleId);
+  }
+
+  moduleIdFor(request: ApiRequest): string | undefined {
+    return this.routes.get(key(request.method, request.path))?.moduleId;
+  }
+
+  private registerRoute(
+    method: string,
+    path: string,
+    handler: ApiRouteHandler,
+    moduleId?: string
+  ): void {
     const routeKey = key(method, path);
     if (this.routes.has(routeKey)) {
       throw new Error("Duplicate API route: " + routeKey);
     }
-    this.routes.set(routeKey, handler);
+    this.routes.set(routeKey, { handler, moduleId });
   }
 
   async dispatch(request: ApiRequest): Promise<ApiResponse> {
-    const handler = this.routes.get(key(request.method, request.path));
-    if (!handler) {
+    const route = this.routes.get(key(request.method, request.path));
+    if (!route) {
       return {
         status: 404,
         body: toErrorEnvelope(
@@ -49,7 +71,7 @@ export class InternalApiRouter implements ApiRouteRegistrar {
         )
       };
     }
-    return handler(request);
+    return route.handler(request);
   }
 }
 
@@ -84,24 +106,87 @@ export type FoundationApi = {
   identity: ServerIdentity;
 };
 
+export interface ModuleRequestAuthorizer {
+  canAccess(request: ApiRequest, descriptor: ModuleDefinition["descriptor"]): Promise<boolean>;
+}
+
+export const denyModuleRequestAuthorizer: ModuleRequestAuthorizer = {
+  async canAccess() {
+    return false;
+  }
+};
+
 export type FoundationApiOptions = {
   modules: readonly ModuleDefinition[];
   environment?: Record<string, string | undefined>;
   scientificGateway: ScientificGateway;
+  moduleAuthorizer?: ModuleRequestAuthorizer;
+  databaseProbe?: () => Promise<{ healthy: boolean }>;
+  workflowLauncher?: WorkflowLauncher;
+  diagnosticProbeToken?: string;
+  logSink?: LogSink;
 };
+
+class AuthorizedModuleApiRegistrar implements ApiRouteRegistrar {
+  constructor(
+    private readonly router: InternalApiRouter,
+    private readonly descriptor: ModuleDefinition["descriptor"],
+    private readonly authorizer: ModuleRequestAuthorizer
+  ) {}
+
+  get(path: string, handler: ApiRouteHandler): void {
+    this.register("GET", path, handler);
+  }
+
+  register(method: string, path: string, handler: ApiRouteHandler): void {
+    this.router.registerModule(method, path, this.descriptor.id, async (request) => {
+      let allowed = false;
+      try {
+        allowed = await this.authorizer.canAccess(request, this.descriptor);
+      } catch {
+        allowed = false;
+      }
+
+      if (!allowed) {
+        return {
+          status: 403,
+          body: toErrorEnvelope(
+            "FORBIDDEN",
+            "Module access is not authorized.",
+            request.context.requestId
+          )
+        };
+      }
+      return handler(request);
+    });
+  }
+}
 
 export function createFoundationApi(options: FoundationApiOptions): FoundationApi {
   const identity = serverIdentity(options.environment ?? process.env);
-  const logger = createLogger({
-    service: "nox-api",
-    environment: identity.environment,
-    sourceSha: identity.sourceSha
-  });
+  const logger = createLogger(
+    {
+      service: "nox-api",
+      environment: identity.environment,
+      sourceSha: identity.sourceSha
+    },
+    options.logSink
+  );
   const router = new InternalApiRouter();
+  const moduleAuthorizer = options.moduleAuthorizer ?? denyModuleRequestAuthorizer;
 
   router.get("/health", async (request) => {
     const scientific = await options.scientificGateway.evaluate<undefined, undefined>(undefined);
-    const status = scientific.state === "UNAVAILABLE" ? "DEGRADED" : "HEALTHY";
+    const database: DatabaseHealth = options.databaseProbe
+      ? await options.databaseProbe()
+      : { healthy: false, unconfigured: true };
+    const status = database.healthy
+      ? scientific.state === "UNAVAILABLE"
+        ? "DEGRADED"
+        : "HEALTHY"
+      : database.unconfigured
+        ? "DEGRADED"
+        : "UNHEALTHY";
 
     return {
       status: 200,
@@ -111,7 +196,14 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
         sourceSha: request.context.sourceSha,
         service: "nox-api",
         version: "0.1.0",
-        dependencies: { scientific: scientific.state }
+        dependencies: {
+          scientific: scientific.state,
+          database: database.healthy
+            ? "AVAILABLE"
+            : database.unconfigured
+              ? "UNCONFIGURED"
+              : "UNAVAILABLE"
+        }
       }
     };
   });
@@ -126,8 +218,46 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
     }
   }));
 
+  const workflowLauncher = options.workflowLauncher;
+  const diagnosticProbeToken = options.diagnosticProbeToken;
+  if (workflowLauncher && diagnosticProbeToken) {
+    router.register("POST", "/internal/g1/workflow-probe", async (request) => {
+      if (
+        !secureTokenMatches(request.headers["x-nox-diagnostic-probe-token"], diagnosticProbeToken)
+      ) {
+        return {
+          status: 403,
+          body: toErrorEnvelope(
+            "FORBIDDEN",
+            "Diagnostic workflow probe is not authorized.",
+            request.context.requestId
+          )
+        };
+      }
+
+      const handle = await probeWorkflowRoundTrip(workflowLauncher, {
+        correlationId: request.context.correlationId
+      });
+      return {
+        status: 200,
+        body: {
+          workflowId: handle.id,
+          correlationId: handle.correlationId
+        }
+      };
+    });
+  }
+
   for (const moduleDefinition of options.modules) {
-    moduleDefinition.api.registerRoutes(router);
+    if (
+      moduleDefinition.descriptor.lifecycle === "DISABLED" ||
+      moduleDefinition.descriptor.lifecycle === "DEPRECATED"
+    ) {
+      continue;
+    }
+    moduleDefinition.api.registerRoutes(
+      new AuthorizedModuleApiRegistrar(router, moduleDefinition.descriptor, moduleAuthorizer)
+    );
   }
 
   return {
@@ -137,7 +267,9 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
         const response = await router.dispatch(request);
         logger.log("info", "API request completed.", {
           requestId: request.context.requestId,
-          correlationId: request.context.correlationId
+          correlationId: request.context.correlationId,
+          moduleId: router.moduleIdFor(request),
+          details: { status: response.status }
         });
         return {
           ...response,
@@ -150,7 +282,8 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
       } catch {
         logger.log("error", "API request failed.", {
           requestId: request.context.requestId,
-          correlationId: request.context.correlationId
+          correlationId: request.context.correlationId,
+          moduleId: router.moduleIdFor(request)
         });
         return {
           status: 500,
@@ -180,6 +313,149 @@ export class UnavailableWorkflowLauncher implements WorkflowLauncher {
       state: "FAILED"
     };
   }
+}
+
+const terminalWorkflowStates = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
+
+export type HttpWorkflowLauncherOptions = {
+  endpoint: string;
+  bearerToken?: string;
+  request?: typeof fetch;
+  maxAttempts?: number;
+  retryDelayMs?: number;
+  sleep?: (milliseconds: number) => Promise<void>;
+};
+
+export class HttpWorkflowLauncher implements WorkflowLauncher {
+  private readonly request: typeof fetch;
+
+  constructor(private readonly options: HttpWorkflowLauncherOptions) {
+    const endpoint = new URL(options.endpoint);
+    if (endpoint.protocol !== "https:") {
+      throw new Error("Workflow launcher endpoint must use HTTPS.");
+    }
+    if (
+      options.maxAttempts !== undefined &&
+      (!Number.isInteger(options.maxAttempts) || options.maxAttempts < 1 || options.maxAttempts > 3)
+    ) {
+      throw new Error("Workflow launcher maxAttempts must be an integer from 1 to 3.");
+    }
+    this.request = options.request ?? fetch;
+  }
+
+  async start<T>(
+    workflowType: string,
+    input: T,
+    context: WorkflowContext
+  ): Promise<WorkflowHandle> {
+    const maxAttempts = this.options.maxAttempts ?? 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      let response: Response;
+      try {
+        response = await this.request(this.options.endpoint, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": context.idempotencyKey,
+            ...(this.options.bearerToken
+              ? { authorization: "Bearer " + this.options.bearerToken }
+              : {})
+          },
+          body: JSON.stringify({ workflowType, input, context })
+        });
+      } catch {
+        if (attempt === maxAttempts) {
+          throw new Error("Workflow launcher endpoint was unreachable.");
+        }
+        await this.pauseBeforeRetry(attempt);
+        continue;
+      }
+      if (!response.ok) {
+        if ((response.status === 429 || response.status >= 500) && attempt < maxAttempts) {
+          await this.pauseBeforeRetry(attempt);
+          continue;
+        }
+        throw new Error("Workflow launcher endpoint rejected the request.");
+      }
+
+      const payload: unknown = await response.json();
+      if (
+        !payload ||
+        typeof payload !== "object" ||
+        !("id" in payload) ||
+        !("state" in payload) ||
+        !("correlationId" in payload) ||
+        typeof payload.id !== "string" ||
+        typeof payload.state !== "string" ||
+        typeof payload.correlationId !== "string" ||
+        !["QUEUED", "RUNNING", "WAITING", "COMPLETED", "FAILED", "CANCELLED"].includes(
+          payload.state
+        )
+      ) {
+        throw new Error("Workflow launcher endpoint returned an invalid handle.");
+      }
+
+      return {
+        id: payload.id,
+        state: payload.state as WorkflowHandle["state"],
+        correlationId: payload.correlationId
+      };
+    }
+
+    throw new Error("Workflow launcher exhausted retry attempts.");
+  }
+
+  private async pauseBeforeRetry(attempt: number): Promise<void> {
+    const milliseconds = (this.options.retryDelayMs ?? 100) * 2 ** (attempt - 1);
+    if (this.options.sleep) {
+      await this.options.sleep(milliseconds);
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+  }
+}
+
+export async function probeWorkflowRoundTrip(
+  launcher: WorkflowLauncher,
+  identity: Pick<RequestContext, "correlationId"> = { correlationId: createOpaqueId("corr") }
+): Promise<WorkflowHandle> {
+  const context: WorkflowContext = {
+    workflowId: createOpaqueId("workflow_probe"),
+    scope: { type: "GLOBAL" },
+    actor: { type: "SYSTEM" },
+    correlationId: identity.correlationId,
+    idempotencyKey: createOpaqueId("idempotency")
+  };
+  const handle = await launcher.start(
+    "nox.g1.probe",
+    { purpose: "gate-1-cloud-acceptance" },
+    context
+  );
+
+  if (handle.id !== context.workflowId) {
+    throw new Error("Workflow probe returned an unexpected workflow identifier.");
+  }
+  if (handle.state !== "COMPLETED") {
+    const terminal = terminalWorkflowStates.has(handle.state);
+    throw new Error(
+      "Workflow probe did not complete" + (terminal ? " successfully." : " before timeout.")
+    );
+  }
+  if (handle.correlationId !== context.correlationId) {
+    throw new Error("Workflow probe did not retain the API correlation identifier.");
+  }
+  return handle;
+}
+
+function secureTokenMatches(supplied: string | undefined, expected: string): boolean {
+  if (!supplied || supplied.length !== expected.length) {
+    return false;
+  }
+  let mismatch = 0;
+  for (let index = 0; index < expected.length; index += 1) {
+    mismatch |= supplied.charCodeAt(index) ^ expected.charCodeAt(index);
+  }
+  return mismatch === 0;
 }
 
 export async function requireCurrentWorkflowAuthority(

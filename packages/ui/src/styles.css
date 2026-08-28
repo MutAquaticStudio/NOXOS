@@ -239,6 +239,19 @@ kbd {
   line-height: 1.5;
 }
 
+.nox-peek {
+  margin-top: var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-panel);
+  background: var(--surface-02);
+}
+
+.nox-peek h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
 .nox-status-bar {
   min-height: 24px;
   display: flex;

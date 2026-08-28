@@ -3,55 +3,77 @@ import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
 import { moduleDefinitions } from "../../apps/nox-os/src/modules/definitions";
 
-function source(directory: string): string {
-  return fg
-    .sync([directory + "/**/*.{ts,tsx}"], { onlyFiles: true })
-    .map((file) => readFileSync(file, "utf8"))
-    .join("\n");
+function sourceFiles(directory: string): string[] {
+  return fg.sync([directory + "/**/*.{ts,tsx}"], { onlyFiles: true });
+}
+
+function importsFrom(directory: string): string[] {
+  return sourceFiles(directory).flatMap((file) => {
+    const source = readFileSync(file, "utf8");
+    const specifiers: string[] = [];
+    const importPattern =
+      /\b(?:import|export)\s+(?:type\s+)?(?:[^"']*?\s+from\s+)?["']([^"']+)["']/g;
+    for (const match of source.matchAll(importPattern)) {
+      specifiers.push(match[1]);
+    }
+    return specifiers;
+  });
+}
+
+function transitiveDependencies(moduleId: string, visited = new Set<string>()): Set<string> {
+  if (visited.has(moduleId)) {
+    return visited;
+  }
+  visited.add(moduleId);
+  const definition = moduleDefinitions.find((candidate) => candidate.descriptor.id === moduleId);
+  for (const dependency of definition?.descriptor.dependencies ?? []) {
+    transitiveDependencies(dependency, visited);
+  }
+  return visited;
 }
 
 describe("dependency architecture", () => {
   it("keeps domain packages independent from UI and provider transports", () => {
-    const domain = source("packages/material-intelligence/src");
+    const domainImports = importsFrom("packages/material-intelligence/src");
 
-    expect(domain).not.toMatch(/react|vercel|supabase|window|document/i);
+    expect(domainImports.join("\n")).not.toMatch(/react|vercel|supabase|postgres/i);
   });
 
   it("keeps the UI independent from database adapters", () => {
-    const ui = source("packages/ui/src");
+    const uiImports = importsFrom("packages/ui/src");
 
-    expect(ui).not.toContain("@nox-os/database");
-    expect(ui).not.toContain("postgres");
+    expect(uiImports).not.toContain("@nox-os/database");
+    expect(uiImports).not.toContain("postgres");
   });
 
   it("keeps the platform independent from feature implementations", () => {
-    const platform = source("packages/platform/src");
+    const platformImports = importsFrom("packages/platform/src");
 
-    expect(platform).not.toContain("@nox-os/material-intelligence");
-    expect(platform).not.toContain("@nox-os/inventory");
-    expect(platform).not.toContain("@nox-os/procurement");
+    expect(platformImports).not.toContain("@nox-os/material-intelligence");
+    expect(platformImports).not.toContain("@nox-os/inventory");
+    expect(platformImports).not.toContain("@nox-os/procurement");
   });
 
-  it("does not place scientific or community capability on the ERP-critical path", () => {
-    const criticalModules = new Set([
-      "inventory",
-      "procurement",
-      "production",
-      "compliance",
-      "commercial"
+  it("does not place AI, science, analytics, integration, or Community on an ERP critical path", () => {
+    const criticalModules = ["inventory", "procurement", "production", "compliance", "commercial"];
+    const forbidden = new Set([
+      "scientific",
+      "sensory-intelligence",
+      "analytics",
+      "integration",
+      "community",
+      "ai"
     ]);
 
-    for (const definition of moduleDefinitions) {
-      if (criticalModules.has(definition.descriptor.id)) {
-        expect(definition.descriptor.dependencies).not.toContain("scientific");
-        expect(definition.descriptor.dependencies).not.toContain("community");
-        expect(definition.descriptor.dependencies).not.toContain("analytics");
-        expect(definition.descriptor.dependencies).not.toContain("integration");
+    for (const moduleId of criticalModules) {
+      const dependencies = transitiveDependencies(moduleId);
+      for (const forbiddenId of forbidden) {
+        expect(dependencies).not.toContain(forbiddenId);
       }
     }
   });
 
   it("prevents Material Intelligence from importing future Inventory implementation", () => {
-    expect(source("packages/material-intelligence/src")).not.toContain("@nox-os/inventory");
+    expect(importsFrom("packages/material-intelligence/src")).not.toContain("@nox-os/inventory");
   });
 });

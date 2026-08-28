@@ -27,12 +27,28 @@ export function redactDetails(
     return undefined;
   }
 
-  return Object.fromEntries(
-    Object.entries(details).map(([key, value]) => [
-      key,
-      forbiddenDetailNames.test(key) ? "[REDACTED]" : value
-    ])
-  );
+  const seen = new WeakSet<object>();
+  const redactValue = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+      return value.map(redactValue);
+    }
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+    if (seen.has(value)) {
+      return "[CIRCULAR]";
+    }
+    seen.add(value);
+
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nestedValue]) => [
+        key,
+        forbiddenDetailNames.test(key) ? "[REDACTED]" : redactValue(nestedValue)
+      ])
+    );
+  };
+
+  return redactValue(details) as Record<string, unknown>;
 }
 
 export function createLogger(

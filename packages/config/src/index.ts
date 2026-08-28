@@ -9,10 +9,20 @@ const publicEnvironmentSchema = z.object({
   VITE_TURNSTILE_SITE_KEY: z.string().min(1).optional()
 });
 
+const allowedPublicEnvironmentKeys = new Set([
+  "VITE_NOX_ENV",
+  "VITE_NOX_SOURCE_SHA",
+  "VITE_TURNSTILE_SITE_KEY"
+]);
+
 const serverIdentitySchema = z.object({
   NOX_ENV: environmentSchema.optional(),
+  NOX_SOURCE_SHA: z.string().min(1).max(128).optional(),
   VERCEL_ENV: z.enum(["preview", "production", "development"]).optional(),
-  VERCEL_GIT_COMMIT_SHA: z.string().min(1).max(128).optional()
+  VERCEL_TARGET_ENV: z.string().min(1).max(128).optional(),
+  VERCEL_GIT_COMMIT_SHA: z.string().min(1).max(128).optional(),
+  VERCEL_GIT_COMMIT_REF: z.string().min(1).max(256).optional(),
+  NOX_STAGING_BRANCH: z.string().min(1).max(256).optional()
 });
 
 export type PublicEnvironment = {
@@ -38,6 +48,28 @@ export function publicEnvironment(raw: Record<string, string | undefined>): Publ
 
 export function serverIdentity(raw: Record<string, string | undefined>): ServerIdentity {
   const parsed = serverIdentitySchema.parse(raw);
+
+  if (parsed.NOX_ENV && parsed.VERCEL_TARGET_ENV && parsed.NOX_ENV !== parsed.VERCEL_TARGET_ENV) {
+    throw new Error("Conflicting Vercel target deployment identity.");
+  }
+  if (parsed.NOX_ENV && parsed.VERCEL_ENV) {
+    const customStagingPreview =
+      parsed.VERCEL_ENV === "preview" &&
+      parsed.NOX_ENV === "staging" &&
+      parsed.VERCEL_TARGET_ENV === "staging";
+    const approvedStagingBranchPreview =
+      parsed.VERCEL_ENV === "preview" &&
+      parsed.NOX_ENV === "staging" &&
+      !parsed.VERCEL_TARGET_ENV &&
+      Boolean(parsed.NOX_STAGING_BRANCH) &&
+      parsed.VERCEL_GIT_COMMIT_REF === parsed.NOX_STAGING_BRANCH;
+    const identitiesMatch =
+      parsed.NOX_ENV === parsed.VERCEL_ENV || customStagingPreview || approvedStagingBranchPreview;
+    if (!identitiesMatch) {
+      throw new Error("Conflicting Vercel deployment identity.");
+    }
+  }
+
   const environment =
     parsed.NOX_ENV ??
     (parsed.VERCEL_ENV === "production" ? "production" : undefined) ??
@@ -46,25 +78,18 @@ export function serverIdentity(raw: Record<string, string | undefined>): ServerI
 
   return {
     environment,
-    sourceSha: parsed.VERCEL_GIT_COMMIT_SHA ?? "local"
+    sourceSha: parsed.NOX_SOURCE_SHA ?? parsed.VERCEL_GIT_COMMIT_SHA ?? "local"
   };
 }
 
 export function assertNoPublicSecrets(raw: Record<string, string | undefined>): void {
-  const forbidden = Object.keys(raw).filter((key) => {
-    const upper = key.toUpperCase();
-    return (
-      key.startsWith("VITE_") &&
-      (upper.includes("SECRET") ||
-        upper.includes("DATABASE") ||
-        upper.includes("SERVICE_ROLE") ||
-        upper.includes("PRIVATE_KEY"))
-    );
-  });
+  const forbidden = Object.keys(raw).filter(
+    (key) => key.startsWith("VITE_") && !allowedPublicEnvironmentKeys.has(key)
+  );
 
   if (forbidden.length > 0) {
     throw new Error(
-      "Public Vite environment contains forbidden sensitive keys: " + forbidden.join(", ")
+      "Public Vite environment contains forbidden or unapproved keys: " + forbidden.join(", ")
     );
   }
 }

@@ -7,35 +7,116 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: nox-os-staging
+  cancel-in-progress: false
+
 jobs:
   deploy-and-verify:
     runs-on: ubuntu-24.04
     environment: staging
     timeout-minutes: 30
+    env:
+      NOX_DEPLOY_ENV: staging
+      NOX_ENV: staging
+      NOX_SOURCE_SHA: ${{ github.sha }}
+      VITE_NOX_ENV: staging
+      VITE_NOX_SOURCE_SHA: ${{ github.sha }}
+      EXPECTED_SOURCE_SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 11.19.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm validate
       - run: pnpm contracts:check-frozen-inputs
         env:
           CANONICAL_CONTRACT_ROOT: ${{ vars.CANONICAL_CONTRACT_ROOT }}
           REQUIRE_EXTERNAL_CONTRACTS: "true"
-      - run: pnpm db:migrate:staging
+      - run: pnpm verify:environment-isolation
+        env:
+          NOX_EXPECTED_ENV: staging
+          NOX_ISOLATION_MODE: CONNECTED_NON_PRODUCTION
+          NOX_CURRENT_DATABASE_RESOURCE: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
+          NOX_PRODUCTION_DATABASE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF }}
+          NOX_CURRENT_STORAGE_RESOURCE: ${{ vars.SUPABASE_STAGING_STORAGE_BUCKET }}
+          NOX_PRODUCTION_STORAGE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_STORAGE_BUCKET }}
+          SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          SUPABASE_STORAGE_BUCKET: ${{ vars.SUPABASE_STAGING_STORAGE_BUCKET }}
+          NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
+          NOX_CURRENT_RUNTIME_DATABASE_URL_SHA256: ${{ secrets.NOX_STAGING_RUNTIME_DATABASE_URL_SHA256 }}
+          NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256: ${{ secrets.NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256 }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NOX_CURRENT_SUPABASE_SERVICE_ROLE_KEY_SHA256: ${{ secrets.NOX_STAGING_SUPABASE_SERVICE_ROLE_KEY_SHA256 }}
+          NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256: ${{ secrets.NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256 }}
+      - run: pnpm infra:apply
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_STORAGE_BUCKET: ${{ vars.SUPABASE_STAGING_STORAGE_BUCKET }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ZONE_ID: ${{ vars.CF_ZONE_ID }}
+          CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+          NOX_PUBLIC_APP_HOSTNAME: ${{ vars.NOX_PUBLIC_APP_HOSTNAME }}
+          VERCEL_PUBLIC_CNAME_TARGET: ${{ vars.VERCEL_PUBLIC_CNAME_TARGET }}
+          CF_CREATE_TURNSTILE_WIDGET: ${{ vars.CF_CREATE_TURNSTILE_WIDGET }}
+          CF_PRIVILEGED_PROXY_APPROVED: ${{ vars.CF_PRIVILEGED_PROXY_APPROVED }}
+          NOX_OPS_HOSTNAME: ${{ vars.NOX_OPS_HOSTNAME }}
+          CF_PRIVILEGED_CNAME_TARGET: ${{ vars.CF_PRIVILEGED_CNAME_TARGET }}
+          CF_ACCESS_IDENTITY_GROUP_ID: ${{ vars.CF_ACCESS_IDENTITY_GROUP_ID }}
+      - run: pnpm db:migrate:cloud
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_STAGING_PROJECT_REF: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
-      - run: pnpm deploy:staging
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
+          NOX_MIGRATION_ENV: staging
+      - run: pnpm db:status:cloud
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
+          NOX_MIGRATION_ENV: staging
+      - id: deploy
+        run: |
+          deployment_output="$(pnpm deploy:staging)"
+          printf '%s\n' "$deployment_output"
+          deployment_url="$(printf '%s\n' "$deployment_output" | sed -n 's/^STAGING_DEPLOY_URL=//p' | tail -n 1)"
+          test -n "$deployment_url"
+          echo "staging_url=$deployment_url" >> "$GITHUB_OUTPUT"
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
       - run: pnpm verify:staging
         env:
-          NOX_STAGING_URL: ${{ vars.NOX_STAGING_URL }}
-          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+          NOX_STAGING_URL: ${{ steps.deploy.outputs.staging_url }}
+      - run: pnpm verify:staging:data-plane
+        env:
+          NOX_EXPECTED_ENV: staging
+          NOX_ISOLATION_MODE: CONNECTED_NON_PRODUCTION
+          NOX_CURRENT_DATABASE_RESOURCE: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
+          NOX_PRODUCTION_DATABASE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF }}
+          NOX_CURRENT_STORAGE_RESOURCE: ${{ vars.SUPABASE_STAGING_STORAGE_BUCKET }}
+          NOX_PRODUCTION_STORAGE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_STORAGE_BUCKET }}
+          NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
+          NOX_CURRENT_RUNTIME_DATABASE_URL_SHA256: ${{ secrets.NOX_STAGING_RUNTIME_DATABASE_URL_SHA256 }}
+          NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256: ${{ secrets.NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256 }}
+          SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_STORAGE_BUCKET: ${{ vars.SUPABASE_STAGING_STORAGE_BUCKET }}
+          NOX_CURRENT_SUPABASE_SERVICE_ROLE_KEY_SHA256: ${{ secrets.NOX_STAGING_SUPABASE_SERVICE_ROLE_KEY_SHA256 }}
+          NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256: ${{ secrets.NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256 }}
+          NOX_DEPLOYMENT_URL: ${{ steps.deploy.outputs.staging_url }}
+          NOX_DIAGNOSTIC_PROBE_TOKEN: ${{ secrets.NOX_DIAGNOSTIC_PROBE_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm verify:staging:browser
+        env:
+          NOX_STAGING_URL: ${{ steps.deploy.outputs.staging_url }}

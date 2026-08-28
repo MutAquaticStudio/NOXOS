@@ -1,5 +1,6 @@
 const stagingUrl = process.env.NOX_STAGING_URL;
 const expectedSha = process.env.EXPECTED_SOURCE_SHA;
+const expectedEnvironment = process.env.NOX_EXPECTED_ENV ?? "staging";
 
 if (!stagingUrl || !expectedSha) {
   throw new Error("NOX_STAGING_URL and EXPECTED_SOURCE_SHA are required for staging verification.");
@@ -15,11 +16,11 @@ if (!healthResponse.ok || !versionResponse.ok) {
 const health = await healthResponse.json();
 const version = await versionResponse.json();
 
-if (health.environment !== "staging" || version.environment !== "staging") {
-  throw new Error("Staging environment identity is incorrect.");
+if (health.environment !== expectedEnvironment || version.environment !== expectedEnvironment) {
+  throw new Error("Deployed environment identity is incorrect.");
 }
 if (health.sourceSha !== expectedSha || version.sourceSha !== expectedSha) {
   throw new Error("Deployed SHA does not equal expected SHA.");
 }
 
-console.log("STAGING_HTTP_AND_SHA=PASS");
+console.log("DEPLOYMENT_HTTP_AND_SHA=PASS");

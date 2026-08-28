@@ -1,0 +1,21 @@
+{
+  "ordinaryPullRequestPreview": {
+    "providerGitIntegration": true,
+    "verificationSource": "trusted-pull-request-target-base-branch",
+    "serverRuntimeCredentials": "forbidden",
+    "forbiddenEnvironmentKeys": [
+      "NOX_RUNTIME_DATABASE_URL",
+      "NOX_MIGRATION_DATABASE_URL",
+      "SUPABASE_URL",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "SUPABASE_ACCESS_TOKEN",
+      "SUPABASE_STORAGE_BUCKET",
+      "NOX_WORKFLOW_PROBE_URL",
+      "NOX_WORKFLOW_PROBE_TOKEN",
+      "NOX_DIAGNOSTIC_PROBE_TOKEN",
+      "CF_API_TOKEN",
+      "VERCEL_TOKEN"
+    ],
+    "dataPlaneAcceptance": "trusted-post-merge-staging-only"
+  }
+}

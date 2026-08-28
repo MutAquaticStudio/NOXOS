@@ -21,6 +21,13 @@ export function assertLowPrivilegeRuntimeConnection(connectionUrl: string): void
   }
 }
 
+export function assertServerlessPoolerConnection(connectionUrl: string): void {
+  const hostname = new URL(connectionUrl).hostname;
+  if (!hostname.includes("pooler.")) {
+    throw new Error("Runtime database connection must use the Supabase serverless pooler host.");
+  }
+}
+
 export function assertSeparateMigrationConnection(plan: DatabaseConnectionPlan): void {
   if (plan.runtimeConnectionUrl === plan.migrationConnectionUrl) {
     throw new Error("Runtime and migration database connections must be separate.");
@@ -30,6 +37,7 @@ export function assertSeparateMigrationConnection(plan: DatabaseConnectionPlan):
 
 export function createRuntimeDatabase(options: RuntimeDatabaseOptions): Sql {
   assertLowPrivilegeRuntimeConnection(options.connectionUrl);
+  assertServerlessPoolerConnection(options.connectionUrl);
 
   return postgres(options.connectionUrl, {
     prepare: false,

@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { ModuleUxProfile } from "@nox-os/contracts";
-
 export type NoxTheme = "DARK" | "LIGHT" | "SYSTEM";
 export type NoxDensity = "COMPACT" | "DEFAULT" | "COMFORTABLE";
 
@@ -9,7 +7,7 @@ export type ShellRailItem = {
   label: string;
   routeRoot: string;
   navigationGroup: string;
-  uxProfileId: ModuleUxProfile;
+  uxProfileId: string;
 };
 
 export type NoxShellProps = {
@@ -55,7 +53,9 @@ export function NoxShell({
   const [commandOpen, setCommandOpen] = useState(false);
   const [assistOpen, setAssistOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [peekOpen, setPeekOpen] = useState(false);
   const commandInput = useRef<HTMLInputElement>(null);
+  const commandTrigger = useRef<HTMLButtonElement>(null);
 
   useShortcut("k", () => setCommandOpen(true));
   useShortcut("j", () => setAssistOpen((value) => !value));
@@ -66,6 +66,26 @@ export function NoxShell({
     }
   }, [commandOpen]);
 
+  useEffect(() => {
+    if (!commandOpen) {
+      return;
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setCommandOpen(false);
+        window.requestAnimationFrame(() => commandTrigger.current?.focus());
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [commandOpen]);
+
+  const closeCommandCenter = () => {
+    setCommandOpen(false);
+    window.requestAnimationFrame(() => commandTrigger.current?.focus());
+  };
+
   return (
     <div className="nox-os" data-theme={theme} data-density={density}>
       <header className="nox-system-bar">
@@ -73,6 +93,7 @@ export function NoxShell({
           NØX
         </button>
         <button
+          ref={commandTrigger}
           className="nox-command-trigger"
           type="button"
           onClick={() => setCommandOpen(true)}
@@ -141,9 +162,21 @@ export function NoxShell({
             </button>
           </div>
           <p>Selection-aware context is provided by later module capabilities.</p>
-          <button type="button" className="nox-peek-trigger">
+          <button
+            type="button"
+            className="nox-peek-trigger"
+            aria-expanded={peekOpen}
+            aria-controls="nox-peek-context"
+            onClick={() => setPeekOpen((value) => !value)}
+          >
             Peek current context
           </button>
+          {peekOpen ? (
+            <section id="nox-peek-context" className="nox-peek" aria-label="Peek current context">
+              <h3>Peek context</h3>
+              <p>No business object is selected in the Gate 1 foundation.</p>
+            </section>
+          ) : null}
         </aside>
 
         {assistOpen ? <NoxAssist onClose={() => setAssistOpen(false)} /> : null}
@@ -159,9 +192,7 @@ export function NoxShell({
         ) : null}
       </footer>
 
-      {commandOpen ? (
-        <CommandCenter inputRef={commandInput} onClose={() => setCommandOpen(false)} />
-      ) : null}
+      {commandOpen ? <CommandCenter inputRef={commandInput} onClose={closeCommandCenter} /> : null}
     </div>
   );
 }

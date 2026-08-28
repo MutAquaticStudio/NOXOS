@@ -3,8 +3,9 @@
   "applicationType": "self_hosted",
   "purpose": "Privileged NØX-OS foundation diagnostics and operations",
   "policy": {
+    "name": "NØX-OS privileged foundation admission",
     "action": "allow",
-    "include": ["approved_identity_provider_group"],
+    "identityGroupEnvironmentKey": "CF_ACCESS_IDENTITY_GROUP_ID",
     "requiresAtLeastOneIncludeRule": true
   },
   "applicationAuthorization": {

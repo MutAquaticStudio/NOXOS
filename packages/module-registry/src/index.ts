@@ -15,6 +15,16 @@ const knownLifecycles = new Set<ModuleLifecycle>([
   "DEPRECATED"
 ]);
 
+const osRouteOwners = new Map<string, string>([
+  ["/login", "platform"],
+  ["/signup", "platform"],
+  ["/dashboard", "platform"],
+  ["/admin/tenants", "platform"],
+  ["/admin/support", "support"]
+]);
+
+const osParentDelegations = new Map<string, string>([["/admin/support", "platform"]]);
+
 export type AvailabilityInputs = {
   featureFlags: ReadonlySet<string>;
   entitlements: ReadonlySet<string>;
@@ -39,14 +49,39 @@ function routeCollides(left: string, right: string): boolean {
   return left === right || left.startsWith(right + "/") || right.startsWith(left + "/");
 }
 
-function isExplicitDelegation(owner: ModuleDescriptor, route: string): boolean {
-  return owner.childRoutes.includes(route);
+type RouteClaim = {
+  route: string;
+  descriptor: ModuleDescriptor;
+  kind: "root" | "child";
+};
+
+function isNestedRoute(parent: string, candidate: string): boolean {
+  return parent !== candidate && candidate.startsWith(parent + "/");
+}
+
+function routeIsReservedForAnotherModule(route: string, moduleId: string): boolean {
+  const owner = osRouteOwners.get(route);
+  return Boolean(owner && owner !== moduleId);
+}
+
+function isAllowedCrossModuleOverlap(left: RouteClaim, right: RouteClaim): boolean {
+  const [parent, child] = isNestedRoute(left.route, right.route) ? [left, right] : [right, left];
+
+  return (
+    parent.kind === "root" &&
+    osParentDelegations.get(child.route) === parent.descriptor.id &&
+    osRouteOwners.get(child.route) === child.descriptor.id
+  );
+}
+
+function arraysMatch(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 export function validateModuleDefinitions(definitions: readonly ModuleDefinition[]): void {
   const violations: string[] = [];
   const ids = new Set<string>();
-  const routes = new Map<string, ModuleDescriptor>();
+  const routeClaims: RouteClaim[] = [];
   const namespaces = new Set<string>();
 
   for (const definition of definitions) {
@@ -69,6 +104,22 @@ export function validateModuleDefinitions(definitions: readonly ModuleDefinition
     if (!descriptor.uxProfileId) {
       violations.push("missing UX profile: " + descriptor.id);
     }
+    if (!definition.uxProfile.id || definition.uxProfile.id !== descriptor.uxProfileId) {
+      violations.push("UX profile mismatch: " + descriptor.id);
+    }
+    if (
+      definition.uxProfile.primaryTasks.length === 0 ||
+      definition.uxProfile.supportedViews.length === 0 ||
+      definition.uxProfile.states.length === 0
+    ) {
+      violations.push("incomplete UX profile: " + descriptor.id);
+    }
+    if (!arraysMatch(descriptor.mobilePriority, definition.uxProfile.mobilePriority)) {
+      violations.push("mobile priority does not match UX profile: " + descriptor.id);
+    }
+    if (routeIsReservedForAnotherModule(descriptor.routeRoot, descriptor.id)) {
+      violations.push("OS route reserved for another module: " + descriptor.routeRoot);
+    }
     if (ui.moduleId !== descriptor.id) {
       violations.push("UI manifest mismatch: " + descriptor.id);
     }
@@ -80,6 +131,8 @@ export function validateModuleDefinitions(definitions: readonly ModuleDefinition
     }
     namespaces.add(descriptor.apiNamespace);
 
+    routeClaims.push({ route: descriptor.routeRoot, descriptor, kind: "root" });
+
     for (const childRoute of descriptor.childRoutes) {
       if (!childRoute.startsWith("/")) {
         violations.push("child route must start with /: " + childRoute);
@@ -87,30 +140,49 @@ export function validateModuleDefinitions(definitions: readonly ModuleDefinition
       if (forbiddenGovernanceRoute.test(childRoute)) {
         violations.push("forbidden governance child route: " + childRoute);
       }
-      if (
-        !childRoute.startsWith(descriptor.routeRoot + "/") &&
-        childRoute !== descriptor.routeRoot
-      ) {
-        if (!isExplicitDelegation(descriptor, childRoute)) {
-          violations.push("undeclared OS route: " + childRoute);
-        }
+      const isNested =
+        childRoute === descriptor.routeRoot || isNestedRoute(descriptor.routeRoot, childRoute);
+      const specialOwner = osRouteOwners.get(childRoute);
+      if (!isNested && specialOwner !== descriptor.id) {
+        violations.push("undeclared OS route: " + childRoute);
       }
-    }
-
-    for (const [existingRoute, existingDescriptor] of routes) {
-      if (routeCollides(existingRoute, descriptor.routeRoot)) {
-        const delegated =
-          existingDescriptor.childRoutes.includes(descriptor.routeRoot) ||
-          descriptor.childRoutes.includes(existingRoute);
-        if (!delegated) {
-          violations.push("route collision: " + existingDescriptor.id + " and " + descriptor.id);
-        }
+      if (routeIsReservedForAnotherModule(childRoute, descriptor.id)) {
+        violations.push("OS route reserved for another module: " + childRoute);
       }
+      routeClaims.push({ route: childRoute, descriptor, kind: "child" });
     }
-
-    routes.set(descriptor.routeRoot, descriptor);
   }
 
+  for (let index = 0; index < routeClaims.length; index += 1) {
+    const claim = routeClaims[index];
+    for (let otherIndex = 0; otherIndex < index; otherIndex += 1) {
+      const otherClaim = routeClaims[otherIndex];
+      if (claim.route === otherClaim.route) {
+        violations.push(
+          (claim.descriptor.id === otherClaim.descriptor.id
+            ? "duplicate route claim: "
+            : "route collision (duplicate route claim): ") +
+            otherClaim.descriptor.id +
+            " and " +
+            claim.descriptor.id
+        );
+        continue;
+      }
+      if (
+        claim.descriptor.id !== otherClaim.descriptor.id &&
+        routeCollides(claim.route, otherClaim.route) &&
+        !isAllowedCrossModuleOverlap(claim, otherClaim)
+      ) {
+        violations.push(
+          "route collision: " + otherClaim.descriptor.id + " and " + claim.descriptor.id
+        );
+      }
+    }
+  }
+
+  const definitionById = new Map(
+    definitions.map((definition) => [definition.descriptor.id, definition])
+  );
   for (const definition of definitions) {
     for (const dependency of definition.descriptor.dependencies) {
       if (!ids.has(dependency)) {
@@ -119,6 +191,41 @@ export function validateModuleDefinitions(definitions: readonly ModuleDefinition
         );
       }
     }
+  }
+
+  const visitState = new Map<string, "VISITING" | "VISITED">();
+  const stack: string[] = [];
+  const reportedCycles = new Set<string>();
+  const visit = (moduleId: string): void => {
+    const state = visitState.get(moduleId);
+    if (state === "VISITED") {
+      return;
+    }
+    if (state === "VISITING") {
+      const cycle = [...stack.slice(stack.indexOf(moduleId)), moduleId];
+      const rendered = cycle.join(" -> ");
+      if (!reportedCycles.has(rendered)) {
+        violations.push("dependency cycle: " + rendered);
+        reportedCycles.add(rendered);
+      }
+      return;
+    }
+
+    const definition = definitionById.get(moduleId);
+    if (!definition) {
+      return;
+    }
+    visitState.set(moduleId, "VISITING");
+    stack.push(moduleId);
+    for (const dependency of definition.descriptor.dependencies) {
+      visit(dependency);
+    }
+    stack.pop();
+    visitState.set(moduleId, "VISITED");
+  };
+
+  for (const moduleId of definitionById.keys()) {
+    visit(moduleId);
   }
 
   if (violations.length > 0) {
@@ -219,6 +326,12 @@ export function registerModuleApiRoutes(
   registrar: ApiRouteRegistrar
 ): void {
   for (const definition of definitions) {
+    if (
+      definition.descriptor.lifecycle === "DISABLED" ||
+      definition.descriptor.lifecycle === "DEPRECATED"
+    ) {
+      continue;
+    }
     definition.api.registerRoutes(registrar);
   }
 }

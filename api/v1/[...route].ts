@@ -1,12 +1,31 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { ApiRequest } from "@nox-os/contracts";
-import { createRequestContext, createFoundationApi } from "@nox-os/platform";
+import { createRuntimeDatabase, probeDatabase } from "@nox-os/database";
+import { createRequestContext, createFoundationApi, HttpWorkflowLauncher } from "@nox-os/platform";
 import { UnavailableScientificAdapter } from "@nox-os/scientific";
 import { moduleDefinitions } from "../../apps/nox-os/src/modules/definitions";
 
+const workflowEndpoint = process.env.NOX_WORKFLOW_PROBE_URL;
+const workflowLauncher = workflowEndpoint
+  ? new HttpWorkflowLauncher({
+      endpoint: workflowEndpoint,
+      bearerToken: process.env.NOX_WORKFLOW_PROBE_TOKEN
+    })
+  : undefined;
+const runtimeDatabaseUrl = process.env.NOX_RUNTIME_DATABASE_URL;
+const runtimeDatabase = runtimeDatabaseUrl
+  ? createRuntimeDatabase({
+      connectionUrl: runtimeDatabaseUrl,
+      applicationName: "nox-os-api"
+    })
+  : undefined;
+
 const foundationApi = createFoundationApi({
   modules: moduleDefinitions,
-  scientificGateway: new UnavailableScientificAdapter()
+  scientificGateway: new UnavailableScientificAdapter(),
+  databaseProbe: runtimeDatabase ? () => probeDatabase(runtimeDatabase) : undefined,
+  workflowLauncher,
+  diagnosticProbeToken: process.env.NOX_DIAGNOSTIC_PROBE_TOKEN
 });
 
 function routePath(request: VercelRequest): string {

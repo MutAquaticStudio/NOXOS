@@ -3,13 +3,33 @@ import type {
   IconToken,
   ModuleDefinition,
   ModuleDescriptor,
-  ModuleUxProfile
+  ModuleUxProfile,
+  ModuleUxState
 } from "@nox-os/contracts";
 
-type DefinitionInput = Omit<ModuleDescriptor, "mobilePriority"> & {
+type DefinitionInput = Omit<ModuleDescriptor, "mobilePriority" | "uxProfileId"> & {
   icon: IconToken;
+  uxProfile: ModuleUxProfile;
   mobilePriority?: readonly string[];
 };
+
+const foundationStates = [
+  "default",
+  "loading",
+  "empty",
+  "error",
+  "partial-data",
+  "permission-denied",
+  "selection",
+  "unsaved",
+  "offline"
+] as const satisfies readonly ModuleUxState[];
+
+function profile(
+  input: Omit<ModuleUxProfile, "states"> & { states?: readonly ModuleUxState[] }
+): ModuleUxProfile {
+  return { ...input, states: input.states ?? foundationStates };
+}
 
 function registerFoundationApi(namespace: string, registrar: ApiRouteRegistrar): void {
   registrar.get("/" + namespace + "/foundation", async (request) => ({
@@ -22,17 +42,24 @@ function registerFoundationApi(namespace: string, registrar: ApiRouteRegistrar):
   }));
 }
 
-function defineModule(input: DefinitionInput): ModuleDefinition {
+function defineModule({
+  icon,
+  mobilePriority,
+  uxProfile,
+  ...input
+}: DefinitionInput): ModuleDefinition {
   const descriptor: ModuleDescriptor = {
     ...input,
-    mobilePriority: input.mobilePriority ?? ["PRIMARY", "SECONDARY"]
+    uxProfileId: uxProfile.id,
+    mobilePriority: mobilePriority ?? uxProfile.mobilePriority
   };
 
   return {
     descriptor,
+    uxProfile,
     ui: {
       moduleId: descriptor.id,
-      icon: input.icon,
+      icon,
       load: () => import("./foundation-module")
     },
     api: {
@@ -43,14 +70,161 @@ function defineModule(input: DefinitionInput): ModuleDefinition {
   };
 }
 
-const profile = {
-  platform: "CONFIGURATION_DATA_GRID",
-  materials: "DATA_GRID_REGISTRY",
-  operations: "DATA_GRID_OPERATIONS",
-  workflow: "OPERATIONS_WORKFLOW",
-  studioAnalytics: "STUDIO_ANALYTICS",
-  workflowRegistry: "WORKFLOW_REGISTRY",
-  studio: "STUDIO"
+export const moduleProfiles = {
+  platform: profile({
+    id: "platform",
+    name: "Platform Admin",
+    archetype: "configuration",
+    secondaryArchetype: "data-grid",
+    density: "compact",
+    primaryObject: "Tenant",
+    primaryTasks: ["review tenant scope", "review feature operations"],
+    navigation: { inspector: true, aiSidecar: true, workspaceTabs: true, splitView: true },
+    supportedViews: ["table", "form"],
+    mobilePriority: ["review tenant status", "review operational alerts"],
+    reactBitsIntensity: "none"
+  }),
+  materialIntelligence: profile({
+    id: "material-intelligence",
+    name: "Material Intelligence",
+    archetype: "data-grid",
+    secondaryArchetype: "registry",
+    density: "compact",
+    primaryObject: "GlobalMaterial",
+    primaryTasks: ["search materials", "inspect evidence", "save view"],
+    navigation: { inspector: true, aiSidecar: true, workspaceTabs: true, splitView: true },
+    supportedViews: ["table", "list"],
+    mobilePriority: ["search materials", "inspect evidence"],
+    reactBitsIntensity: "low"
+  }),
+  inventory: profile({
+    id: "inventory",
+    name: "Inventory",
+    archetype: "data-grid",
+    secondaryArchetype: "operations",
+    density: "compact",
+    primaryObject: "InventoryLot",
+    primaryTasks: ["scan stock", "inspect lot", "identify shortages"],
+    navigation: { inspector: true, aiSidecar: true, workspaceTabs: true, splitView: false },
+    supportedViews: ["table", "list"],
+    mobilePriority: ["scan stock", "inspect lot", "identify shortages"],
+    reactBitsIntensity: "none"
+  }),
+  procurement: profile({
+    id: "procurement",
+    name: "Procurement",
+    archetype: "operations",
+    secondaryArchetype: "data-grid",
+    density: "compact",
+    primaryObject: "PurchaseOrder",
+    primaryTasks: ["review order", "inspect supplier", "receive delivery"],
+    navigation: { inspector: true, aiSidecar: true, workspaceTabs: true, splitView: false },
+    supportedViews: ["table", "form"],
+    mobilePriority: ["review order", "receive delivery"],
+    reactBitsIntensity: "none"
+  }),
+  production: profile({
+    id: "production",
+    name: "Production",
+    archetype: "operations",
+    secondaryArchetype: "workflow",
+    density: "compact",
+    primaryObject: "ProductionRun",
+    primaryTasks: ["review queue", "scan batch", "flag issue"],
+    navigation: { inspector: true, aiSidecar: true, workspaceTabs: true, splitView: false },
+    supportedViews: ["table", "board", "form"],
+    mobilePriority: ["scan batch", "flag issue", "review queue"],
+    reactBitsIntensity: "none"
+  }),
+  sensoryIntelligence: profile({
+    id: "sensory-intelligence",
+    name: "Sensory Intelligence",
+    archetype: "studio",
+    secondaryArchetype: "analytics",
+    density: "default",
+    primaryObject: "SensorySession",
+    primaryTasks: ["review session", "record observation", "compare evidence"],
+    navigation: { inspector: true, aiSidecar: true, workspaceTabs: true, splitView: true },
+    supportedViews: ["canvas", "table", "chart"],
+    mobilePriority: ["review session", "record observation"],
+    reactBitsIntensity: "low"
+  }),
+  compliance: profile({
+    id: "compliance",
+    name: "Compliance",
+    archetype: "workflow",
+    secondaryArchetype: "registry",
+    density: "compact",
+    primaryObject: "ComplianceRecord",
+    primaryTasks: ["review status", "inspect evidence", "flag exception"],
+    navigation: { inspector: true, aiSidecar: true, workspaceTabs: true, splitView: true },
+    supportedViews: ["table", "board", "form"],
+    mobilePriority: ["review status", "flag exception"],
+    reactBitsIntensity: "none"
+  }),
+  commercial: profile({
+    id: "commercial",
+    name: "Commercial",
+    archetype: "operations",
+    secondaryArchetype: "data-grid",
+    density: "compact",
+    primaryObject: "SalesOrder",
+    primaryTasks: ["review order", "check readiness", "inspect status"],
+    navigation: { inspector: true, aiSidecar: true, workspaceTabs: true, splitView: false },
+    supportedViews: ["table", "form"],
+    mobilePriority: ["review order", "check readiness"],
+    reactBitsIntensity: "none"
+  }),
+  community: profile({
+    id: "community",
+    name: "Community",
+    archetype: "workflow",
+    secondaryArchetype: "registry",
+    density: "default",
+    primaryObject: "Post / SharedReference",
+    primaryTasks: ["read shared reference", "review discussion", "inspect sharing scope"],
+    navigation: { inspector: true, aiSidecar: true, workspaceTabs: true, splitView: false },
+    supportedViews: ["list", "table"],
+    mobilePriority: ["read shared reference", "review discussion"],
+    reactBitsIntensity: "low"
+  }),
+  settings: profile({
+    id: "settings",
+    name: "Settings",
+    archetype: "configuration",
+    density: "default",
+    primaryObject: "Settings section",
+    primaryTasks: ["review preference", "change a focused setting"],
+    navigation: { inspector: false, aiSidecar: false, workspaceTabs: true, splitView: false },
+    supportedViews: ["form", "list"],
+    mobilePriority: ["review preference", "change a focused setting"],
+    reactBitsIntensity: "none"
+  }),
+  support: profile({
+    id: "support",
+    name: "Support / Messaging",
+    archetype: "workflow",
+    secondaryArchetype: "registry",
+    density: "default",
+    primaryObject: "SupportConversation",
+    primaryTasks: ["review conversation", "inspect access scope", "attach diagnostic"],
+    navigation: { inspector: true, aiSidecar: true, workspaceTabs: true, splitView: true },
+    supportedViews: ["list", "table", "form"],
+    mobilePriority: ["review conversation", "inspect access scope"],
+    reactBitsIntensity: "none"
+  }),
+  designStudio: profile({
+    id: "design-studio",
+    name: "Design Studio",
+    archetype: "studio",
+    density: "comfortable",
+    primaryObject: "DesignIntent",
+    primaryTasks: ["review brief", "inspect intent", "review proposal"],
+    navigation: { inspector: true, aiSidecar: true, workspaceTabs: true, splitView: true },
+    supportedViews: ["canvas", "list"],
+    mobilePriority: ["review brief", "inspect intent"],
+    reactBitsIntensity: "low"
+  })
 } as const satisfies Record<string, ModuleUxProfile>;
 
 export const moduleDefinitions: readonly ModuleDefinition[] = [
@@ -66,7 +240,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     permissions: ["platform.read"],
     entitlement: "core.platform",
     featureFlag: "module.platform",
-    uxProfileId: profile.platform,
+    uxProfile: moduleProfiles.platform,
     owner: "Platform owner",
     icon: "admin"
   }),
@@ -82,7 +256,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     permissions: ["materials.read"],
     entitlement: "core.materials",
     featureFlag: "module.material-intelligence",
-    uxProfileId: profile.materials,
+    uxProfile: moduleProfiles.materialIntelligence,
     owner: "Material Intelligence owner",
     icon: "atom"
   }),
@@ -98,7 +272,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     permissions: ["inventory.read"],
     entitlement: "module.inventory",
     featureFlag: "module.inventory",
-    uxProfileId: profile.operations,
+    uxProfile: moduleProfiles.inventory,
     owner: "Inventory owner",
     icon: "box"
   }),
@@ -114,7 +288,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     permissions: ["procurement.read"],
     entitlement: "module.procurement",
     featureFlag: "module.procurement",
-    uxProfileId: profile.operations,
+    uxProfile: moduleProfiles.procurement,
     owner: "Procurement owner",
     icon: "cart"
   }),
@@ -130,7 +304,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     permissions: ["production.read"],
     entitlement: "module.production",
     featureFlag: "module.production",
-    uxProfileId: profile.workflow,
+    uxProfile: moduleProfiles.production,
     owner: "Production owner",
     icon: "factory"
   }),
@@ -146,7 +320,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     permissions: ["sensory.read"],
     entitlement: "module.sensory",
     featureFlag: "module.sensory-intelligence",
-    uxProfileId: profile.studioAnalytics,
+    uxProfile: moduleProfiles.sensoryIntelligence,
     owner: "Sensory Intelligence owner",
     icon: "sense"
   }),
@@ -162,7 +336,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     permissions: ["compliance.read"],
     entitlement: "module.compliance",
     featureFlag: "module.compliance",
-    uxProfileId: profile.workflowRegistry,
+    uxProfile: moduleProfiles.compliance,
     owner: "Compliance owner",
     icon: "shield"
   }),
@@ -178,7 +352,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     permissions: ["commercial.read"],
     entitlement: "module.commercial",
     featureFlag: "module.commercial",
-    uxProfileId: profile.operations,
+    uxProfile: moduleProfiles.commercial,
     owner: "Commercial owner",
     icon: "briefcase"
   }),
@@ -194,7 +368,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     permissions: ["community.read"],
     entitlement: "module.community",
     featureFlag: "module.community",
-    uxProfileId: profile.workflowRegistry,
+    uxProfile: moduleProfiles.community,
     owner: "Community owner",
     icon: "community"
   }),
@@ -202,7 +376,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     id: "settings",
     displayName: "Settings",
     routeRoot: "/settings",
-    childRoutes: ["/settings"],
+    childRoutes: [],
     apiNamespace: "settings",
     navigationGroup: "System",
     lifecycle: "INTERNAL",
@@ -210,7 +384,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     permissions: ["settings.personal.read"],
     entitlement: "core.settings",
     featureFlag: "module.settings",
-    uxProfileId: profile.platform,
+    uxProfile: moduleProfiles.settings,
     owner: "Platform experience owner",
     icon: "settings"
   }),
@@ -218,7 +392,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     id: "support",
     displayName: "Support / Messaging",
     routeRoot: "/support",
-    childRoutes: ["/support", "/admin/support"],
+    childRoutes: ["/admin/support"],
     apiNamespace: "support",
     navigationGroup: "System",
     lifecycle: "INTERNAL",
@@ -226,7 +400,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     permissions: ["support.read"],
     entitlement: "core.support",
     featureFlag: "module.support",
-    uxProfileId: profile.workflowRegistry,
+    uxProfile: moduleProfiles.support,
     owner: "Platform support owner",
     icon: "support"
   }),
@@ -242,7 +416,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     permissions: ["design-studio.read"],
     entitlement: "future.design-studio",
     featureFlag: "module.design-studio",
-    uxProfileId: profile.studio,
+    uxProfile: moduleProfiles.designStudio,
     owner: "Future R&D owner",
     icon: "studio"
   })

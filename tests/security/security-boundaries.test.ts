@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { assertNoPublicSecrets } from "@nox-os/config";
-import { assertSeparateMigrationConnection } from "@nox-os/database";
+import { assertNoPublicSecrets, serverIdentity } from "@nox-os/config";
+import {
+  assertSeparateMigrationConnection,
+  assertServerlessPoolerConnection
+} from "@nox-os/database";
+import { redactDetails } from "@nox-os/observability";
 import {
   noAccessAdmission,
   requireCurrentWorkflowAuthority,
@@ -15,7 +19,7 @@ describe("security boundaries", () => {
         VITE_NOX_ENV: "preview",
         VITE_NOX_RUNTIME_DATABASE_URL: "should-never-be-public"
       })
-    ).toThrow(/forbidden sensitive keys/i);
+    ).toThrow(/forbidden or unapproved keys/i);
   });
 
   it("requires a separate low-privilege connection for serverless runtime traffic", () => {
@@ -31,6 +35,81 @@ describe("security boundaries", () => {
         migrationConnectionUrl: "postgres://postgres:password@pooler.example:6543/postgres"
       })
     ).toThrow();
+    expect(() =>
+      assertServerlessPoolerConnection(
+        "postgres://app_runtime:password@pooler.example:6543/postgres"
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertServerlessPoolerConnection("postgres://app_runtime:password@db.example:5432/postgres")
+    ).toThrow(/serverless pooler/);
+  });
+
+  it("rejects an environment identity that conflicts with Vercel deployment metadata", () => {
+    expect(() =>
+      serverIdentity({
+        NOX_ENV: "staging",
+        VERCEL_ENV: "production"
+      })
+    ).toThrow(/Conflicting Vercel deployment identity/);
+    expect(() =>
+      serverIdentity({
+        NOX_ENV: "production",
+        VERCEL_ENV: "preview"
+      })
+    ).toThrow(/Conflicting Vercel deployment identity/);
+    expect(() =>
+      serverIdentity({
+        NOX_ENV: "staging",
+        VERCEL_ENV: "preview"
+      })
+    ).toThrow(/Conflicting Vercel deployment identity/);
+    expect(() =>
+      serverIdentity({
+        NOX_ENV: "staging",
+        VERCEL_ENV: "preview",
+        VERCEL_TARGET_ENV: "preview"
+      })
+    ).toThrow(/Conflicting Vercel target deployment identity/);
+    expect(
+      serverIdentity({
+        NOX_ENV: "staging",
+        VERCEL_ENV: "preview",
+        VERCEL_TARGET_ENV: "staging"
+      })
+    ).toMatchObject({ environment: "staging" });
+    expect(
+      serverIdentity({
+        NOX_ENV: "staging",
+        VERCEL_ENV: "preview",
+        NOX_STAGING_BRANCH: "release/staging",
+        VERCEL_GIT_COMMIT_REF: "release/staging"
+      })
+    ).toMatchObject({ environment: "staging" });
+    expect(() =>
+      serverIdentity({
+        NOX_ENV: "staging",
+        VERCEL_ENV: "preview",
+        NOX_STAGING_BRANCH: "release/staging",
+        VERCEL_GIT_COMMIT_REF: "feature/untrusted"
+      })
+    ).toThrow(/Conflicting Vercel deployment identity/);
+  });
+
+  it("redacts nested secret-shaped observability details before they reach a log sink", () => {
+    expect(
+      redactDetails({
+        request: {
+          authorization: "Bearer server-secret",
+          nested: [{ cloudflare_api_token: "server-token" }]
+        }
+      })
+    ).toEqual({
+      request: {
+        authorization: "[REDACTED]",
+        nested: [{ cloudflare_api_token: "[REDACTED]" }]
+      }
+    });
   });
 
   it("validates Turnstile server-side against hostname and action", async () => {
@@ -80,6 +159,63 @@ describe("security boundaries", () => {
         allowedPurposes: ["diagnostic"]
       })
     ).rejects.toThrow(/Tenant scope is not authorized/);
+
+    await expect(
+      storage.createDownloadGrant(
+        {
+          ...reference,
+          storagePath: "tenant/tenant-b/secret"
+        },
+        {
+          actor: { id: "actor-a", type: "USER" },
+          tenant: { id: "tenant-a" },
+          allowedPurposes: ["diagnostic"]
+        }
+      )
+    ).rejects.toThrow(/Storage path does not match/);
+  });
+
+  it("requires a concrete tenant identity before deriving a tenant storage path", async () => {
+    const storage = new SupabasePrivateFileStore({
+      url: "https://example.supabase.co",
+      serviceRoleKey: "server-only",
+      bucket: "nox-private"
+    });
+
+    await expect(
+      storage.put(
+        {
+          scope: "TENANT",
+          checksum: "abc",
+          mimeType: "text/plain",
+          purpose: "diagnostic",
+          classification: "internal"
+        },
+        new Uint8Array([1]),
+        {
+          actor: { id: "actor-a", type: "USER" },
+          allowedPurposes: ["diagnostic"]
+        }
+      )
+    ).rejects.toThrow(/explicit tenant identity/);
+
+    await expect(
+      storage.put(
+        {
+          scope: "GLOBAL",
+          tenantId: "tenant-a",
+          checksum: "abc",
+          mimeType: "text/plain",
+          purpose: "diagnostic",
+          classification: "internal"
+        },
+        new Uint8Array([1]),
+        {
+          actor: { id: "actor-a", type: "USER" },
+          allowedPurposes: ["diagnostic"]
+        }
+      )
+    ).rejects.toThrow(/cannot contain a tenant identity/);
   });
 
   it("requires workflow authority to be revalidated before consequential work", async () => {

@@ -1,0 +1,69 @@
+name: preview-acceptance
+
+on:
+  # This workflow always uses the trusted base-branch definition. It must never check out,
+  # install, or execute pull-request source while its provider read token is available.
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nox-os-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify-provider-preview:
+    # Git-provider Preview acceptance is intentionally limited to same-repository branches.
+    # Forks still receive ordinary PR CI but no privileged-provider lookup.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    environment: preview
+    timeout-minutes: 30
+    env:
+      EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      EXPECTED_GIT_REF: ${{ github.event.pull_request.head.ref }}
+      EXPECTED_GIT_REPOSITORY: ${{ github.repository }}
+      NOX_EXPECTED_ENV: preview
+      NOX_ISOLATION_MODE: SECRETLESS_PREVIEW
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: preview
+        run: |
+          preview_output="$(pnpm verify:preview:deployment)"
+          printf '%s\n' "$preview_output"
+          preview_url="$(printf '%s\n' "$preview_output" | sed -n 's/^PREVIEW_DEPLOY_URL=//p' | tail -n 1)"
+          test -n "$preview_url"
+          echo "preview_url=$preview_url" >> "$GITHUB_OUTPUT"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      - run: pnpm verify:environment-isolation
+        env:
+          NOX_CURRENT_DATABASE_RESOURCE: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF }}
+          NOX_PRODUCTION_DATABASE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF }}
+          NOX_CURRENT_STORAGE_RESOURCE: ${{ vars.SUPABASE_PREVIEW_STORAGE_BUCKET }}
+          NOX_PRODUCTION_STORAGE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_STORAGE_BUCKET }}
+      - run: pnpm verify:staging
+        env:
+          NOX_STAGING_URL: ${{ steps.preview.outputs.preview_url }}
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm verify:staging:browser
+        env:
+          NOX_STAGING_URL: ${{ steps.preview.outputs.preview_url }}
+      # Ordinary PR Preview is secretless. Database, Storage, and API-to-workflow probes run
+      # only in trusted post-merge Staging after its deployment URL is provider-verified.
