@@ -74,18 +74,16 @@ describe("trusted Preview verification", () => {
         expect(url.searchParams.get("teamId")).toBe("team_1");
         return new Response(
           JSON.stringify({
-            projectId: "project_1",
-            meta: { githubCommitSha: "expected-sha" },
+            project: { id: "project_1" },
+            meta: {
+              githubCommitSha: "expected-sha",
+              githubCommitOrg: "MutAquaticStudio",
+              githubCommitRepo: "NOXOS",
+              githubCommitRef: "feature/g1-cloud-foundation"
+            },
             target: null,
             readyState: "READY",
-            url: "candidate.vercel.app",
-            gitSource: {
-              type: "github",
-              org: "MutAquaticStudio",
-              repo: "NOXOS",
-              ref: "feature/g1-cloud-foundation",
-              sha: "expected-sha"
-            }
+            url: "candidate.vercel.app"
           })
         );
       }
@@ -150,6 +148,24 @@ describe("trusted Preview verification", () => {
             ref: "feature/g1-cloud-foundation",
             sha: "expected-sha"
           }
+        },
+        expectedPreview,
+        "candidate.vercel.app"
+      )
+    ).toThrow(/does not match/);
+    expect(() =>
+      assertExpectedVercelDeployment(
+        {
+          project: { id: "project_1" },
+          meta: {
+            githubCommitSha: "expected-sha",
+            githubCommitOrg: "MutAquaticStudio",
+            githubCommitRepo: "NOXOS",
+            githubCommitRef: "attacker-branch"
+          },
+          target: null,
+          readyState: "READY",
+          url: "candidate.vercel.app"
         },
         expectedPreview,
         "candidate.vercel.app"

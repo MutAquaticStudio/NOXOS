@@ -54,12 +54,16 @@ ciSha
 ciReference
 previewSha
 previewReference
+previewAcceptanceRun
+previewAttestationArtifact
+dodAuditArtifact
 mergedMainSha
 expectedStagingSha
 deployedStagingSha
 stagingReference
 workflowProvider
 productionPromotionPerformed
+gate
 acceptance
 ```
 
@@ -94,6 +98,10 @@ cloudflareAccess
 browserAcceptance
 exactSha
 ```
+
+`gate` MUST record the final document version, Gate status, DoD status, G2 readiness, and each
+architecture severity count. The generated artifact may carry `FROZEN` only when its annotated
+acceptance tag is subsequently created and verified; that tag is the effective freeze act.
 
 ## Provider acceptance requirements
 

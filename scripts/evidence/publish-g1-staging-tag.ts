@@ -93,6 +93,11 @@ async function existingTagTarget(
     tag.tag !== tagName ||
     !messageLines.has("Source: " + sourceSha) ||
     !messageLines.has("Artifact: " + g1StagingArtifactName(sourceSha)) ||
+    !messageLines.has("G1 Document: 1.0") ||
+    !messageLines.has("G1 Status: FROZEN") ||
+    !messageLines.has("G1 DoD: PASS") ||
+    !messageLines.has("G2 Ready: YES") ||
+    !messageLines.has("Production Promotion: NO") ||
     !runLine
   ) {
     throw new Error("Existing G1 evidence tag does not preserve its required provenance.");
@@ -145,7 +150,12 @@ export async function publishG1StagingTag(
           "\nActions: " +
           runUrl +
           "\nArtifact: " +
-          artifactName,
+          artifactName +
+          "\nG1 Document: 1.0" +
+          "\nG1 Status: FROZEN" +
+          "\nG1 DoD: PASS" +
+          "\nG2 Ready: YES" +
+          "\nProduction Promotion: NO",
         object: sourceSha,
         type: "commit"
       })

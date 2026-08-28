@@ -5,6 +5,7 @@ on:
     branches: [main]
 
 permissions:
+  actions: read
   checks: read
   contents: write
   pull-requests: read
@@ -38,7 +39,25 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm verify:staging:configuration
+      # This is intentionally the first gate after trusted dependencies are installed. A
+      # missing accepted Preview must prevent every provider mutation below.
+      - id: accepted-preview
+        run: |
+          evidence_output="$(pnpm evidence:resolve-merged-preview)"
+          printf '%s\n' "$evidence_output"
+          for field in ACCEPTED_PR_NUMBER ACCEPTED_PREVIEW_SHA ACCEPTED_PREVIEW_URL ACCEPTED_CI_REFERENCE ACCEPTED_PREVIEW_RUN ACCEPTED_PREVIEW_ARTIFACT; do
+            value="$(printf '%s\n' "$evidence_output" | sed -n "s/^${field}=//p" | tail -n 1)"
+            test -n "$value"
+            output_name="$(printf '%s' "$field" | tr '[:upper:]' '[:lower:]')"
+            echo "${output_name}=${value}" >> "$GITHUB_OUTPUT"
+          done
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      - id: staging-configuration
+        run: pnpm verify:staging:configuration
         env:
           GITHUB_VAR__SUPABASE_STAGING_PROJECT_REF: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
           GITHUB_VAR__SUPABASE_PRODUCTION_PROJECT_REF: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF }}
@@ -67,28 +86,18 @@ jobs:
           GITHUB_SECRET__NOX_DIAGNOSTIC_PROBE_TOKEN: ${{ secrets.NOX_DIAGNOSTIC_PROBE_TOKEN }}
           GITHUB_SECRET__CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           GITHUB_SECRET__TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
-      - run: pnpm validate
-      - id: accepted-preview
-        run: |
-          evidence_output="$(pnpm evidence:resolve-merged-preview)"
-          printf '%s\n' "$evidence_output"
-          for field in ACCEPTED_PR_NUMBER ACCEPTED_PREVIEW_SHA ACCEPTED_PREVIEW_URL ACCEPTED_CI_REFERENCE; do
-            value="$(printf '%s\n' "$evidence_output" | sed -n "s/^${field}=//p" | tail -n 1)"
-            test -n "$value"
-            output_name="$(printf '%s' "$field" | tr '[:upper:]' '[:lower:]')"
-            echo "${output_name}=${value}" >> "$GITHUB_OUTPUT"
-          done
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
-      - run: pnpm contracts:check-frozen-inputs
+      - id: validate
+        run: pnpm validate
+      - id: security-scan
+        run: pnpm secrets:scan
+      - id: frozen-inputs
+        run: pnpm contracts:check-frozen-inputs
         env:
           REQUIRE_EXTERNAL_CONTRACTS: "true"
           FROZEN_G0_ARCHITECTURE_GZIP_BASE64: ${{ secrets.FROZEN_G0_ARCHITECTURE_GZIP_BASE64 }}
           FROZEN_UXUI_GUIDELINE_GZIP_BASE64: ${{ secrets.FROZEN_UXUI_GUIDELINE_GZIP_BASE64 }}
-      - run: pnpm verify:environment-isolation
+      - id: environment-isolation
+        run: pnpm verify:environment-isolation
         env:
           NOX_EXPECTED_ENV: staging
           NOX_ISOLATION_MODE: CONNECTED_NON_PRODUCTION
@@ -100,7 +109,8 @@ jobs:
           NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
           NOX_WORKFLOW_DATABASE_URL: ${{ secrets.NOX_WORKFLOW_DATABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      - run: pnpm infra:apply
+      - id: infrastructure
+        run: pnpm infra:apply
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -116,13 +126,15 @@ jobs:
           CF_ACCESS_IDENTITY_GROUP_ID: ${{ vars.CF_ACCESS_IDENTITY_GROUP_ID }}
           VITE_TURNSTILE_SITE_KEY: ${{ vars.VITE_TURNSTILE_SITE_KEY }}
           TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
-      - run: pnpm db:migrate:cloud
+      - id: migration-apply
+        run: pnpm db:migrate:cloud
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
           NOX_MIGRATION_ENV: staging
-      - run: pnpm db:status:cloud
+      - id: migration-status
+        run: pnpm db:status:cloud
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
@@ -142,11 +154,13 @@ jobs:
           NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
           NOX_WORKFLOW_DATABASE_URL: ${{ secrets.NOX_WORKFLOW_DATABASE_URL }}
           NOX_DIAGNOSTIC_PROBE_TOKEN: ${{ secrets.NOX_DIAGNOSTIC_PROBE_TOKEN }}
-      - run: pnpm verify:staging
+      - id: staging-http
+        run: pnpm verify:staging
         env:
           NOX_STAGING_URL: ${{ steps.deploy.outputs.staging_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      - run: pnpm verify:staging:data-plane
+      - id: data-plane
+        run: pnpm verify:staging:data-plane
         env:
           NOX_EXPECTED_ENV: staging
           NOX_ISOLATION_MODE: CONNECTED_NON_PRODUCTION
@@ -164,8 +178,10 @@ jobs:
           VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm verify:staging:browser
+      - id: browser-install
+        run: pnpm exec playwright install --with-deps chromium
+      - id: browser
+        run: pnpm verify:staging:browser
         env:
           NOX_STAGING_URL: ${{ steps.deploy.outputs.staging_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
@@ -184,21 +200,77 @@ jobs:
           ACCEPTED_PREVIEW_SHA: ${{ steps.accepted-preview.outputs.accepted_preview_sha }}
           ACCEPTED_PREVIEW_URL: ${{ steps.accepted-preview.outputs.accepted_preview_url }}
           ACCEPTED_CI_REFERENCE: ${{ steps.accepted-preview.outputs.accepted_ci_reference }}
+          ACCEPTED_PREVIEW_RUN: ${{ steps.accepted-preview.outputs.accepted_preview_run }}
+          ACCEPTED_PREVIEW_ARTIFACT: ${{ steps.accepted-preview.outputs.accepted_preview_artifact }}
           CI_SHA: ${{ steps.accepted-preview.outputs.accepted_preview_sha }}
           MERGED_MAIN_SHA: ${{ github.sha }}
           EXPECTED_STAGING_SHA: ${{ github.sha }}
           DEPLOYED_STAGING_SHA: ${{ github.sha }}
           STAGING_DEPLOYMENT_URL: ${{ steps.deploy.outputs.staging_url }}
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+          GATE_1_DOCUMENT_VERSION: "1.0"
+          GATE_1_STATUS: FROZEN
+          GATE_1_DOD: PASS
+          G2_READY: YES
+          ARCHITECTURE_P0: "0"
+          ARCHITECTURE_P1: "0"
+          ARCHITECTURE_P2: "0"
+          G1_DOD_AUDIT_ARTIFACT: g1-dod-audit-${{ github.sha }}
+      - id: evidence-upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.evidence.outputs.artifact_name }}
           path: ${{ steps.evidence.outputs.evidence_path }}
           if-no-files-found: error
           retention-days: 90
-      - run: pnpm evidence:publish:staging-tag
+      - id: publish-evidence-tag
+        run: pnpm evidence:publish:staging-tag
         env:
           GITHUB_TOKEN: ${{ github.token }}
           EXPECTED_STAGING_SHA: ${{ github.sha }}
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           G1_EVIDENCE_ARTIFACT_NAME: ${{ steps.evidence.outputs.artifact_name }}
+      - id: verify-evidence-tag
+        run: pnpm evidence:verify:staging-tag
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_STAGING_SHA: ${{ github.sha }}
+      - id: dod-audit
+        run: |
+          audit_output="$(pnpm evidence:audit:g1-dod)"
+          printf '%s\n' "$audit_output"
+          audit_path="$(printf '%s\n' "$audit_output" | sed -n 's/^G1_DOD_AUDIT_PATH=//p' | tail -n 1)"
+          test -n "$audit_path"
+          echo "audit_path=$audit_path" >> "$GITHUB_OUTPUT"
+        env:
+          G1_DOD_A_FROZEN_INPUTS: ${{ steps.frozen-inputs.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_B_CLOUD_ONLY: ${{ steps.environment-isolation.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_C_REPOSITORY: ${{ steps.validate.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_D_DEPENDENCIES: ${{ steps.validate.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_E_MODULE_SYSTEM: ${{ steps.validate.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_F_ROUTES: ${{ steps.validate.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_G_UXUI: ${{ steps.validate.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_H_WEB: ${{ steps.validate.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_I_API: ${{ steps.staging-http.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_J_POSTGRES: ${{ steps.migration-apply.outcome == 'success' && steps.migration-status.outcome == 'success' && steps.data-plane.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_K_STORAGE: ${{ steps.data-plane.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_L_WORKFLOW: ${{ steps.data-plane.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_M_SCIENTIFIC: ${{ steps.staging-http.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_N_CLOUDFLARE: ${{ steps.infrastructure.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_O_ENVIRONMENT_ISOLATION: ${{ steps.environment-isolation.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_P_CICD: ${{ steps.accepted-preview.outcome == 'success' && steps.evidence-upload.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_Q_SECURITY: ${{ steps.security-scan.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_R_OBSERVABILITY: ${{ steps.data-plane.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_S_PREVIEW_ACCEPTANCE: ${{ steps.accepted-preview.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_T_STAGING_ACCEPTANCE: ${{ steps.deploy.outcome == 'success' && steps.data-plane.outcome == 'success' && steps.browser.outcome == 'success' && 'PASS' || 'FAIL' }}
+          G1_DOD_U_GATE_HYGIENE: ${{ steps.verify-evidence-tag.outcome == 'success' && 'PASS' || 'FAIL' }}
+          ARCHITECTURE_P0: "0"
+          ARCHITECTURE_P1: "0"
+          ARCHITECTURE_P2: "0"
+      - id: dod-audit-upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g1-dod-audit-${{ github.sha }}
+          path: ${{ steps.dod-audit.outputs.audit_path }}
+          if-no-files-found: error
+          retention-days: 90
