@@ -42,3 +42,11 @@ that environment from the configured application root (`apps/nox-os`).
 The reconciliation reads first, creates only when absent, reads back after creation, and stops
 on duplicate `staging` environments. Production deployment remains an explicit, separate
 pipeline concern and is not exercised by Gate 1.
+
+## Amendment B-003: Vercel CLI identity
+
+The protected CI environment supplies `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` as the
+project identity contract. The deployer passes the Vercel token explicitly and runs from
+`apps/nox-os`, but does not map the internal Vercel team ID to the CLI `--scope` flag; that
+flag expects a team slug and would fail closed with a provider user lookup error. This preserves
+the existing cloud identity boundary without adding a second, manually maintained team name.
