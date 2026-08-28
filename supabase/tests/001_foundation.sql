@@ -1,6 +1,6 @@
 begin;
 
-select plan(15);
+select plan(18);
 
 select ok(
   exists (select 1 from pg_catalog.pg_roles where rolname = 'nox_app_runtime'),
@@ -74,6 +74,22 @@ select is(
    where polrelid = 'nox_foundation.workflow_probe_runs'::regclass),
   4,
   'row-security policies exist only for the two limited runtime roles'
+);
+
+select ok(
+  to_regprocedure('public.rls_auto_enable()') is null
+    or not has_function_privilege('public', to_regprocedure('public.rls_auto_enable()'), 'execute'),
+  'provider RLS event-trigger function is not executable by PUBLIC'
+);
+select ok(
+  to_regprocedure('public.rls_auto_enable()') is null
+    or not has_function_privilege('anon', to_regprocedure('public.rls_auto_enable()'), 'execute'),
+  'provider RLS event-trigger function is not executable by anonymous callers'
+);
+select ok(
+  to_regprocedure('public.rls_auto_enable()') is null
+    or not has_function_privilege('authenticated', to_regprocedure('public.rls_auto_enable()'), 'execute'),
+  'provider RLS event-trigger function is not executable by authenticated callers'
 );
 
 select * from finish();
