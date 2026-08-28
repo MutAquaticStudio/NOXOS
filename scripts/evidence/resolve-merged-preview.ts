@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { resolveVercelPreview } from "../verify/resolve-vercel-preview";
+import { previewAttestationArtifactName } from "./generate-preview-attestation";
 
 type AssociatedPullRequest = {
   number?: number;
@@ -10,6 +11,22 @@ type AssociatedPullRequest = {
 };
 
 type CheckRun = { name?: string; conclusion?: string | null };
+
+type WorkflowRun = {
+  id?: number;
+  name?: string;
+  event?: string;
+  conclusion?: string | null;
+  head_branch?: string;
+  head_sha?: string;
+  head_repository?: { full_name?: string };
+};
+
+type WorkflowArtifact = {
+  name?: string;
+  expired?: boolean;
+  workflow_run?: { id?: number; head_branch?: string; head_sha?: string };
+};
 
 function required(raw: Record<string, string | undefined>, name: string): string {
   const value = raw[name];
@@ -37,6 +54,64 @@ async function github<T>(
   return (await response.json()) as T;
 }
 
+async function resolvePreviewAttestation(
+  repository: string,
+  pullRequest: AssociatedPullRequest,
+  previewSha: string,
+  raw: Record<string, string | undefined>,
+  request: typeof fetch
+): Promise<{ runId: number; artifactName: string }> {
+  const gitRef = pullRequest.head!.ref!;
+  const workflowRuns = await github<{ workflow_runs?: WorkflowRun[] }>(
+    "/repos/" +
+      repository +
+      "/actions/runs?event=pull_request_target&head_sha=" +
+      encodeURIComponent(previewSha) +
+      "&per_page=100",
+    raw,
+    request
+  );
+  const acceptedRuns = workflowRuns.workflow_runs?.filter(
+    (run) =>
+      run.id &&
+      run.name === "preview-acceptance" &&
+      run.event === "pull_request_target" &&
+      run.conclusion === "success" &&
+      run.head_sha === previewSha &&
+      run.head_branch === gitRef &&
+      run.head_repository?.full_name === repository
+  );
+  if (acceptedRuns?.length !== 1) {
+    throw new Error("Accepted Preview source is missing one successful trusted Preview run.");
+  }
+
+  const run = acceptedRuns[0];
+  const artifactName = previewAttestationArtifactName(previewSha);
+  const artifacts = await github<{ artifacts?: WorkflowArtifact[] }>(
+    "/repos/" +
+      repository +
+      "/actions/artifacts?name=" +
+      encodeURIComponent(artifactName) +
+      "&per_page=100",
+    raw,
+    request
+  );
+  const acceptedArtifacts = artifacts.artifacts?.filter((artifact) => {
+    const workflowRun = artifact.workflow_run;
+    return (
+      artifact.name === artifactName &&
+      artifact.expired === false &&
+      workflowRun?.id === run.id &&
+      workflowRun?.head_sha === previewSha &&
+      workflowRun?.head_branch === gitRef
+    );
+  });
+  if (acceptedArtifacts?.length !== 1) {
+    throw new Error("Accepted Preview source is missing one valid SHA-bound attestation artifact.");
+  }
+  return { runId: run.id!, artifactName };
+}
+
 export async function resolveMergedPreview(
   raw: Record<string, string | undefined> = process.env,
   request: typeof fetch = fetch
@@ -45,6 +120,8 @@ export async function resolveMergedPreview(
   previewSha: string;
   previewUrl: string;
   ciReference: string;
+  previewAcceptanceRun: string;
+  previewAttestationArtifact: string;
 }> {
   const repository = required(raw, "GITHUB_REPOSITORY");
   const mergedMainSha = required(raw, "EXPECTED_SOURCE_SHA");
@@ -87,10 +164,23 @@ export async function resolveMergedPreview(
       ?.filter((check) => check.conclusion === "success" && check.name)
       .map((check) => check.name!) ?? []
   );
-  const requiredChecks = ["foundation", "browser-foundation", "cloud-migration-replay"];
+  const requiredChecks = [
+    "foundation",
+    "browser-foundation",
+    "cloud-migration-replay",
+    "verify-provider-preview"
+  ];
   if (requiredChecks.some((name) => !successful.has(name))) {
     throw new Error("Accepted Preview source is missing required successful checks.");
   }
+
+  const attestation = await resolvePreviewAttestation(
+    repository,
+    pullRequest,
+    previewSha,
+    raw,
+    request
+  );
 
   const previewUrl = await resolveVercelPreview(
     {
@@ -105,7 +195,9 @@ export async function resolveMergedPreview(
     pullRequest: pullRequest.number!,
     previewSha,
     previewUrl,
-    ciReference: "https://github.com/" + repository + "/commit/" + previewSha + "/checks"
+    ciReference: "https://github.com/" + repository + "/commit/" + previewSha + "/checks",
+    previewAcceptanceRun: "https://github.com/" + repository + "/actions/runs/" + attestation.runId,
+    previewAttestationArtifact: attestation.artifactName
   };
 }
 
@@ -115,4 +207,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log("ACCEPTED_PREVIEW_SHA=" + evidence.previewSha);
   console.log("ACCEPTED_PREVIEW_URL=" + evidence.previewUrl);
   console.log("ACCEPTED_CI_REFERENCE=" + evidence.ciReference);
+  console.log("ACCEPTED_PREVIEW_RUN=" + evidence.previewAcceptanceRun);
+  console.log("ACCEPTED_PREVIEW_ARTIFACT=" + evidence.previewAttestationArtifact);
 }

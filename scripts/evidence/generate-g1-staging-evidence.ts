@@ -20,6 +20,18 @@ function sha(raw: Record<string, string | undefined>, name: string): string {
   return value.toLowerCase();
 }
 
+function requiredExact(
+  raw: Record<string, string | undefined>,
+  name: string,
+  expected: string
+): string {
+  const value = required(raw, name);
+  if (value !== expected) {
+    throw new Error(name + " must equal " + expected + " for G1 freeze evidence.");
+  }
+  return value;
+}
+
 export type G1StagingEvidence = ReturnType<typeof createG1StagingEvidence>;
 
 export function createG1StagingEvidence(raw: Record<string, string | undefined>) {
@@ -45,6 +57,10 @@ export function createG1StagingEvidence(raw: Record<string, string | undefined>)
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error("GITHUB_REPOSITORY must be an owner/repository pair.");
   }
+  const dodAuditArtifact = required(raw, "G1_DOD_AUDIT_ARTIFACT");
+  if (dodAuditArtifact !== "g1-dod-audit-" + mergedMainSha) {
+    throw new Error("G1_DOD_AUDIT_ARTIFACT must bind to the accepted main SHA.");
+  }
 
   return {
     schemaVersion: "1.0",
@@ -58,12 +74,24 @@ export function createG1StagingEvidence(raw: Record<string, string | undefined>)
     ciReference: required(raw, "ACCEPTED_CI_REFERENCE"),
     previewSha,
     previewReference: required(raw, "ACCEPTED_PREVIEW_URL"),
+    previewAcceptanceRun: required(raw, "ACCEPTED_PREVIEW_RUN"),
+    previewAttestationArtifact: required(raw, "ACCEPTED_PREVIEW_ARTIFACT"),
+    dodAuditArtifact,
     mergedMainSha,
     expectedStagingSha,
     deployedStagingSha,
     stagingReference: required(raw, "STAGING_DEPLOYMENT_URL"),
     workflowProvider: "@vercel/queue@0.5.1",
     productionPromotionPerformed: "NO",
+    gate: {
+      documentVersion: requiredExact(raw, "GATE_1_DOCUMENT_VERSION", "1.0"),
+      status: requiredExact(raw, "GATE_1_STATUS", "FROZEN"),
+      definitionOfDone: requiredExact(raw, "GATE_1_DOD", "PASS"),
+      g2Ready: requiredExact(raw, "G2_READY", "YES"),
+      architectureP0: requiredExact(raw, "ARCHITECTURE_P0", "0"),
+      architectureP1: requiredExact(raw, "ARCHITECTURE_P1", "0"),
+      architectureP2: requiredExact(raw, "ARCHITECTURE_P2", "0")
+    },
     githubActionsRun: required(raw, "GITHUB_RUN_URL"),
     acceptance: {
       protectedConfiguration: "PASS",
