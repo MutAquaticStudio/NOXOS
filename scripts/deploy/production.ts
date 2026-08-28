@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { verifyVercelDeployment } from "../verify/vercel-deployment";
 
 function required(name: string): string {
@@ -7,6 +9,31 @@ function required(name: string): string {
     throw new Error(name + " must be supplied through the cloud secret store.");
   }
   return value;
+}
+
+function prepareVercelProjectLink(): void {
+  const linkDirectory = ".vercel";
+  const linkPath = join(linkDirectory, "project.json");
+  const expectedLink = {
+    orgId: required("VERCEL_ORG_ID"),
+    projectId: required("VERCEL_PROJECT_ID")
+  };
+
+  mkdirSync(linkDirectory, { recursive: true });
+  if (existsSync(linkPath)) {
+    const existingLink = JSON.parse(readFileSync(linkPath, "utf8")) as Partial<typeof expectedLink>;
+    if (
+      existingLink.orgId !== expectedLink.orgId ||
+      existingLink.projectId !== expectedLink.projectId
+    ) {
+      throw new Error(
+        "Existing Vercel project link does not match the protected CI project identity."
+      );
+    }
+    return;
+  }
+
+  writeFileSync(linkPath, JSON.stringify(expectedLink) + "\n", { encoding: "utf8", mode: 0o600 });
 }
 
 function runVercel(args: string[]): void {
@@ -62,6 +89,7 @@ const identityEnvironment = {
   VITE_NOX_SOURCE_SHA: expectedSourceSha
 };
 
+prepareVercelProjectLink();
 runVercel(["pull", "--yes", "--environment=production"]);
 runVercel(["build", "--yes", "--target=production"]);
 const submittedUrl = deployVercel([

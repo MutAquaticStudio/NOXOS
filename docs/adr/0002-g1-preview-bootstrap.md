@@ -74,3 +74,11 @@ The target remains the reconciled `staging` environment; no Production command i
 The Vercel project already declares `apps/nox-os` as its root directory. CI invokes the CLI from
 the repository root with explicit project selection and does not add a second `--cwd apps/nox-os`.
 This avoids a doubled application path during Vercel's target-aware build.
+
+## Amendment B-007: Ephemeral repository-root Vercel project link
+
+The Staging build creates an ignored `.vercel/project.json` only when absent. Its `orgId` and
+`projectId` must match protected CI identity; an existing conflicting link fails closed. This lets
+the Vercel CLI resolve the configured monorepo root from the repository root without relying on
+an ambient developer link, while leaving GitHub's protected Staging environment as the runtime
+configuration authority. No secret is written to this link and no Production command is executed.
