@@ -173,6 +173,48 @@ describe("trusted Preview verification", () => {
     ).toThrow(/does not match/);
   });
 
+  it("accepts the current Vercel list response project.id shape", () => {
+    expect(
+      readyPreviewDeployment(
+        {
+          deployments: [
+            {
+              project: { id: "project_1" },
+              meta: { githubCommitSha: "expected-sha" },
+              target: null,
+              readyState: "READY",
+              url: "candidate.vercel.app"
+            }
+          ]
+        },
+        "expected-sha",
+        "project_1"
+      )
+    ).toMatchObject({ url: "candidate.vercel.app" });
+  });
+
+  it("accepts complete GitHub metadata when Vercel also supplies partial gitSource", () => {
+    expect(() =>
+      assertExpectedVercelDeployment(
+        {
+          project: { id: "project_1" },
+          meta: {
+            githubCommitSha: "expected-sha",
+            githubCommitOrg: "MutAquaticStudio",
+            githubCommitRepo: "NOXOS",
+            githubCommitRef: "feature/g1-cloud-foundation"
+          },
+          target: null,
+          readyState: "READY",
+          url: "candidate.vercel.app",
+          gitSource: { type: "github" }
+        },
+        expectedPreview,
+        "candidate.vercel.app"
+      )
+    ).not.toThrow();
+  });
+
   it("keeps ordinary pull-request Preview secretless and executes only trusted base verifier code", () => {
     const workflow = readFileSync(".github/workflows/preview.yml", "utf8");
 

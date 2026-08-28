@@ -81,22 +81,22 @@ function gitSourceMatches(
   }
 
   const actual = deployment.gitSource;
-  if (actual) {
-    return (
-      actual.type === "github" &&
-      actual.org === expected.organization &&
-      actual.repo === expected.repository &&
-      actual.ref === expected.ref &&
-      actual.sha === sourceSha
-    );
-  }
-
-  return (
+  const gitSourceMatches =
+    actual?.type === "github" &&
+    actual.org === expected.organization &&
+    actual.repo === expected.repository &&
+    actual.ref === expected.ref &&
+    actual.sha === sourceSha;
+  const metadataMatches =
     deployment.meta?.githubCommitOrg === expected.organization &&
     deployment.meta?.githubCommitRepo === expected.repository &&
     deployment.meta?.githubCommitRef === expected.ref &&
-    deployment.meta?.githubCommitSha === sourceSha
-  );
+    deployment.meta?.githubCommitSha === sourceSha;
+
+  // Vercel may include a partial gitSource object alongside complete GitHub
+  // metadata. A partial source object is not an authority that can erase an
+  // independently complete, exact provider provenance record.
+  return gitSourceMatches || metadataMatches;
 }
 
 export function assertExpectedVercelDeployment(
