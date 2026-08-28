@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 function readBuildOutput(directory: string): string {
   return readdirSync(directory, { recursive: true, withFileTypes: true })
@@ -33,6 +33,16 @@ function buildWithEnvironment(environment: Record<string, string>) {
 }
 
 describe("Vite public-environment boundary", () => {
+  beforeAll(() => {
+    const result = spawnSync("pnpm", ["--workspace-root", "build:packages"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, CI: "true" }
+    });
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+  });
+
   it("allows only approved application public configuration", () => {
     const { result } = buildWithEnvironment({
       VITE_NOX_ENV: "preview",
