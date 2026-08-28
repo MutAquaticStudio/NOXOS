@@ -1,5 +1,6 @@
 import { lazy, Suspense, useMemo, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 import { publicEnvironment } from "@nox-os/config";
 import { projectAppRail, validateModuleDefinitions } from "@nox-os/module-registry";
 import { NoxShell, type NoxDensity, type NoxTheme } from "@nox-os/ui";
@@ -98,6 +99,7 @@ export function App() {
   return (
     <BrowserRouter>
       <NoxApplication />
+      <SpeedInsights />
     </BrowserRouter>
   );
 }
