@@ -12,7 +12,7 @@ const artifactFiles = existsSync("apps/nox-os/dist")
   ? fg.sync(["apps/nox-os/dist/**"], { onlyFiles: true })
   : [];
 const forbiddenBundleValues =
-  /(SUPABASE_SERVICE_ROLE_KEY|NOX_RUNTIME_DATABASE_URL|TURNSTILE_SECRET_KEY)/;
+  /(SUPABASE_(SERVICE_ROLE_KEY|DB_PASSWORD|ACCESS_TOKEN)|NOX_(RUNTIME|WORKFLOW|MIGRATION)_DATABASE_URL|TURNSTILE_SECRET_KEY|CF_API_TOKEN|VERCEL_TOKEN|NOX_(WORKFLOW_PROBE|DIAGNOSTIC_PROBE)_TOKEN)/;
 
 for (const file of artifactFiles) {
   if (forbiddenBundleValues.test(readFileSync(file, "utf8"))) {

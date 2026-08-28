@@ -1,7 +1,20 @@
 import { lazy, Suspense, useMemo, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import {
+  BrowserRouter,
+  matchPath,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate
+} from "react-router-dom";
+import type { ModuleDefinition, ModuleUxDensity } from "@nox-os/contracts";
 import { publicEnvironment } from "@nox-os/config";
-import { projectAppRail, validateModuleDefinitions } from "@nox-os/module-registry";
+import {
+  projectAppRail,
+  resolveModuleAvailability,
+  validateModuleDefinitions
+} from "@nox-os/module-registry";
 import { NoxShell, type NoxDensity, type NoxTheme } from "@nox-os/ui";
 import { moduleDefinitions } from "./modules/definitions";
 
@@ -10,15 +23,13 @@ const LazyFoundationModule = lazy(async () => {
   return { default: module.FoundationModuleSurface };
 });
 
-const publicIdentity = publicEnvironment(import.meta.env);
+const publicIdentity = publicEnvironment({
+  VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
+  VITE_NOX_SOURCE_SHA: import.meta.env.VITE_NOX_SOURCE_SHA,
+  VITE_TURNSTILE_SITE_KEY: import.meta.env.VITE_TURNSTILE_SITE_KEY
+});
 
-function FoundationRoute({ moduleId }: { moduleId: string }) {
-  const definition = moduleDefinitions.find((candidate) => candidate.descriptor.id === moduleId);
-
-  if (!definition) {
-    return <Navigate to="/dashboard" replace />;
-  }
-
+function FoundationRoute({ definition }: { definition: ModuleDefinition }) {
   return (
     <Suspense fallback={<p>Loading module foundation…</p>}>
       <LazyFoundationModule descriptor={definition.descriptor} />
@@ -26,15 +37,24 @@ function FoundationRoute({ moduleId }: { moduleId: string }) {
   );
 }
 
+function toShellDensity(density: ModuleUxDensity): NoxDensity {
+  switch (density) {
+    case "compact":
+      return "COMPACT";
+    case "comfortable":
+      return "COMFORTABLE";
+    default:
+      return "DEFAULT";
+  }
+}
+
 function NoxApplication() {
   const location = useLocation();
   const navigate = useNavigate();
   const [theme] = useState<NoxTheme>("SYSTEM");
-  const [density] = useState<NoxDensity>("DEFAULT");
 
-  const appRail = useMemo(() => {
-    validateModuleDefinitions(moduleDefinitions);
-    return projectAppRail(moduleDefinitions, {
+  const availabilityInputs = useMemo(
+    () => ({
       featureFlags: new Set(
         moduleDefinitions
           .map((definition) => definition.descriptor.featureFlag)
@@ -48,16 +68,34 @@ function NoxApplication() {
       permissions: new Set(
         moduleDefinitions.flatMap((definition) => definition.descriptor.permissions)
       )
-    });
-  }, []);
+    }),
+    []
+  );
 
-  const routeEntries = moduleDefinitions.flatMap((definition) => [
-    { path: definition.descriptor.routeRoot, moduleId: definition.descriptor.id },
-    ...definition.descriptor.childRoutes.map((path) => ({
-      path,
-      moduleId: definition.descriptor.id
-    }))
-  ]);
+  const appRail = useMemo(() => {
+    validateModuleDefinitions(moduleDefinitions);
+    return projectAppRail(moduleDefinitions, availabilityInputs);
+  }, [availabilityInputs]);
+
+  const enabledDefinitions = useMemo(
+    () =>
+      moduleDefinitions.filter(
+        (definition) => resolveModuleAvailability(definition.descriptor, availabilityInputs).enabled
+      ),
+    [availabilityInputs]
+  );
+  const routeEntries = useMemo(
+    () =>
+      enabledDefinitions.flatMap((definition) => [
+        { path: definition.descriptor.routeRoot, definition },
+        ...definition.descriptor.childRoutes.map((path) => ({ path, definition }))
+      ]),
+    [enabledDefinitions]
+  );
+  const activeDefinition = routeEntries.find((route) =>
+    matchPath({ path: route.path, end: true }, location.pathname)
+  )?.definition;
+  const density = activeDefinition ? toShellDensity(activeDefinition.uxProfile.density) : "DEFAULT";
 
   return (
     <NoxShell
@@ -70,9 +108,9 @@ function NoxApplication() {
       <Routes>
         {routeEntries.map((route) => (
           <Route
-            key={route.moduleId + route.path}
+            key={route.definition.descriptor.id + route.path}
             path={route.path}
-            element={<FoundationRoute moduleId={route.moduleId} />}
+            element={<FoundationRoute definition={route.definition} />}
           />
         ))}
         <Route path="/" element={<Navigate to="/dashboard" replace />} />

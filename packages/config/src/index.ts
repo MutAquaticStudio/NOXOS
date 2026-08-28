@@ -9,10 +9,27 @@ const publicEnvironmentSchema = z.object({
   VITE_TURNSTILE_SITE_KEY: z.string().min(1).optional()
 });
 
+const allowedPublicEnvironmentKeys = new Set([
+  "VITE_NOX_ENV",
+  "VITE_NOX_SOURCE_SHA",
+  "VITE_TURNSTILE_SITE_KEY"
+]);
+
+export const APPLICATION_PUBLIC_ENVIRONMENT_PREFIXES = ["VITE_NOX_", "VITE_TURNSTILE_"] as const;
+
+const providerPublicSystemMetadataPrefixes = ["VITE_VERCEL_"] as const;
+
+export type ViteEnvironmentKeyClass =
+  "APPLICATION_PUBLIC_CONFIG" | "PROVIDER_PUBLIC_SYSTEM_METADATA" | "SERVER_ONLY_OR_UNAPPROVED";
+
 const serverIdentitySchema = z.object({
   NOX_ENV: environmentSchema.optional(),
+  NOX_SOURCE_SHA: z.string().min(1).max(128).optional(),
   VERCEL_ENV: z.enum(["preview", "production", "development"]).optional(),
-  VERCEL_GIT_COMMIT_SHA: z.string().min(1).max(128).optional()
+  VERCEL_TARGET_ENV: z.string().min(1).max(128).optional(),
+  VERCEL_GIT_COMMIT_SHA: z.string().min(1).max(128).optional(),
+  VERCEL_GIT_COMMIT_REF: z.string().min(1).max(256).optional(),
+  NOX_STAGING_BRANCH: z.string().min(1).max(256).optional()
 });
 
 export type PublicEnvironment = {
@@ -26,6 +43,46 @@ export type ServerIdentity = {
   sourceSha: string;
 };
 
+function providerBuildEnvironment(raw: Record<string, string | undefined>): NoxEnvironment {
+  if (raw.VERCEL_TARGET_ENV === "staging") {
+    return "staging";
+  }
+  if (raw.VERCEL_ENV === "production") {
+    return "production";
+  }
+  if (raw.VERCEL_ENV === "preview") {
+    return "preview";
+  }
+  return "development";
+}
+
+function providerBuildSourceSha(raw: Record<string, string | undefined>): string {
+  const value = raw.VERCEL_GIT_COMMIT_SHA;
+  if (!value) {
+    return "local";
+  }
+  if (!/^[a-f0-9]{40}$/i.test(value)) {
+    throw new Error("Vercel build source identity must be a full Git commit SHA.");
+  }
+  return value;
+}
+
+/**
+ * Produces the three explicitly approved client values at build time. Vercel's
+ * system metadata is read only as a source and is never exposed as a second
+ * public namespace.
+ */
+export function publicBuildEnvironment(raw: Record<string, string | undefined>): PublicEnvironment {
+  assertNoPublicSecrets(raw);
+  const parsed = publicEnvironmentSchema.parse(raw);
+
+  return {
+    environment: parsed.VITE_NOX_ENV ?? providerBuildEnvironment(raw),
+    sourceSha: parsed.VITE_NOX_SOURCE_SHA ?? providerBuildSourceSha(raw),
+    turnstileSiteKey: parsed.VITE_TURNSTILE_SITE_KEY
+  };
+}
+
 export function publicEnvironment(raw: Record<string, string | undefined>): PublicEnvironment {
   const parsed = publicEnvironmentSchema.parse(raw);
 
@@ -38,6 +95,28 @@ export function publicEnvironment(raw: Record<string, string | undefined>): Publ
 
 export function serverIdentity(raw: Record<string, string | undefined>): ServerIdentity {
   const parsed = serverIdentitySchema.parse(raw);
+
+  if (parsed.NOX_ENV && parsed.VERCEL_TARGET_ENV && parsed.NOX_ENV !== parsed.VERCEL_TARGET_ENV) {
+    throw new Error("Conflicting Vercel target deployment identity.");
+  }
+  if (parsed.NOX_ENV && parsed.VERCEL_ENV) {
+    const customStagingPreview =
+      parsed.VERCEL_ENV === "preview" &&
+      parsed.NOX_ENV === "staging" &&
+      parsed.VERCEL_TARGET_ENV === "staging";
+    const approvedStagingBranchPreview =
+      parsed.VERCEL_ENV === "preview" &&
+      parsed.NOX_ENV === "staging" &&
+      !parsed.VERCEL_TARGET_ENV &&
+      Boolean(parsed.NOX_STAGING_BRANCH) &&
+      parsed.VERCEL_GIT_COMMIT_REF === parsed.NOX_STAGING_BRANCH;
+    const identitiesMatch =
+      parsed.NOX_ENV === parsed.VERCEL_ENV || customStagingPreview || approvedStagingBranchPreview;
+    if (!identitiesMatch) {
+      throw new Error("Conflicting Vercel deployment identity.");
+    }
+  }
+
   const environment =
     parsed.NOX_ENV ??
     (parsed.VERCEL_ENV === "production" ? "production" : undefined) ??
@@ -46,25 +125,31 @@ export function serverIdentity(raw: Record<string, string | undefined>): ServerI
 
   return {
     environment,
-    sourceSha: parsed.VERCEL_GIT_COMMIT_SHA ?? "local"
+    sourceSha: parsed.NOX_SOURCE_SHA ?? parsed.VERCEL_GIT_COMMIT_SHA ?? "local"
   };
 }
 
+export function classifyViteEnvironmentKey(key: string): ViteEnvironmentKeyClass {
+  if (allowedPublicEnvironmentKeys.has(key)) {
+    return "APPLICATION_PUBLIC_CONFIG";
+  }
+
+  if (providerPublicSystemMetadataPrefixes.some((prefix) => key.startsWith(prefix))) {
+    return "PROVIDER_PUBLIC_SYSTEM_METADATA";
+  }
+
+  return "SERVER_ONLY_OR_UNAPPROVED";
+}
+
 export function assertNoPublicSecrets(raw: Record<string, string | undefined>): void {
-  const forbidden = Object.keys(raw).filter((key) => {
-    const upper = key.toUpperCase();
-    return (
-      key.startsWith("VITE_") &&
-      (upper.includes("SECRET") ||
-        upper.includes("DATABASE") ||
-        upper.includes("SERVICE_ROLE") ||
-        upper.includes("PRIVATE_KEY"))
-    );
-  });
+  const forbidden = Object.keys(raw).filter(
+    (key) =>
+      key.startsWith("VITE_") && classifyViteEnvironmentKey(key) === "SERVER_ONLY_OR_UNAPPROVED"
+  );
 
   if (forbidden.length > 0) {
     throw new Error(
-      "Public Vite environment contains forbidden sensitive keys: " + forbidden.join(", ")
+      "Public Vite environment contains forbidden or unapproved keys: " + forbidden.join(", ")
     );
   }
 }

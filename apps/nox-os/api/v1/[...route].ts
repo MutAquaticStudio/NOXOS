@@ -1,33 +1,32 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { ApiRequest } from "@nox-os/contracts";
+import { createRuntimeDatabase, probeDatabase } from "@nox-os/database";
 import { createRequestContext, createFoundationApi } from "@nox-os/platform";
 import { UnavailableScientificAdapter } from "@nox-os/scientific";
-import { moduleDefinitions } from "../../apps/nox-os/src/modules/definitions";
+import { moduleDefinitions } from "../../src/modules/definitions.js";
+import { VercelQueueWorkflowLauncher } from "../../workflows/vercel-queue.js";
+import { normalizedHeaders, routePath } from "../_transport.js";
+
+const diagnosticProbeToken = process.env.NOX_DIAGNOSTIC_PROBE_TOKEN;
+const workflowLauncher = diagnosticProbeToken ? new VercelQueueWorkflowLauncher() : undefined;
+const runtimeDatabaseUrl = process.env.NOX_RUNTIME_DATABASE_URL;
+const runtimeDatabase = runtimeDatabaseUrl
+  ? createRuntimeDatabase({
+      connectionUrl: runtimeDatabaseUrl,
+      applicationName: "nox-os-api",
+      expectedRole: "nox_app_runtime"
+    })
+  : undefined;
 
 const foundationApi = createFoundationApi({
   modules: moduleDefinitions,
-  scientificGateway: new UnavailableScientificAdapter()
+  scientificGateway: new UnavailableScientificAdapter(),
+  databaseProbe: runtimeDatabase
+    ? () => probeDatabase(runtimeDatabase, "nox_app_runtime")
+    : undefined,
+  workflowLauncher,
+  diagnosticProbeToken
 });
-
-function routePath(request: VercelRequest): string {
-  const route = request.query.route;
-  if (Array.isArray(route)) {
-    return "/" + route.join("/");
-  }
-  if (typeof route === "string") {
-    return "/" + route;
-  }
-  return "/";
-}
-
-function normalizedHeaders(request: VercelRequest): Record<string, string | undefined> {
-  return Object.fromEntries(
-    Object.entries(request.headers).map(([key, value]) => [
-      key.toLowerCase(),
-      Array.isArray(value) ? value.join(",") : value
-    ])
-  );
-}
 
 export default async function handler(
   request: VercelRequest,

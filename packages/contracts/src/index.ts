@@ -34,15 +34,43 @@ export type IconToken =
   | "support"
   | "studio";
 
-export type ModuleUxProfile =
-  | "CONFIGURATION_DATA_GRID"
-  | "DATA_GRID_REGISTRY"
-  | "DATA_GRID_OPERATIONS"
-  | "OPERATIONS_DATA_GRID"
-  | "OPERATIONS_WORKFLOW"
-  | "STUDIO_ANALYTICS"
-  | "WORKFLOW_REGISTRY"
-  | "STUDIO";
+export type ModuleUxArchetype =
+  "data-grid" | "studio" | "workflow" | "operations" | "analytics" | "registry" | "configuration";
+
+export type ModuleUxDensity = "compact" | "default" | "comfortable";
+
+export type ModuleUxState =
+  | "default"
+  | "loading"
+  | "empty"
+  | "error"
+  | "partial-data"
+  | "permission-denied"
+  | "selection"
+  | "unsaved"
+  | "offline";
+
+export type ModuleUxProfile = {
+  id: string;
+  name: string;
+  archetype: ModuleUxArchetype;
+  secondaryArchetype?: ModuleUxArchetype;
+  density: ModuleUxDensity;
+  primaryObject?: string;
+  primaryTasks: readonly string[];
+  navigation: {
+    inspector: boolean;
+    aiSidecar: boolean;
+    workspaceTabs: boolean;
+    splitView: boolean;
+  };
+  supportedViews: readonly (
+    "table" | "list" | "board" | "timeline" | "canvas" | "chart" | "form"
+  )[];
+  mobilePriority: readonly string[];
+  reactBitsIntensity: "none" | "low" | "medium";
+  states: readonly ModuleUxState[];
+};
 
 export type ModuleDescriptor = {
   id: string;
@@ -56,7 +84,7 @@ export type ModuleDescriptor = {
   permissions: readonly string[];
   entitlement?: string;
   featureFlag?: string;
-  uxProfileId: ModuleUxProfile;
+  uxProfileId: string;
   mobilePriority: readonly string[];
   owner: string;
 };
@@ -96,6 +124,7 @@ export type ModuleApiManifest = {
 
 export type ModuleDefinition = {
   descriptor: ModuleDescriptor;
+  uxProfile: ModuleUxProfile;
   ui: ModuleUiManifest;
   api: ModuleApiManifest;
 };
@@ -135,6 +164,7 @@ export type ErrorCode =
   | "UNAUTHORIZED"
   | "FORBIDDEN"
   | "CONFIGURATION_ERROR"
+  | "REQUEST_TIMEOUT"
   | "INTERNAL_ERROR";
 
 export type ErrorEnvelope = {
@@ -158,6 +188,7 @@ export type WorkflowContext = {
 export type WorkflowHandle = {
   id: string;
   state: WorkflowState;
+  correlationId?: string;
 };
 
 export interface WorkflowLauncher {

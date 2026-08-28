@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   projectAppRail,
+  registerModuleApiRoutes,
   resolveModuleAvailability,
   validateModuleDefinitions
 } from "@nox-os/module-registry";
@@ -117,5 +118,58 @@ describe("canonical Module Registry", () => {
       }
     };
     expect(() => validateModuleDefinitions(governanceRoute)).toThrow(/forbidden governance route/);
+  });
+
+  it("rejects dependency cycles and attempts to claim an OS-owned route", () => {
+    const cycle = moduleDefinitions.map((definition) => ({
+      ...definition,
+      descriptor: { ...definition.descriptor }
+    }));
+    cycle[0] = {
+      ...cycle[0],
+      descriptor: { ...cycle[0].descriptor, dependencies: ["material-intelligence"] }
+    };
+    expect(() => validateModuleDefinitions(cycle)).toThrow(/dependency cycle/);
+
+    const osRouteCollision = moduleDefinitions.map((definition) => ({
+      ...definition,
+      descriptor: { ...definition.descriptor }
+    }));
+    osRouteCollision[1] = {
+      ...osRouteCollision[1],
+      descriptor: { ...osRouteCollision[1].descriptor, routeRoot: "/login" }
+    };
+    expect(() => validateModuleDefinitions(osRouteCollision)).toThrow(
+      /OS route reserved|route collision/
+    );
+  });
+
+  it("requires a complete UX profile whose identity and mobile priority match its descriptor", () => {
+    const mismatch = moduleDefinitions.map((definition) => ({
+      ...definition,
+      descriptor: { ...definition.descriptor },
+      uxProfile: { ...definition.uxProfile }
+    }));
+    mismatch[1] = {
+      ...mismatch[1],
+      uxProfile: { ...mismatch[1].uxProfile, id: "wrong-profile" }
+    };
+
+    expect(() => validateModuleDefinitions(mismatch)).toThrow(/UX profile mismatch/);
+  });
+
+  it("does not expose disabled module API manifests through the registry helper", () => {
+    const registeredPaths: string[] = [];
+    registerModuleApiRoutes(moduleDefinitions, {
+      get(path) {
+        registeredPaths.push(path);
+      },
+      register(_method, path) {
+        registeredPaths.push(path);
+      }
+    });
+
+    expect(registeredPaths).toContain("/materials/foundation");
+    expect(registeredPaths).not.toContain("/inventory/foundation");
   });
 });

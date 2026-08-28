@@ -33,6 +33,7 @@
     "apps/**/*.ts",
     "apps/**/*.tsx",
     "api/**/*.ts",
+    "scripts/**/*.ts",
     "packages/**/*.ts",
     "packages/**/*.tsx",
     "tests/**/*.ts",

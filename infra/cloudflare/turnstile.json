@@ -2,6 +2,10 @@
   "name": "nox-os",
   "domains": ["app.example.invalid"],
   "mode": "managed",
+  "credentialBootstrap": {
+    "autoCreateWidget": false,
+    "externalSecretStoreRequired": true
+  },
   "serverValidation": {
     "endpoint": "https://challenges.cloudflare.com/turnstile/v0/siteverify",
     "validateHostname": true,
