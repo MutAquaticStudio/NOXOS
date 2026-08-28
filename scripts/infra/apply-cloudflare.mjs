@@ -43,6 +43,47 @@ async function upsertDnsRecord(zoneId, record) {
   });
 }
 
+async function verifyDnsRecord(zoneId, expected) {
+  const records = await cloudflare(
+    "/zones/" + zoneId + "/dns_records?name=" + encodeURIComponent(expected.name),
+    { method: "GET" }
+  );
+  const matches = records.filter((record) => record.type === expected.type);
+  if (
+    matches.length !== 1 ||
+    matches[0].content !== expected.content ||
+    matches[0].proxied !== expected.proxied
+  ) {
+    throw new Error("Cloudflare DNS verification detected a missing or ambiguous record.");
+  }
+}
+
+async function ensureDnssec(zoneId) {
+  let state = await cloudflare("/zones/" + zoneId + "/dnssec", { method: "GET" });
+  if (state.status !== "active") {
+    state = await cloudflare("/zones/" + zoneId + "/dnssec", { method: "POST" });
+  }
+  if (state.status !== "active") {
+    throw new Error("Cloudflare DNSSEC did not reach active state.");
+  }
+}
+
+async function verifyTurnstileSecret(secret) {
+  const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      secret,
+      response: "nox-foundation-intentionally-invalid-token"
+    })
+  });
+  const result = await response.json();
+  const codes = Array.isArray(result["error-codes"]) ? result["error-codes"] : [];
+  if (!response.ok || result.success !== false || codes.includes("invalid-input-secret")) {
+    throw new Error("Cloudflare Turnstile server-secret verification failed.");
+  }
+}
+
 const dns = JSON.parse(readFileSync("infra/cloudflare/dns.json", "utf8"));
 const turnstile = JSON.parse(readFileSync("infra/cloudflare/turnstile.json", "utf8"));
 const access = JSON.parse(readFileSync("infra/cloudflare/access.json", "utf8"));
@@ -64,25 +105,52 @@ await upsertDnsRecord(zoneId, {
   ttl: 1,
   proxied: false
 });
+await verifyDnsRecord(zoneId, {
+  type: "CNAME",
+  name: publicHostname,
+  content: vercelTarget,
+  proxied: false
+});
+await ensureDnssec(zoneId);
 
 if (process.env.CF_CREATE_TURNSTILE_WIDGET === "true") {
   const accountId = required("CF_ACCOUNT_ID");
+  const configuredSiteKey = required("VITE_TURNSTILE_SITE_KEY");
   const widgets = await cloudflare("/accounts/" + accountId + "/challenges/widgets", {
     method: "GET"
   });
-  const configured = widgets.find(
-    (widget) => widget.name === turnstile.name && widget.domains?.includes(publicHostname)
-  );
-  if (!configured) {
-    await cloudflare("/accounts/" + accountId + "/challenges/widgets", {
-      method: "POST",
-      body: JSON.stringify({
-        name: turnstile.name,
-        domains: [publicHostname],
-        mode: turnstile.mode
-      })
-    });
+  const namedWidgets = widgets.filter((widget) => widget.name === turnstile.name);
+  if (namedWidgets.length > 1) {
+    throw new Error("Multiple Cloudflare Turnstile widgets claim the canonical name.");
   }
+  let configured = namedWidgets[0];
+  const widgetPayload = {
+    name: turnstile.name,
+    domains: [publicHostname],
+    mode: turnstile.mode
+  };
+  if (!configured) {
+    configured = await cloudflare("/accounts/" + accountId + "/challenges/widgets", {
+      method: "POST",
+      body: JSON.stringify(widgetPayload)
+    });
+  } else if (
+    configured.mode !== turnstile.mode ||
+    configured.domains?.length !== 1 ||
+    !configured.domains.includes(publicHostname)
+  ) {
+    configured = await cloudflare(
+      "/accounts/" + accountId + "/challenges/widgets/" + configured.sitekey,
+      { method: "PUT", body: JSON.stringify(widgetPayload) }
+    );
+  }
+  if (configured.sitekey !== configuredSiteKey) {
+    throw new Error("Configured public Turnstile site key does not match the reconciled widget.");
+  }
+  await verifyTurnstileSecret(required("TURNSTILE_SECRET_KEY"));
+  console.log("CLOUDFLARE_TURNSTILE=PASS");
+} else {
+  throw new Error("Cloudflare Turnstile reconciliation must be explicitly enabled.");
 }
 
 if (process.env.CF_PRIVILEGED_PROXY_APPROVED === "true") {
@@ -101,19 +169,29 @@ if (process.env.CF_PRIVILEGED_PROXY_APPROVED === "true") {
     ttl: 1,
     proxied: true
   });
+  await verifyDnsRecord(zoneId, {
+    type: "CNAME",
+    name: privilegedHostname,
+    content: privilegedTarget,
+    proxied: true
+  });
 
   const applications = await cloudflare("/accounts/" + accountId + "/access/apps", {
     method: "GET"
   });
+  const matchingApplications = applications.filter(
+    (application) => application.domain === privilegedHostname
+  );
+  if (matchingApplications.length > 1) {
+    throw new Error("Multiple Cloudflare Access applications claim the privileged hostname.");
+  }
   const applicationPayload = {
     name: "NØX-OS privileged foundation",
     domain: privilegedHostname,
     type: access.applicationType,
     session_duration: "24h"
   };
-  const existingApplication = applications.find(
-    (application) => application.domain === privilegedHostname
-  );
+  const existingApplication = matchingApplications[0];
   const application = existingApplication
     ? await cloudflare("/accounts/" + accountId + "/access/apps/" + existingApplication.id, {
         method: "PUT",
@@ -133,7 +211,11 @@ if (process.env.CF_PRIVILEGED_PROXY_APPROVED === "true") {
     "/accounts/" + accountId + "/access/apps/" + application.id + "/policies",
     { method: "GET" }
   );
-  const existingPolicy = policies.find((policy) => policy.name === access.policy.name);
+  const matchingPolicies = policies.filter((policy) => policy.name === access.policy.name);
+  if (matchingPolicies.length > 1) {
+    throw new Error("Multiple Cloudflare Access policies claim the canonical name.");
+  }
+  const existingPolicy = matchingPolicies[0];
   if (existingPolicy) {
     await cloudflare(
       "/accounts/" +
@@ -150,9 +232,34 @@ if (process.env.CF_PRIVILEGED_PROXY_APPROVED === "true") {
       body: JSON.stringify(policyPayload)
     });
   }
+
+  const verifiedApplications = await cloudflare("/accounts/" + accountId + "/access/apps", {
+    method: "GET"
+  });
+  const verifiedApplicationMatches = verifiedApplications.filter(
+    (candidate) =>
+      candidate.domain === privilegedHostname && candidate.type === access.applicationType
+  );
+  if (verifiedApplicationMatches.length !== 1) {
+    throw new Error("Cloudflare Access application read-back verification failed.");
+  }
+  const verifiedPolicies = await cloudflare(
+    "/accounts/" + accountId + "/access/apps/" + verifiedApplicationMatches[0].id + "/policies",
+    { method: "GET" }
+  );
+  const verifiedPolicyMatches = verifiedPolicies.filter(
+    (candidate) =>
+      candidate.name === access.policy.name &&
+      candidate.decision === access.policy.action &&
+      candidate.include?.some((rule) => rule.group?.id === groupId)
+  );
+  if (verifiedPolicyMatches.length !== 1) {
+    throw new Error("Cloudflare Access policy read-back verification failed.");
+  }
   console.log("CLOUDFLARE_ACCESS=PASS");
 } else {
-  console.log("CLOUDFLARE_ACCESS=AWAITING_EXPLICIT_PROXY_APPROVAL");
+  throw new Error("Cloudflare Access reconciliation requires explicit privileged-proxy approval.");
 }
 
 console.log("CLOUDFLARE_DNS=PASS");
+console.log("CLOUDFLARE_DNSSEC=PASS");

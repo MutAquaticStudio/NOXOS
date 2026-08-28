@@ -6,8 +6,11 @@ import {
   serverIdentity
 } from "@nox-os/config";
 import {
+  assertExpectedRuntimeRole,
+  assertLowPrivilegeRuntimeConnection,
   assertSeparateMigrationConnection,
   assertServerlessPoolerConnection,
+  runtimeRoleFromConnectionUrl,
   runtimeDatabaseTimeoutPolicy
 } from "@nox-os/database";
 import { redactDetails } from "@nox-os/observability";
@@ -85,6 +88,22 @@ describe("security boundaries", () => {
     expect(() =>
       assertServerlessPoolerConnection("postgres://app_runtime:password@db.example:5432/postgres")
     ).toThrow(/serverless pooler/);
+    expect(
+      runtimeRoleFromConnectionUrl(
+        "postgres://nox_app_runtime.projectref:password@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres"
+      )
+    ).toBe("nox_app_runtime");
+    expect(() =>
+      assertExpectedRuntimeRole(
+        "postgres://nox_app_runtime.projectref:password@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres",
+        "nox_app_runtime"
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertLowPrivilegeRuntimeConnection(
+        "postgres://postgres.projectref:password@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres"
+      )
+    ).toThrow(/low-privilege/);
   });
 
   it("rejects an environment identity that conflicts with Vercel deployment metadata", () => {

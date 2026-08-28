@@ -52,16 +52,20 @@ const previewSecurity =
   configuration["infra/vercel/preview-security.json"].ordinaryPullRequestPreview;
 const requiredPreviewSecretlessKeys = [
   "NOX_RUNTIME_DATABASE_URL",
+  "NOX_WORKFLOW_DATABASE_URL",
   "NOX_MIGRATION_DATABASE_URL",
   "SUPABASE_URL",
   "SUPABASE_SERVICE_ROLE_KEY",
   "SUPABASE_ACCESS_TOKEN",
+  "SUPABASE_DB_PASSWORD",
   "SUPABASE_STORAGE_BUCKET",
-  "NOX_WORKFLOW_PROBE_URL",
-  "NOX_WORKFLOW_PROBE_TOKEN",
   "NOX_DIAGNOSTIC_PROBE_TOKEN",
+  "TURNSTILE_SECRET_KEY",
   "CF_API_TOKEN",
-  "VERCEL_TOKEN"
+  "VERCEL_TOKEN",
+  "VERCEL_AUTOMATION_BYPASS_SECRET",
+  "FROZEN_G0_ARCHITECTURE_GZIP_BASE64",
+  "FROZEN_UXUI_GUIDELINE_GZIP_BASE64"
 ];
 if (
   previewSecurity.providerGitIntegration !== true ||

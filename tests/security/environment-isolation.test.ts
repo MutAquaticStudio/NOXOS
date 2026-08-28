@@ -5,7 +5,9 @@ import { verifyEnvironmentIsolation } from "../../scripts/verify/environment-iso
 const stagingProject = "abcdefghijklmno12345";
 const productionProject = "zyxwvutsrqponm54321";
 const runtimeDatabaseUrl =
-  "postgresql://app_runtime.abcdefghijklmno12345:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres";
+  "postgresql://nox_app_runtime.abcdefghijklmno12345:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres";
+const workflowDatabaseUrl =
+  "postgresql://nox_workflow_runtime.abcdefghijklmno12345:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres";
 
 function fingerprint(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -31,7 +33,7 @@ describe("non-production environment isolation", () => {
         NOX_PRODUCTION_DATABASE_RESOURCE: productionProject,
         NOX_CURRENT_STORAGE_RESOURCE: "preview-private",
         NOX_PRODUCTION_STORAGE_RESOURCE: "production-private",
-        NOX_DIAGNOSTIC_PROBE_TOKEN: "must-not-reach-preview"
+        TURNSTILE_SECRET_KEY: "must-not-reach-preview"
       })
     ).toThrow(/Secretless Preview verification received runtime credentials/);
   });
@@ -47,8 +49,11 @@ describe("non-production environment isolation", () => {
       SUPABASE_URL: "https://abcdefghijklmno12345.supabase.co",
       SUPABASE_STORAGE_BUCKET: "staging-private",
       NOX_RUNTIME_DATABASE_URL: runtimeDatabaseUrl,
+      NOX_WORKFLOW_DATABASE_URL: workflowDatabaseUrl,
       NOX_CURRENT_RUNTIME_DATABASE_URL_SHA256: fingerprint(runtimeDatabaseUrl),
       NOX_PRODUCTION_RUNTIME_DATABASE_URL_SHA256: fingerprint("different-production-runtime-url"),
+      NOX_CURRENT_WORKFLOW_DATABASE_URL_SHA256: fingerprint(workflowDatabaseUrl),
+      NOX_PRODUCTION_WORKFLOW_DATABASE_URL_SHA256: fingerprint("different-production-workflow-url"),
       SUPABASE_SERVICE_ROLE_KEY: "staging-service-role-key",
       NOX_CURRENT_SUPABASE_SERVICE_ROLE_KEY_SHA256: fingerprint("staging-service-role-key"),
       NOX_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY_SHA256: fingerprint("production-service-role-key")
@@ -59,18 +64,18 @@ describe("non-production environment isolation", () => {
       verifyEnvironmentIsolation({
         ...base,
         NOX_RUNTIME_DATABASE_URL:
-          "postgresql://app_runtime.zyxwvutsrqponm54321:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres"
+          "postgresql://nox_app_runtime.zyxwvutsrqponm54321:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres"
       })
     ).toThrow(/does not match the protected non-production fingerprint/);
     const productionBoundRuntime =
-      "postgresql://app_runtime.zyxwvutsrqponm54321:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres";
+      "postgresql://nox_app_runtime.zyxwvutsrqponm54321:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres";
     expect(() =>
       verifyEnvironmentIsolation({
         ...base,
         NOX_RUNTIME_DATABASE_URL: productionBoundRuntime,
         NOX_CURRENT_RUNTIME_DATABASE_URL_SHA256: fingerprint(productionBoundRuntime)
       })
-    ).toThrow(/does not bind its host or pooler identity/);
+    ).toThrow(/does not bind its Supavisor identity/);
     expect(() =>
       verifyEnvironmentIsolation({
         ...base,

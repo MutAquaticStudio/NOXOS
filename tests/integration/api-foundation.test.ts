@@ -176,19 +176,19 @@ describe("API foundation", () => {
         async start(_workflowType, _input, context) {
           return {
             id: context.workflowId,
-            state: "COMPLETED",
+            state: "QUEUED",
             correlationId: context.correlationId
           };
         }
       }
     });
-    const denied = await api.dispatch(request(api, "/internal/g1/workflow-probe"));
+    const denied = await api.dispatch(request(api, "/internal/diagnostics/workflow"));
     expect(denied.status).toBe(404);
 
     const deniedHeaders = { "x-nox-diagnostic-probe-token": "incorrect-token" };
     const deniedPost = await api.dispatch({
       method: "POST",
-      path: "/internal/g1/workflow-probe",
+      path: "/internal/diagnostics/workflow",
       headers: deniedHeaders,
       context: createRequestContext(api.identity, deniedHeaders)
     });
@@ -196,15 +196,21 @@ describe("API foundation", () => {
 
     const headers = {
       "x-correlation-id": "workflow-correlation",
-      "x-nox-diagnostic-probe-token": "diagnostic-token"
+      "x-nox-diagnostic-probe-token": "diagnostic-token",
+      "x-nox-diagnostic-workflow-id": "workflow_test_123",
+      "x-nox-diagnostic-idempotency-key": "idempotency_test_123"
     };
     const authorized = await api.dispatch({
       method: "POST",
-      path: "/internal/g1/workflow-probe",
+      path: "/internal/diagnostics/workflow",
       headers,
       context: createRequestContext(api.identity, headers)
     });
-    expect(authorized.status).toBe(200);
-    expect(authorized.body).toMatchObject({ correlationId: "workflow-correlation" });
+    expect(authorized.status).toBe(202);
+    expect(authorized.body).toMatchObject({
+      workflowId: "workflow_test_123",
+      state: "QUEUED",
+      correlationId: "workflow-correlation"
+    });
   });
 });

@@ -1,13 +1,20 @@
 const stagingUrl = process.env.NOX_STAGING_URL;
 const expectedSha = process.env.EXPECTED_SOURCE_SHA;
 const expectedEnvironment = process.env.NOX_EXPECTED_ENV ?? "staging";
+const protectionBypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 
 if (!stagingUrl || !expectedSha) {
   throw new Error("NOX_STAGING_URL and EXPECTED_SOURCE_SHA are required for staging verification.");
 }
 
-const healthResponse = await fetch(new URL("/api/v1/health", stagingUrl));
-const versionResponse = await fetch(new URL("/api/v1/version", stagingUrl));
+const headers = protectionBypass
+  ? {
+      "x-vercel-protection-bypass": protectionBypass,
+      "x-vercel-set-bypass-cookie": "true"
+    }
+  : undefined;
+const healthResponse = await fetch(new URL("/api/v1/health", stagingUrl), { headers });
+const versionResponse = await fetch(new URL("/api/v1/version", stagingUrl), { headers });
 
 if (!healthResponse.ok || !versionResponse.ok) {
   throw new Error("Staging health or version endpoint failed.");

@@ -16,11 +16,13 @@
     "@nox-os/platform": "workspace:*",
     "@nox-os/scientific": "workspace:*",
     "@nox-os/ui": "workspace:*",
+    "@vercel/queue": "0.5.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-router-dom": "7.18.2"
   },
   "devDependencies": {
+    "@types/node": "26.4.0",
     "@vercel/node": "9.0.1",
     "@vitejs/plugin-react": "6.1.0",
     "vite": "8.2.2"

@@ -229,7 +229,7 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
   const workflowLauncher = options.workflowLauncher;
   const diagnosticProbeToken = options.diagnosticProbeToken;
   if (workflowLauncher && diagnosticProbeToken) {
-    router.register("POST", "/internal/g1/workflow-probe", async (request) => {
+    router.register("POST", "/internal/diagnostics/workflow", async (request) => {
       if (
         !secureTokenMatches(request.headers["x-nox-diagnostic-probe-token"], diagnosticProbeToken)
       ) {
@@ -243,13 +243,22 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
         };
       }
 
-      const handle = await probeWorkflowRoundTrip(workflowLauncher, {
-        correlationId: request.context.correlationId
+      const handle = await launchWorkflowProbe(workflowLauncher, {
+        correlationId: request.context.correlationId,
+        workflowId: diagnosticIdentifier(
+          request.headers["x-nox-diagnostic-workflow-id"],
+          "workflow_probe"
+        ),
+        idempotencyKey: diagnosticIdentifier(
+          request.headers["x-nox-diagnostic-idempotency-key"],
+          "idempotency"
+        )
       });
       return {
-        status: 200,
+        status: handle.state === "COMPLETED" ? 200 : 202,
         body: {
           workflowId: handle.id,
+          state: handle.state,
           correlationId: handle.correlationId
         }
       };
@@ -369,8 +378,6 @@ export class UnavailableWorkflowLauncher implements WorkflowLauncher {
   }
 }
 
-const terminalWorkflowStates = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
-
 export type HttpWorkflowLauncherOptions = {
   endpoint: string;
   bearerToken?: string;
@@ -469,36 +476,48 @@ export class HttpWorkflowLauncher implements WorkflowLauncher {
   }
 }
 
-export async function probeWorkflowRoundTrip(
+export type WorkflowProbeIdentity = Pick<RequestContext, "correlationId"> & {
+  workflowId?: string;
+  idempotencyKey?: string;
+};
+
+export async function launchWorkflowProbe(
   launcher: WorkflowLauncher,
-  identity: Pick<RequestContext, "correlationId"> = { correlationId: createOpaqueId("corr") }
+  identity: WorkflowProbeIdentity = { correlationId: createOpaqueId("corr") }
 ): Promise<WorkflowHandle> {
   const context: WorkflowContext = {
-    workflowId: createOpaqueId("workflow_probe"),
+    workflowId: identity.workflowId ?? createOpaqueId("workflow_probe"),
     scope: { type: "GLOBAL" },
     actor: { type: "SYSTEM" },
     correlationId: identity.correlationId,
-    idempotencyKey: createOpaqueId("idempotency")
+    idempotencyKey: identity.idempotencyKey ?? createOpaqueId("idempotency")
   };
   const handle = await launcher.start(
-    "nox.g1.probe",
-    { purpose: "gate-1-cloud-acceptance" },
+    "nox.foundation.diagnostic",
+    { purpose: "cloud-foundation-acceptance", simulateRetry: true },
     context
   );
 
   if (handle.id !== context.workflowId) {
     throw new Error("Workflow probe returned an unexpected workflow identifier.");
   }
-  if (handle.state !== "COMPLETED") {
-    const terminal = terminalWorkflowStates.has(handle.state);
-    throw new Error(
-      "Workflow probe did not complete" + (terminal ? " successfully." : " before timeout.")
-    );
+  if (handle.state === "FAILED" || handle.state === "CANCELLED") {
+    throw new Error("Workflow probe was rejected by the durable execution provider.");
   }
   if (handle.correlationId !== context.correlationId) {
     throw new Error("Workflow probe did not retain the API correlation identifier.");
   }
   return handle;
+}
+
+function diagnosticIdentifier(value: string | undefined, prefix: string): string {
+  if (!value) {
+    return createOpaqueId(prefix);
+  }
+  if (!/^[a-zA-Z0-9_-]{8,128}$/.test(value)) {
+    throw new Error("Diagnostic workflow identifier has an invalid format.");
+  }
+  return value;
 }
 
 function secureTokenMatches(supplied: string | undefined, expected: string): boolean {

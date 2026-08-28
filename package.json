@@ -29,6 +29,7 @@
     "infra:apply": "pnpm tsx scripts/infra/provision-storage.ts && node scripts/infra/apply-cloudflare.mjs",
     "infra:storage:apply": "pnpm tsx scripts/infra/provision-storage.ts",
     "verify:environment-isolation": "pnpm tsx scripts/verify/environment-isolation.ts",
+    "verify:staging:configuration": "node scripts/verify/staging-configuration.mjs",
     "verify:preview:deployment": "pnpm tsx scripts/verify/resolve-vercel-preview.ts",
     "deploy:staging": "pnpm tsx scripts/deploy/staging.ts",
     "deploy:production": "pnpm tsx scripts/deploy/production.ts",

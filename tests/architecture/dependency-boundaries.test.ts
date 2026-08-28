@@ -76,4 +76,12 @@ describe("dependency architecture", () => {
   it("prevents Material Intelligence from importing future Inventory implementation", () => {
     expect(importsFrom("packages/material-intelligence/src")).not.toContain("@nox-os/inventory");
   });
+
+  it("keeps engineering-governance names out of runtime route literals", () => {
+    const runtimeSources = sourceFiles("apps/nox-os").map((file) => readFileSync(file, "utf8"));
+    const forbiddenRuntimeRoute =
+      /["'`]\/(?:api\/v1\/)?(?:gate-[^"'`/]*|g[0-9]+(?:\/|["'`])|phase-[^"'`/]*|milestone-[^"'`/]*)/i;
+
+    expect(runtimeSources.join("\n")).not.toMatch(forbiddenRuntimeRoute);
+  });
 });

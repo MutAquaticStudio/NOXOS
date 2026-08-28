@@ -8,6 +8,9 @@ if (!projectRef || !environment || !["preview", "staging", "production"].include
 if (!process.env.SUPABASE_ACCESS_TOKEN) {
   throw new Error("SUPABASE_ACCESS_TOKEN must be supplied through the cloud secret store.");
 }
+if (!process.env.SUPABASE_DB_PASSWORD) {
+  throw new Error("SUPABASE_DB_PASSWORD must be supplied through the cloud secret store.");
+}
 
 execFileSync("pnpm", ["exec", "supabase", "link", "--project-ref", projectRef], {
   stdio: "inherit",

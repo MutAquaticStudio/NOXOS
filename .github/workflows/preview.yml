@@ -61,9 +61,11 @@ jobs:
       - run: pnpm verify:staging
         env:
           NOX_STAGING_URL: ${{ steps.preview.outputs.preview_url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm verify:staging:browser
         env:
           NOX_STAGING_URL: ${{ steps.preview.outputs.preview_url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
       # Ordinary PR Preview is secretless. Database, Storage, and API-to-workflow probes run
       # only in trusted post-merge Staging after its deployment URL is provider-verified.

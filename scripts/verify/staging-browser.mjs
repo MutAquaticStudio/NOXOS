@@ -3,6 +3,7 @@ import { chromium } from "@playwright/test";
 const stagingUrl = process.env.NOX_STAGING_URL;
 const expectedSha = process.env.EXPECTED_SOURCE_SHA;
 const expectedEnvironment = process.env.NOX_EXPECTED_ENV ?? "staging";
+const protectionBypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 
 if (!stagingUrl || !expectedSha) {
   throw new Error("NOX_STAGING_URL and EXPECTED_SOURCE_SHA are required for browser verification.");
@@ -16,7 +17,16 @@ const requiredVisible = async (locator, description) => {
 
 const browser = await chromium.launch({ headless: true });
 try {
-  const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+  const browserHeaders = protectionBypass
+    ? {
+        "x-vercel-protection-bypass": protectionBypass,
+        "x-vercel-set-bypass-cookie": "true"
+      }
+    : undefined;
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 960 },
+    extraHTTPHeaders: browserHeaders
+  });
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await page.goto(stagingUrl, { waitUntil: "networkidle" });
 
@@ -75,7 +85,10 @@ try {
     throw new Error("Staging API health identity is incorrect in the browser.");
   }
 
-  const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const mobile = await browser.newPage({
+    viewport: { width: 390, height: 844 },
+    extraHTTPHeaders: browserHeaders
+  });
   try {
     await mobile.goto(new URL("/material-intelligence", stagingUrl).toString(), {
       waitUntil: "networkidle"

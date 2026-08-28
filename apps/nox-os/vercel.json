@@ -4,10 +4,23 @@
   "installCommand": "pnpm install --frozen-lockfile",
   "buildCommand": "pnpm run build",
   "outputDirectory": "dist",
+  "regions": ["syd1"],
   "functions": {
     "api/v1/[...route].ts": {
       "maxDuration": 10,
       "supportsCancellation": true
+    },
+    "api/queues/workflow-foundation.ts": {
+      "maxDuration": 60,
+      "supportsCancellation": true,
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "nox-foundation-workflow",
+          "retryAfterSeconds": 2,
+          "initialDelaySeconds": 0
+        }
+      ]
     }
   },
   "rewrites": [

@@ -26,7 +26,14 @@ function deployVercel(args: string[]): string {
   ).trim();
 }
 
-for (const key of ["VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID", "EXPECTED_SOURCE_SHA"]) {
+for (const key of [
+  "VERCEL_TOKEN",
+  "VERCEL_ORG_ID",
+  "VERCEL_PROJECT_ID",
+  "EXPECTED_SOURCE_SHA",
+  "NOX_RUNTIME_DATABASE_URL",
+  "NOX_WORKFLOW_DATABASE_URL"
+]) {
   required(key);
 }
 
@@ -54,6 +61,12 @@ const submittedUrl = deployVercel([
   "NOX_ENV=production",
   "--env",
   "NOX_SOURCE_SHA=" + expectedSourceSha,
+  "--env",
+  "NOX_RUNTIME_DATABASE_URL=" + required("NOX_RUNTIME_DATABASE_URL"),
+  "--env",
+  "NOX_WORKFLOW_DATABASE_URL=" + required("NOX_WORKFLOW_DATABASE_URL"),
+  "--env",
+  "NOX_FOUNDATION_DIAGNOSTICS_ENABLED=false",
   "--meta",
   "githubDeployment=1",
   "--meta",
