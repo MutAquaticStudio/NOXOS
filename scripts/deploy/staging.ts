@@ -1,5 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { verifyVercelDeployment } from "../verify/vercel-deployment";
+import {
+  assertVercelCustomEnvironmentMembership,
+  verifyVercelDeployment
+} from "../verify/vercel-deployment";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -27,6 +30,7 @@ function vercelArguments(args: string[]): string[] {
     required("VERCEL_PROJECT_ID"),
     "--token",
     required("VERCEL_TOKEN"),
+    "--no-color",
     ...args
   ];
 }
@@ -35,7 +39,6 @@ for (const key of [
   "VERCEL_TOKEN",
   "VERCEL_ORG_ID",
   "VERCEL_PROJECT_ID",
-  "NOX_VERCEL_STAGING_ENVIRONMENT_ID",
   "EXPECTED_SOURCE_SHA",
   "VITE_TURNSTILE_SITE_KEY",
   "NOX_RUNTIME_DATABASE_URL",
@@ -102,11 +105,17 @@ const deploymentUrl = await verifyVercelDeployment(
     projectId: required("VERCEL_PROJECT_ID"),
     sourceSha: expectedSourceSha,
     target,
-    customEnvironmentId: required("NOX_VERCEL_STAGING_ENVIRONMENT_ID"),
     token: required("VERCEL_TOKEN")
   },
   submittedUrl
 );
+const customEnvironmentListing = deployVercel([
+  "list",
+  "--environment=" + target,
+  "--meta",
+  "githubCommitSha=" + expectedSourceSha
+]);
+assertVercelCustomEnvironmentMembership(deploymentUrl, customEnvironmentListing);
 
 console.log("STAGING_DEPLOY=SUBMITTED_AND_VERIFIED");
 console.log("STAGING_DEPLOY_URL=" + deploymentUrl);

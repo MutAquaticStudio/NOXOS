@@ -70,7 +70,13 @@ function targetMatches(deployment: VercelDeployment, expected: ExpectedVercelDep
     if (expected.customEnvironmentId) {
       return deployment.customEnvironmentId === expected.customEnvironmentId;
     }
-    return deployment.target === "staging" && !deployment.customEnvironmentId;
+    // The current deployment lookup omits customEnvironmentId and uses a null target for a
+    // custom-environment deployment. Callers must pair this shape with Vercel's
+    // --environment=staging listing before accepting it as Staging evidence.
+    return (
+      deployment.target === "staging" ||
+      (deployment.target === null && !deployment.customEnvironmentId)
+    );
   }
   return deployment.target === expected.target;
 }
@@ -127,6 +133,21 @@ export function assertExpectedVercelDeployment(
     );
   }
   return normalizedUrl;
+}
+
+export function assertVercelCustomEnvironmentMembership(
+  deploymentUrl: string,
+  listingOutput: string
+): void {
+  const hostname = new URL(normalizeVercelDeploymentUrl(deploymentUrl)).hostname;
+  const hostnameExpression = new RegExp(
+    "(?:https://)?" + hostname.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&") + "(?=$|[\\s/])"
+  );
+  if (!hostnameExpression.test(listingOutput)) {
+    throw new Error(
+      "Authenticated Vercel custom-environment listing does not contain the exact deployment URL."
+    );
+  }
 }
 
 export async function verifyVercelDeployment(
