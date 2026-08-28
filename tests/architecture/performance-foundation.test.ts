@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const viteConfig = readFileSync("apps/nox-os/vite.config.ts", "utf8");
-const vercelConfig = JSON.parse(readFileSync("vercel.json", "utf8")) as {
+const vercelConfig = JSON.parse(readFileSync("apps/nox-os/vercel.json", "utf8")) as {
   functions?: Record<string, { maxDuration?: number; supportsCancellation?: boolean }>;
 };
 

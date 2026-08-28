@@ -21,6 +21,14 @@ be proxied only after an explicit architecture approval so that Cloudflare Acces
 an edge admission gate; it never replaces NØX authentication, tenant checks, RBAC, or
 auditing.
 
+## Vercel monorepo placement
+
+The single `nox-os` Vercel project uses `apps/nox-os` as its Root Directory. Its
+`vercel.json`, Vite output (`dist`), and `/api/v1/*` Function live under that same app root;
+the repository root does not carry a competing Vercel configuration. The project must retain
+Vercel’s supported monorepo access to the declared workspace packages outside the app root.
+That provider setting is read back during Preview acceptance rather than inferred from source.
+
 ## Environment isolation
 
 ```text

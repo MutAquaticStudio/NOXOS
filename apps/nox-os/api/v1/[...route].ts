@@ -3,7 +3,7 @@ import type { ApiRequest } from "@nox-os/contracts";
 import { createRuntimeDatabase, probeDatabase } from "@nox-os/database";
 import { createRequestContext, createFoundationApi, HttpWorkflowLauncher } from "@nox-os/platform";
 import { UnavailableScientificAdapter } from "@nox-os/scientific";
-import { moduleDefinitions } from "../../apps/nox-os/src/modules/definitions";
+import { moduleDefinitions } from "../../src/modules/definitions";
 
 const workflowEndpoint = process.env.NOX_WORKFLOW_PROBE_URL;
 const workflowLauncher = workflowEndpoint

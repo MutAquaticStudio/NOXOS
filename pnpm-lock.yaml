@@ -64,9 +64,18 @@ importers:
       "@nox-os/contracts":
         specifier: workspace:*
         version: link:../../packages/contracts
+      "@nox-os/database":
+        specifier: workspace:*
+        version: link:../../packages/database
       "@nox-os/module-registry":
         specifier: workspace:*
         version: link:../../packages/module-registry
+      "@nox-os/platform":
+        specifier: workspace:*
+        version: link:../../packages/platform
+      "@nox-os/scientific":
+        specifier: workspace:*
+        version: link:../../packages/scientific
       "@nox-os/ui":
         specifier: workspace:*
         version: link:../../packages/ui
@@ -80,6 +89,9 @@ importers:
         specifier: 7.18.2
         version: 7.18.2(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
     devDependencies:
+      "@vercel/node":
+        specifier: 9.0.1
+        version: 9.0.1(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)(@vercel/build-utils@14.6.1)(supports-color@7.2.0)
       "@vitejs/plugin-react":
         specifier: 6.1.0
         version: 6.1.0(vite@8.2.2(@types/node@26.4.0)(esbuild@0.28.2)(tsx@4.23.12))

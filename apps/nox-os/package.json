@@ -11,13 +11,17 @@
   "dependencies": {
     "@nox-os/config": "workspace:*",
     "@nox-os/contracts": "workspace:*",
+    "@nox-os/database": "workspace:*",
     "@nox-os/module-registry": "workspace:*",
+    "@nox-os/platform": "workspace:*",
+    "@nox-os/scientific": "workspace:*",
     "@nox-os/ui": "workspace:*",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-router-dom": "7.18.2"
   },
   "devDependencies": {
+    "@vercel/node": "9.0.1",
     "@vitejs/plugin-react": "6.1.0",
     "vite": "8.2.2"
   }
