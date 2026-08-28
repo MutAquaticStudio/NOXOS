@@ -1,7 +1,13 @@
 export type VercelDeployment = {
   id?: string;
-  meta?: { githubCommitSha?: string };
+  meta?: {
+    githubCommitSha?: string;
+    githubCommitOrg?: string;
+    githubCommitRepo?: string;
+    githubCommitRef?: string;
+  };
   projectId?: string;
+  project?: { id?: string };
   readyState?: string;
   state?: string;
   target?: string | null;
@@ -61,6 +67,10 @@ function targetMatches(
   return target === "preview" ? deployment.target === null : deployment.target === target;
 }
 
+function deploymentProjectId(deployment: VercelDeployment): string | undefined {
+  return deployment.projectId ?? deployment.project?.id;
+}
+
 function gitSourceMatches(
   deployment: VercelDeployment,
   expected: ExpectedGitSource | undefined,
@@ -71,12 +81,21 @@ function gitSourceMatches(
   }
 
   const actual = deployment.gitSource;
+  if (actual) {
+    return (
+      actual.type === "github" &&
+      actual.org === expected.organization &&
+      actual.repo === expected.repository &&
+      actual.ref === expected.ref &&
+      actual.sha === sourceSha
+    );
+  }
+
   return (
-    actual?.type === "github" &&
-    actual.org === expected.organization &&
-    actual.repo === expected.repository &&
-    actual.ref === expected.ref &&
-    actual.sha === sourceSha
+    deployment.meta?.githubCommitOrg === expected.organization &&
+    deployment.meta?.githubCommitRepo === expected.repository &&
+    deployment.meta?.githubCommitRef === expected.ref &&
+    deployment.meta?.githubCommitSha === sourceSha
   );
 }
 
@@ -89,7 +108,7 @@ export function assertExpectedVercelDeployment(
   if (
     !isReady(deployment) ||
     !targetMatches(deployment, expected.target) ||
-    deployment.projectId !== expected.projectId ||
+    deploymentProjectId(deployment) !== expected.projectId ||
     deployment.meta?.githubCommitSha !== expected.sourceSha ||
     !gitSourceMatches(deployment, expected.gitSource, expected.sourceSha) ||
     !deployment.url ||
