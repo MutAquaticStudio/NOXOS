@@ -86,6 +86,7 @@ const deploymentUrl = await verifyVercelDeployment(
     projectId: requiredServerValue(raw, "VERCEL_PROJECT_ID"),
     sourceSha: requiredServerValue(raw, "EXPECTED_SOURCE_SHA"),
     target: "staging",
+    customEnvironmentId: requiredServerValue(raw, "NOX_VERCEL_STAGING_ENVIRONMENT_ID"),
     token: requiredServerValue(raw, "VERCEL_TOKEN")
   },
   requiredServerValue(raw, "NOX_DEPLOYMENT_URL")

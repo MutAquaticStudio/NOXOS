@@ -99,3 +99,11 @@ already reconciled `staging` custom environment and verifies the resulting exact
 Only the three public Vite values are passed as build inputs; database URLs, diagnostic token and
 other protected values remain runtime-only environment values. This removes the anomalous local
 build-output path without changing the application project, provider ownership or Production flow.
+
+## Amendment B-010: Custom environment identity is immutable provider evidence
+
+Vercel may represent a deployment to a custom environment with `target: null` and a
+`customEnvironmentId`. Staging reconciliation reads the one existing `staging` environment and
+passes its immutable ID to every Staging deployment verifier. The verifier accepts that shape only
+when the project, exact source SHA, Git provenance, READY state, generated deployment URL and
+custom environment ID all match. Preview verification continues to reject every custom environment.
