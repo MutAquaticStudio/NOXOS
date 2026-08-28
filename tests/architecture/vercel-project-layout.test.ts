@@ -46,11 +46,10 @@ describe("Vercel project layout", () => {
     }
   });
 
-  it("uses the app root and CI project identity without passing an internal team ID as CLI scope", () => {
+  it("uses Vercel's configured project root and CI project identity without CLI scope", () => {
     for (const deployer of ["scripts/deploy/staging.ts", "scripts/deploy/production.ts"]) {
       const source = readFileSync(deployer, "utf8");
-      expect(source).toContain('"--cwd"');
-      expect(source).toContain('"apps/nox-os"');
+      expect(source).not.toContain('"--cwd"');
       expect(source).toContain('"--project"');
       expect(source).toContain('"--token"');
       expect(source).not.toContain('"--scope"');

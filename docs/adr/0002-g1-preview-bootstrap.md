@@ -68,3 +68,9 @@ Every Vercel CLI invocation receives `--project` with the protected `VERCEL_PROJ
 addition to the existing CI identity environment. This follows the Vercel CLI project-selection
 contract and removes any dependency on an ambient local link or repository-directory inference.
 The target remains the reconciled `staging` environment; no Production command is executed.
+
+## Amendment B-006: Vercel configured root is applied exactly once
+
+The Vercel project already declares `apps/nox-os` as its root directory. CI invokes the CLI from
+the repository root with explicit project selection and does not add a second `--cwd apps/nox-os`.
+This avoids a doubled application path during Vercel's target-aware build.
