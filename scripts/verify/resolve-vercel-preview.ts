@@ -30,7 +30,7 @@ export function readyPreviewDeployment(
   return payload.deployments?.find(
     (candidate) =>
       candidate.meta?.githubCommitSha === sourceSha &&
-      candidate.projectId === projectId &&
+      (candidate.projectId ?? candidate.project?.id) === projectId &&
       candidate.target === null &&
       Boolean(candidate.url) &&
       (candidate.readyState === "READY" || candidate.state === "READY")
