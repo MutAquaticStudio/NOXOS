@@ -28,5 +28,9 @@ if (health.environment !== expectedEnvironment || version.environment !== expect
 if (health.sourceSha !== expectedSha || version.sourceSha !== expectedSha) {
   throw new Error("Deployed SHA does not equal expected SHA.");
 }
+if (version.providerTargetEnvironment !== expectedEnvironment) {
+  throw new Error("Vercel did not attest the expected custom target environment.");
+}
 
 console.log("DEPLOYMENT_HTTP_AND_SHA=PASS");
+console.log("VERCEL_STAGING_TARGET_ATTESTATION=PASS");

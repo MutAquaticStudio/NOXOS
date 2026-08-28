@@ -138,14 +138,16 @@ describe("API foundation", () => {
       environment: {
         NOX_ENV: "staging",
         NOX_SOURCE_SHA: "deployed-sha",
-        VERCEL_GIT_COMMIT_SHA: "provider-sha"
+        VERCEL_GIT_COMMIT_SHA: "provider-sha",
+        VERCEL_TARGET_ENV: "staging"
       }
     });
     const response = await api.dispatch(request(api, "/version"));
 
     expect(response.body).toMatchObject({
       environment: "staging",
-      sourceSha: "deployed-sha"
+      sourceSha: "deployed-sha",
+      providerTargetEnvironment: "staging"
     });
   });
 

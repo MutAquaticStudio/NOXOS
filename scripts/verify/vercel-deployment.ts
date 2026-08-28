@@ -135,21 +135,6 @@ export function assertExpectedVercelDeployment(
   return normalizedUrl;
 }
 
-export function assertVercelCustomEnvironmentMembership(
-  deploymentUrl: string,
-  listingOutput: string
-): void {
-  const hostname = new URL(normalizeVercelDeploymentUrl(deploymentUrl)).hostname;
-  const hostnameExpression = new RegExp(
-    "(?:https://)?" + hostname.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&") + "(?=$|[\\s/])"
-  );
-  if (!hostnameExpression.test(listingOutput)) {
-    throw new Error(
-      "Authenticated Vercel custom-environment listing does not contain the exact deployment URL."
-    );
-  }
-}
-
 export async function verifyVercelDeployment(
   expected: ExpectedVercelDeployment,
   deploymentUrl: string,
