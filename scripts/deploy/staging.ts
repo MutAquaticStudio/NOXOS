@@ -27,17 +27,7 @@ function deployVercel(args: string[]): string {
 }
 
 function vercelArguments(args: string[]): string[] {
-  return [
-    "exec",
-    "vercel",
-    "--cwd",
-    "apps/nox-os",
-    "--scope",
-    required("VERCEL_ORG_ID"),
-    "--token",
-    required("VERCEL_TOKEN"),
-    ...args
-  ];
+  return ["exec", "vercel", "--cwd", "apps/nox-os", "--token", required("VERCEL_TOKEN"), ...args];
 }
 
 for (const key of [
