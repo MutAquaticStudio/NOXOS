@@ -1,0 +1,1 @@
+-- Gate 1 intentionally seeds no business data.

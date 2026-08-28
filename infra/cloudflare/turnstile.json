@@ -1,0 +1,12 @@
+{
+  "name": "nox-os",
+  "domains": ["app.example.invalid"],
+  "mode": "managed",
+  "serverValidation": {
+    "endpoint": "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+    "validateHostname": true,
+    "validateAction": true,
+    "singleUse": true,
+    "maxTokenAgeSeconds": 300
+  }
+}
