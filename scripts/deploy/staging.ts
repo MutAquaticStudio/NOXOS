@@ -60,8 +60,8 @@ const identityEnvironment = {
   VITE_NOX_SOURCE_SHA: expectedSourceSha
 };
 
-// Vercel requires a target-aware build to create .vercel/output before --prebuilt can deploy it.
-runVercel(["pull", "--yes", "--environment=" + target]);
+// GitHub's protected Staging environment is the configuration authority for this deploy. The
+// target-aware build creates .vercel/output without relying on Vercel CLI environment pull.
 runVercel(["build", "--yes", "--target=" + target]);
 const submittedUrl = deployVercel([
   "deploy",

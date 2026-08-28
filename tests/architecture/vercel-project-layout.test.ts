@@ -54,5 +54,9 @@ describe("Vercel project layout", () => {
       expect(source).toContain('"--token"');
       expect(source).not.toContain('"--scope"');
     }
+
+    const stagingDeployer = readFileSync("scripts/deploy/staging.ts", "utf8");
+    expect(stagingDeployer).toContain('runVercel(["build", "--yes", "--target=" + target])');
+    expect(stagingDeployer).not.toContain('runVercel(["pull"');
   });
 });

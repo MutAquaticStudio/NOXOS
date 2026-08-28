@@ -50,3 +50,14 @@ project identity contract. The deployer passes the Vercel token explicitly and r
 `apps/nox-os`, but does not map the internal Vercel team ID to the CLI `--scope` flag; that
 flag expects a team slug and would fail closed with a provider user lookup error. This preserves
 the existing cloud identity boundary without adding a second, manually maintained team name.
+
+## Amendment B-004: Protected Staging configuration is not pulled by the Vercel CLI
+
+The protected GitHub `staging` environment is the runtime configuration authority for the
+Staging workflow. The deployer therefore does not execute `vercel pull --environment=staging`.
+It uses the checked-in Vercel project configuration, explicit protected CI identity, and a
+target-aware `vercel build --target=staging` to create the prebuilt output before deployment.
+
+This prevents a Vercel CLI custom-environment settings lookup from becoming a second mutable
+configuration authority or blocking an otherwise verified Staging deployment. Production is
+unchanged and remains outside Gate 1 execution.
