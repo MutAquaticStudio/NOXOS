@@ -10,6 +10,16 @@ export type DatabaseConnectionPlan = {
   migrationConnectionUrl: string;
 };
 
+/**
+ * Serverless connection policy. Individual future business commands must add
+ * bounded query behavior before they are introduced in G2.
+ */
+export const runtimeDatabaseTimeoutPolicy = {
+  connectTimeoutSeconds: 5,
+  idleConnectionTimeoutSeconds: 10,
+  maxConnectionLifetimeSeconds: 60
+} as const;
+
 export function assertLowPrivilegeRuntimeConnection(connectionUrl: string): void {
   const username = new URL(connectionUrl).username;
   const forbidden = new Set(["postgres", "supabase_admin", "migration_admin"]);
@@ -42,7 +52,9 @@ export function createRuntimeDatabase(options: RuntimeDatabaseOptions): Sql {
   return postgres(options.connectionUrl, {
     prepare: false,
     max: 1,
-    idle_timeout: 10,
+    connect_timeout: runtimeDatabaseTimeoutPolicy.connectTimeoutSeconds,
+    idle_timeout: runtimeDatabaseTimeoutPolicy.idleConnectionTimeoutSeconds,
+    max_lifetime: runtimeDatabaseTimeoutPolicy.maxConnectionLifetimeSeconds,
     connection: {
       application_name: options.applicationName
     }

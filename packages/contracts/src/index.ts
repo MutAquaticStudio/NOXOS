@@ -164,6 +164,7 @@ export type ErrorCode =
   | "UNAUTHORIZED"
   | "FORBIDDEN"
   | "CONFIGURATION_ERROR"
+  | "REQUEST_TIMEOUT"
   | "INTERNAL_ERROR";
 
 export type ErrorEnvelope = {

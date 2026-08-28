@@ -1,8 +1,15 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "installCommand": "pnpm install --frozen-lockfile",
   "buildCommand": "pnpm --filter @nox-os/web build",
   "outputDirectory": "apps/nox-os/dist",
+  "functions": {
+    "api/v1/[...route].ts": {
+      "maxDuration": 10,
+      "supportsCancellation": true
+    }
+  },
   "rewrites": [
     {
       "source": "/api/v1/:path*",

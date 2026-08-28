@@ -8,6 +8,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     build: {
+      chunkSizeWarningLimit: 350,
       sourcemap: true,
       target: "es2024"
     },

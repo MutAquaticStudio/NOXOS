@@ -23,6 +23,12 @@ type RouteRegistration = {
 };
 type DatabaseHealth = { healthy: boolean; unconfigured?: boolean };
 
+/**
+ * Keeps the foundation API comfortably below the Vercel Function hard limit.
+ * Long-running work belongs behind WorkflowLauncher rather than an HTTP response.
+ */
+export const DEFAULT_API_TIMEOUT_MS = 8_000;
+
 function key(method: string, path: string): RouteKey {
   return method.toUpperCase() + " " + path;
 }
@@ -125,6 +131,7 @@ export type FoundationApiOptions = {
   workflowLauncher?: WorkflowLauncher;
   diagnosticProbeToken?: string;
   logSink?: LogSink;
+  apiTimeoutMs?: number;
 };
 
 class AuthorizedModuleApiRegistrar implements ApiRouteRegistrar {
@@ -164,6 +171,7 @@ class AuthorizedModuleApiRegistrar implements ApiRouteRegistrar {
 
 export function createFoundationApi(options: FoundationApiOptions): FoundationApi {
   const identity = serverIdentity(options.environment ?? process.env);
+  const apiTimeoutMs = resolveApiTimeout(options.apiTimeoutMs);
   const logger = createLogger(
     {
       service: "nox-api",
@@ -264,7 +272,7 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
     identity,
     async dispatch(request: ApiRequest): Promise<ApiResponse> {
       try {
-        const response = await router.dispatch(request);
+        const response = await withApiTimeout(router.dispatch(request), apiTimeoutMs);
         logger.log("info", "API request completed.", {
           requestId: request.context.requestId,
           correlationId: request.context.correlationId,
@@ -279,7 +287,26 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
             ...response.headers
           }
         };
-      } catch {
+      } catch (error) {
+        if (error instanceof ApiTimeoutError) {
+          logger.log("error", "API request exceeded the foundation timeout.", {
+            requestId: request.context.requestId,
+            correlationId: request.context.correlationId,
+            moduleId: router.moduleIdFor(request)
+          });
+          return {
+            status: 504,
+            body: toErrorEnvelope(
+              "REQUEST_TIMEOUT",
+              "The request exceeded the configured time limit.",
+              request.context.requestId
+            ),
+            headers: {
+              "x-request-id": request.context.requestId,
+              "x-correlation-id": request.context.correlationId
+            }
+          };
+        }
         logger.log("error", "API request failed.", {
           requestId: request.context.requestId,
           correlationId: request.context.correlationId,
@@ -296,6 +323,33 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
       }
     }
   };
+}
+
+class ApiTimeoutError extends Error {
+  constructor() {
+    super("Foundation API request timed out.");
+  }
+}
+
+function resolveApiTimeout(value: number | undefined): number {
+  const timeout = value ?? DEFAULT_API_TIMEOUT_MS;
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 30_000) {
+    throw new Error("Foundation API timeout must be an integer from 1 to 30000 milliseconds.");
+  }
+  return timeout;
+}
+
+function withApiTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new ApiTimeoutError()), timeoutMs);
+  });
+
+  return Promise.race([operation, deadline]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
 }
 
 export interface WorkflowAuthorityRevalidator {

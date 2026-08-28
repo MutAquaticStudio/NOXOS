@@ -48,6 +48,39 @@ describe("API foundation", () => {
     expect(JSON.stringify(response.body)).not.toMatch(/sql|stack|secret/i);
   });
 
+  it("bounds a stalled foundation handler with a safe timeout envelope", async () => {
+    const modules = moduleDefinitions.map((definition) =>
+      definition.descriptor.id === "material-intelligence"
+        ? {
+            ...definition,
+            api: {
+              ...definition.api,
+              registerRoutes(registrar: Parameters<typeof definition.api.registerRoutes>[0]) {
+                registrar.get("/materials/foundation", async () => new Promise(() => undefined));
+              }
+            }
+          }
+        : definition
+    );
+    const api = createFoundationApi({
+      modules,
+      scientificGateway: new UnavailableScientificAdapter(),
+      environment: { NOX_ENV: "test", VERCEL_GIT_COMMIT_SHA: "timeout-sha" },
+      apiTimeoutMs: 1,
+      moduleAuthorizer: {
+        async canAccess() {
+          return true;
+        }
+      }
+    });
+
+    const response = await api.dispatch(request(api, "/materials/foundation"));
+
+    expect(response.status).toBe(504);
+    expect(response.body).toMatchObject({ error: { code: "REQUEST_TIMEOUT" } });
+    expect(response.headers?.["x-request-id"]).toMatch(/^req_/);
+  });
+
   it("fails closed for module APIs until a request authorizer is connected", async () => {
     const api = createFoundationApi({
       modules: moduleDefinitions,

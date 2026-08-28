@@ -2,17 +2,28 @@ import { describe, expect, it } from "vitest";
 import { assertNoPublicSecrets, serverIdentity } from "@nox-os/config";
 import {
   assertSeparateMigrationConnection,
-  assertServerlessPoolerConnection
+  assertServerlessPoolerConnection,
+  runtimeDatabaseTimeoutPolicy
 } from "@nox-os/database";
 import { redactDetails } from "@nox-os/observability";
 import {
   noAccessAdmission,
+  DEFAULT_API_TIMEOUT_MS,
   requireCurrentWorkflowAuthority,
   verifyTurnstile
 } from "@nox-os/platform";
 import { SupabasePrivateFileStore } from "@nox-os/storage";
 
 describe("security boundaries", () => {
+  it("sets a bounded serverless API and database connection policy", () => {
+    expect(DEFAULT_API_TIMEOUT_MS).toBe(8_000);
+    expect(runtimeDatabaseTimeoutPolicy).toEqual({
+      connectTimeoutSeconds: 5,
+      idleConnectionTimeoutSeconds: 10,
+      maxConnectionLifetimeSeconds: 60
+    });
+  });
+
   it("rejects server-only information in the public Vite environment", () => {
     expect(() =>
       assertNoPublicSecrets({

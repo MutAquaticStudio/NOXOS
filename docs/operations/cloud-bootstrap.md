@@ -24,9 +24,24 @@ auditing.
 ## Environment isolation
 
 ```text
-Preview   -> isolated non-production resources
-Staging   -> persistent isolated non-production resources
+Preview    -> ordinary Git PR runtime; secretless and no data-plane resource
+Staging    -> trusted post-merge persistent isolated non-production resources
 Production -> production-only resources
 ```
 
 No Preview or Staging credential may point to Production.
+
+An ordinary Preview receives no runtime database, Storage, workflow, migration,
+service-role, diagnostic, Cloudflare, or Vercel-management credential. Preview acceptance is
+therefore limited to deployed identity, shell, and safe API health. The trusted Staging workflow
+performs the DB, Storage, and workflow diagnostic probes after provider deployment read-back.
+
+## Foundation performance policy
+
+- Module routes stay lazy-loaded; Vite warns when an output chunk exceeds 350 kB.
+- The foundation API uses an 8-second response budget; its Vercel Function is capped at 10
+  seconds. Long-running work belongs to `WorkflowLauncher`, not the request lifetime.
+- Runtime Postgres connections use a 5-second connection timeout, a 10-second idle timeout,
+  and a 60-second maximum connection lifetime. Future business queries must introduce bounded
+  query behavior as part of their G2 contract.
+- The shell has no heavy ambient global motion and honors reduced-motion preferences.
