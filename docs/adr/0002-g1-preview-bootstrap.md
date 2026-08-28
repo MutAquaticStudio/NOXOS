@@ -61,3 +61,10 @@ target-aware `vercel build --target=staging` to create the prebuilt output befor
 This prevents a Vercel CLI custom-environment settings lookup from becoming a second mutable
 configuration authority or blocking an otherwise verified Staging deployment. Production is
 unchanged and remains outside Gate 1 execution.
+
+## Amendment B-005: Explicit Vercel CLI project selection
+
+Every Vercel CLI invocation receives `--project` with the protected `VERCEL_PROJECT_ID`, in
+addition to the existing CI identity environment. This follows the Vercel CLI project-selection
+contract and removes any dependency on an ambient local link or repository-directory inference.
+The target remains the reconciled `staging` environment; no Production command is executed.

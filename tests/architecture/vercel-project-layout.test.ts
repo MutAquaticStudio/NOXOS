@@ -51,6 +51,7 @@ describe("Vercel project layout", () => {
       const source = readFileSync(deployer, "utf8");
       expect(source).toContain('"--cwd"');
       expect(source).toContain('"apps/nox-os"');
+      expect(source).toContain('"--project"');
       expect(source).toContain('"--token"');
       expect(source).not.toContain('"--scope"');
     }
