@@ -4,6 +4,7 @@ import { createRuntimeDatabase, probeDatabase } from "@nox-os/database";
 import { createRequestContext, createFoundationApi, HttpWorkflowLauncher } from "@nox-os/platform";
 import { UnavailableScientificAdapter } from "@nox-os/scientific";
 import { moduleDefinitions } from "../../src/modules/definitions.js";
+import { normalizedHeaders, routePath } from "../_transport.js";
 
 const workflowEndpoint = process.env.NOX_WORKFLOW_PROBE_URL;
 const workflowLauncher = workflowEndpoint
@@ -27,26 +28,6 @@ const foundationApi = createFoundationApi({
   workflowLauncher,
   diagnosticProbeToken: process.env.NOX_DIAGNOSTIC_PROBE_TOKEN
 });
-
-function routePath(request: VercelRequest): string {
-  const route = request.query.route;
-  if (Array.isArray(route)) {
-    return "/" + route.join("/");
-  }
-  if (typeof route === "string") {
-    return "/" + route;
-  }
-  return "/";
-}
-
-function normalizedHeaders(request: VercelRequest): Record<string, string | undefined> {
-  return Object.fromEntries(
-    Object.entries(request.headers).map(([key, value]) => [
-      key.toLowerCase(),
-      Array.isArray(value) ? value.join(",") : value
-    ])
-  );
-}
 
 export default async function handler(
   request: VercelRequest,
