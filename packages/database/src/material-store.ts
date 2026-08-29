@@ -201,7 +201,7 @@ function concentrate(row: ConcentrateRow): MaterialConcentrateRecord {
   return {
     materialId: row.material_id,
     sourceMaterialId: row.source_material_id,
-    concentrationPct: row.concentration_pct,
+    concentrationPct: Number(row.concentration_pct),
     solventMaterialId: row.solvent_material_id,
     solventCustomName: row.solvent_custom_name
   };
@@ -210,7 +210,7 @@ function component(row: ComponentRow): MaterialComponentRecord {
   return {
     materialId: row.material_id,
     componentMaterialId: row.component_material_id,
-    percentage: row.percentage,
+    percentage: row.percentage === null ? null : Number(row.percentage),
     role: row.role
   };
 }
