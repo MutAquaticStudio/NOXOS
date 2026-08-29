@@ -7,6 +7,7 @@ import type {
   MaterialComponentRecord,
   MaterialConcentrateRecord,
   MaterialIdentifierRecord,
+  MaterialHistoryEvent,
   MaterialOdorAssignmentRecord,
   MaterialPropertiesRecord,
   MaterialReadScope,
@@ -17,6 +18,13 @@ import type {
 } from "@nox-os/material-intelligence";
 import { canReadMaterial } from "@nox-os/material-intelligence";
 
+type AuditEntry = MaterialHistoryEvent & {
+  tenantId: string | null;
+  requestId: string;
+  correlationId: string;
+  metadata?: Record<string, string | number | boolean | null>;
+};
+
 type State = {
   materials: Map<string, MaterialRecord>;
   chemicals: Map<string, ChemicalEntityRecord>;
@@ -26,7 +34,9 @@ type State = {
   concentrates: Map<string, MaterialConcentrateRecord>;
   components: Map<string, MaterialComponentRecord[]>;
   changes: Map<string, MaterialChangeRequestRecord>;
-  audits: Array<Record<string, unknown>>;
+  tenantNames: Map<string, string>;
+  userDisplayNames: Map<string, string>;
+  audits: AuditEntry[];
   sequence: number;
 };
 
@@ -50,16 +60,24 @@ export class InMemoryMaterialStore implements MaterialStore {
     concentrates: new Map(),
     components: new Map(),
     changes: new Map(),
+    tenantNames: new Map(),
+    userDisplayNames: new Map(),
     audits: [],
     sequence: 1
   };
   private transactionTail: Promise<void> = Promise.resolve();
   private failAudit = false;
-  get auditEvents(): readonly Record<string, unknown>[] {
+  get auditEvents(): readonly AuditEntry[] {
     return this.state.audits;
   }
   setAuditInsertFailure(enabled: boolean): void {
     this.failAudit = enabled;
+  }
+  setTenantName(tenantId: string, name: string): void {
+    this.state.tenantNames.set(tenantId, name);
+  }
+  setPlatformUserDisplayName(userId: string, displayName: string): void {
+    this.state.userDisplayNames.set(userId, displayName);
   }
   async transaction<T>(operation: (store: MaterialStore) => Promise<T>): Promise<T> {
     let release!: () => void;
@@ -132,6 +150,12 @@ export class InMemoryMaterialStore implements MaterialStore {
       .filter((item) => item.normalizedDisplayName === normalizedName)
       .map((item) => structuredClone(item));
   }
+  async findTenantName(tenantId: string): Promise<string | null> {
+    return this.state.tenantNames.get(tenantId) ?? null;
+  }
+  async findPlatformUserDisplayName(userId: string): Promise<string | null> {
+    return this.state.userDisplayNames.get(userId) ?? null;
+  }
   async searchMaterials(
     input: MaterialSearchInput,
     scope: MaterialReadScope
@@ -145,6 +169,22 @@ export class InMemoryMaterialStore implements MaterialStore {
         if (input.scope && item.scope !== input.scope) return false;
         if (input.visibility && item.visibility !== input.visibility) return false;
         if (input.noteClassification && item.noteClassification !== input.noteClassification)
+          return false;
+        if (
+          input.view === "MY_TENANT" &&
+          !(item.scope === "TENANT" && item.tenantId === scope.tenantId)
+        )
+          return false;
+        if (
+          input.view === "SHARED" &&
+          !(
+            item.scope === "PLATFORM" ||
+            (item.scope === "TENANT" &&
+              item.visibility === "SHARED" &&
+              item.approvalStatus === "APPROVED" &&
+              item.tenantId !== scope.tenantId)
+          )
+        )
           return false;
         if (
           query &&
@@ -286,6 +326,27 @@ export class InMemoryMaterialStore implements MaterialStore {
       .sort((left, right) => left.id.localeCompare(right.id))
       .map((item) => structuredClone(item));
   }
+  async listMaterialHistory(materialId: string): Promise<MaterialHistoryEvent[]> {
+    const changeIds = new Set(
+      [...this.state.changes.values()]
+        .filter((change) => change.materialId === materialId)
+        .map((change) => change.id)
+    );
+    return this.state.audits
+      .filter(
+        (event) =>
+          event.resourceId === materialId ||
+          Boolean(event.resourceId && changeIds.has(event.resourceId))
+      )
+      .map(({ id, actorUserId, action, resourceType, resourceId, createdAt }) => ({
+        id,
+        actorUserId,
+        action,
+        resourceType,
+        resourceId,
+        createdAt
+      }));
+  }
   async resolveChangeRequest(input: {
     requestId: string;
     status: Extract<ChangeRequestStatus, "APPROVED" | "REJECTED">;
@@ -317,7 +378,18 @@ export class InMemoryMaterialStore implements MaterialStore {
     metadata?: Record<string, string | number | boolean | null>;
   }): Promise<void> {
     if (this.failAudit) throw new Error("controlled audit failure");
-    this.state.audits.push(structuredClone(input));
+    this.state.audits.push({
+      id: "audit-" + String(this.state.audits.length + 1),
+      tenantId: input.tenantId ?? null,
+      actorUserId: input.actorUserId,
+      action: input.action,
+      resourceType: input.resourceType,
+      resourceId: input.resourceId ?? null,
+      requestId: input.requestId,
+      correlationId: input.correlationId,
+      metadata: input.metadata,
+      createdAt: now()
+    });
   }
   async seedMaterial(input: Omit<MaterialRecord, "createdAt" | "updatedAt">): Promise<void> {
     this.state.materials.set(input.id, { ...input, createdAt: now(), updatedAt: now() });

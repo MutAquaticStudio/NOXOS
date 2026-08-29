@@ -134,7 +134,11 @@ function userPayload(user: PlatformUserRecord) {
     id: user.id,
     displayName: user.displayName,
     status: user.status,
-    platformRoleKey: user.platformRoleKey
+    platformRoleKey: user.platformRoleKey,
+    // This is a projection of the server-side static RBAC resolution. It lets
+    // the browser present Platform Control actions without treating the role
+    // itself as a UI authorization shortcut.
+    platformPermissions: resolvePlatformPermissions(user.platformRoleKey)
   };
 }
 

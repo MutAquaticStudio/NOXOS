@@ -112,11 +112,11 @@ try {
       throw new Error("Command Center did not close on Escape.");
     }
 
-    await page.goto(new URL("/material-intelligence", stagingUrl).toString(), {
+    await page.goto(new URL("/materials", stagingUrl).toString(), {
       waitUntil: "networkidle"
     });
     await requiredVisible(
-      page.getByRole("heading", { name: "Material Intelligence" }),
+      page.getByRole("heading", { name: "Material registry" }),
       "SPA deep link did not load"
     );
   }
@@ -155,7 +155,7 @@ try {
         throw new Error("Authentication foundation overflows the mobile viewport.");
       }
     } else {
-      await mobile.goto(new URL("/material-intelligence", stagingUrl).toString(), {
+      await mobile.goto(new URL("/materials", stagingUrl).toString(), {
         waitUntil: "networkidle"
       });
       if (await mobile.locator(".nox-inspector").isVisible()) {

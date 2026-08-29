@@ -2,7 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 test("keeps protected module routes behind the session boundary", async ({ page }) => {
-  await page.goto("/material-intelligence");
+  await page.goto("/materials");
 
   await expect(page).toHaveURL(/\/sign-in$/);
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();

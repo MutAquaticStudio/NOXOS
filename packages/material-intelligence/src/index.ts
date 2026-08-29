@@ -170,6 +170,8 @@ export type MaterialAggregate = {
 };
 export type MaterialSearchInput = {
   query?: string;
+  /** Server-side projection used by the Registry tabs; never a client-side full dataset filter. */
+  view?: "MY_TENANT" | "SHARED";
   materialType?: MaterialType;
   approvalStatus?: MaterialApprovalStatus;
   scope?: MaterialScope;
@@ -184,6 +186,16 @@ export type MaterialSearchInput = {
   offset: number;
 };
 export type MaterialReadScope = { tenantId?: string; platformAuthority: boolean };
+
+/** A projected read model over the G2 AuditEvent authority. */
+export type MaterialHistoryEvent = {
+  id: string;
+  actorUserId: string | null;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  createdAt: Date;
+};
 
 export type MaterialStore = {
   transaction<T>(operation: (store: MaterialStore) => Promise<T>): Promise<T>;
@@ -200,6 +212,8 @@ export type MaterialStore = {
     normalizedValue: string
   ): Promise<MaterialRecord[]>;
   findMaterialsByNormalizedDisplayName(normalizedName: string): Promise<MaterialRecord[]>;
+  findTenantName(tenantId: string): Promise<string | null>;
+  findPlatformUserDisplayName(userId: string): Promise<string | null>;
   searchMaterials(
     input: MaterialSearchInput,
     scope: MaterialReadScope
@@ -251,6 +265,7 @@ export type MaterialStore = {
     scope: MaterialReadScope,
     status?: ChangeRequestStatus
   ): Promise<MaterialChangeRequestRecord[]>;
+  listMaterialHistory(materialId: string): Promise<MaterialHistoryEvent[]>;
   resolveChangeRequest(input: {
     requestId: string;
     status: Extract<ChangeRequestStatus, "APPROVED" | "REJECTED">;
@@ -452,6 +467,12 @@ export class OsmoTaxonomyRegistry {
       subfamilies: taxonomy.SUBFAMILIES.length
     };
   }
+  terms(version: string): TaxonomyData {
+    const taxonomy = this.versions[version];
+    if (!taxonomy)
+      throw new MaterialProblem(400, "INVALID_TAXONOMY_TERM", "Taxonomy version is unavailable.");
+    return structuredClone(taxonomy);
+  }
   validate(assignments: readonly Omit<MaterialOdorAssignmentRecord, "materialId">[]): void {
     const grouped = new Map<string, Omit<MaterialOdorAssignmentRecord, "materialId">[]>();
     for (const assignment of assignments) {
@@ -581,7 +602,12 @@ export type MaterialTenantDetail = {
   materialType: MaterialType;
   approvalStatus: MaterialApprovalStatus;
   noteClassification: NoteClassification | null;
-  contributor: { tenantId: string | null; userId?: string };
+  contributor: {
+    tenantId: string | null;
+    tenantName?: string;
+    userId?: string;
+    userDisplayName?: string;
+  };
   approval: { authority: ReviewAuthority | null; approvedByUserId?: string };
   identifiers: readonly MaterialIdentifierRecord[];
   properties: Omit<MaterialPropertiesRecord, "materialId" | "createdAt" | "updatedAt"> | null;
@@ -766,6 +792,7 @@ export type MaterialApiOptions = {
   definitions: readonly ModuleDefinition[];
   featureFlags: FeatureFlagResolver;
   taxonomy?: OsmoTaxonomyRegistry;
+  tgscReferenceAdapter?: TgscReferenceAdapter;
 };
 
 export class MaterialIntelligenceApi {
@@ -774,6 +801,78 @@ export class MaterialIntelligenceApi {
     this.taxonomy = options.taxonomy ?? new OsmoTaxonomyRegistry();
   }
   registerRoutes(registrar: ApiRouteRegistrar): void {
+    registrar.get(
+      "/materials/taxonomy",
+      this.handle(async (request) => {
+        await this.tenant(request, MATERIAL_PERMISSIONS.read);
+        const version = parseQuery(
+          z.object({ version: z.string().trim().min(1).max(40).default("1.2") }),
+          request
+        ).version;
+        return { status: 200, body: { taxonomy: { version, ...this.taxonomy.terms(version) } } };
+      })
+    );
+    registrar.get(
+      "/materials/reference/tgsc",
+      this.handle(async (request) => {
+        await this.tenant(request, MATERIAL_PERMISSIONS.read);
+        const cas = parseQuery(z.object({ cas: nonEmptyText }), request).cas;
+        if (!this.options.tgscReferenceAdapter)
+          return {
+            status: 503,
+            body: {
+              reference: {
+                state: "UNAVAILABLE",
+                message: "TGSC reference lookup is unavailable in this environment."
+              }
+            }
+          };
+        const candidate = await this.options.tgscReferenceAdapter.lookupByCas(cas);
+        if ("kind" in candidate)
+          return {
+            status: 404,
+            body: {
+              reference: {
+                state: "NOT_FOUND",
+                message: "No TGSC reference was found for this CAS value."
+              }
+            }
+          };
+        return {
+          status: 200,
+          body: {
+            reference: {
+              source: candidate.sourceReference,
+              values: candidate.fields,
+              ...(safeExternalReference(candidate.sourceReference)
+                ? { referenceUrl: candidate.sourceReference }
+                : {})
+            }
+          }
+        };
+      })
+    );
+    registrar.get(
+      "/materials/identity-resolution",
+      this.handle(async (request) => {
+        await this.tenant(request, MATERIAL_PERMISSIONS.create);
+        const input = parseQuery(identityResolutionQuerySchema, request);
+        const identifiers = (
+          [
+            ["CAS", input.cas],
+            ["FEMA", input.fema],
+            ["INCI", input.inci]
+          ] as const
+        )
+          .filter(([, value]) => Boolean(value))
+          .map(([identifierType, value]) => ({ identifierType, value: value! }));
+        const resolution = await resolveMaterialIdentity(this.options.store, {
+          displayName: input.displayName,
+          identifiers
+        });
+        return { status: 200, body: { identityResolution: resolution } };
+      })
+    );
     registrar.get(
       "/materials",
       this.handle(async (request) => {
@@ -798,11 +897,13 @@ export class MaterialIntelligenceApi {
         return {
           status: 200,
           body: {
-            materials: materials.map((item) =>
-              toTenantMaterialDetail(item, {
-                tenantId: context.tenant.tenantId,
-                platformAuthority: false
-              })
+            materials: await Promise.all(
+              materials.map((item) =>
+                this.toTenantDetail(item, {
+                  tenantId: context.tenant.tenantId,
+                  platformAuthority: false
+                })
+              )
             )
           }
         };
@@ -819,10 +920,35 @@ export class MaterialIntelligenceApi {
         return {
           status: 200,
           body: {
-            material: toTenantMaterialDetail(aggregate, {
+            material: await this.toTenantDetail(aggregate, {
               tenantId: context.tenant.tenantId,
               platformAuthority: false
             })
+          }
+        };
+      })
+    );
+    registrar.get(
+      "/materials/:materialId/history",
+      this.handle(async (request) => {
+        const context = await this.tenant(request, MATERIAL_PERMISSIONS.read);
+        const aggregate = await this.requireReadable(routeUuid(request, "materialId"), {
+          tenantId: context.tenant.tenantId,
+          platformAuthority: false
+        });
+        const maySeeActor = aggregate.material.tenantId === context.tenant.tenantId;
+        const history = await this.options.store.listMaterialHistory(aggregate.material.id);
+        return {
+          status: 200,
+          body: {
+            history: history.map((event) => ({
+              id: event.id,
+              action: event.action,
+              resourceType: event.resourceType,
+              resourceId: event.resourceId,
+              createdAt: event.createdAt,
+              ...(maySeeActor ? { actorUserId: event.actorUserId } : {})
+            }))
           }
         };
       })
@@ -843,7 +969,7 @@ export class MaterialIntelligenceApi {
         return {
           status: 201,
           body: {
-            material: toTenantMaterialDetail(created.aggregate, {
+            material: await this.toTenantDetail(created.aggregate, {
               tenantId: context.tenant.tenantId,
               platformAuthority: false
             }),
@@ -1179,6 +1305,29 @@ export class MaterialIntelligenceApi {
     if (!aggregate || !canReadMaterial(scope, aggregate.material)) throw notFound();
     return aggregate;
   }
+  private async toTenantDetail(
+    aggregate: MaterialAggregate,
+    viewer: MaterialReadScope
+  ): Promise<MaterialTenantDetail> {
+    const detail = toTenantMaterialDetail(aggregate, viewer);
+    const maySeeUser = viewer.platformAuthority || viewer.tenantId === aggregate.material.tenantId;
+    const [tenantName, userDisplayName] = await Promise.all([
+      aggregate.material.tenantId
+        ? this.options.store.findTenantName(aggregate.material.tenantId)
+        : Promise.resolve(null),
+      maySeeUser
+        ? this.options.store.findPlatformUserDisplayName(aggregate.material.contributorUserId)
+        : Promise.resolve(null)
+    ]);
+    return {
+      ...detail,
+      contributor: {
+        ...detail.contributor,
+        ...(tenantName ? { tenantName } : {}),
+        ...(maySeeUser && userDisplayName ? { userDisplayName } : {})
+      }
+    };
+  }
   private async tenant(request: ApiRequest, permission: string): Promise<TenantRequestContext> {
     const context = await this.options.authorization.tenantContext(request);
     this.requireModule(context, permission);
@@ -1259,12 +1408,27 @@ function routeUuid(request: ApiRequest, name: string): string {
 function notFound(): MaterialProblem {
   return new MaterialProblem(404, "NOT_FOUND", "Material resource was not found.");
 }
+function safeExternalReference(value: string): boolean {
+  try {
+    const reference = new URL(value);
+    return reference.protocol === "https:" || reference.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
 const decisionSchema = z.object({
   decisionNote: z.string().trim().min(1).max(1000).nullable().optional()
+});
+const identityResolutionQuerySchema = z.object({
+  displayName: nonEmptyText,
+  cas: nonEmptyText.optional(),
+  fema: nonEmptyText.optional(),
+  inci: nonEmptyText.optional()
 });
 const searchInputSchema = z
   .object({
     query: z.string().trim().min(1).max(240).optional(),
+    view: z.enum(["MY_TENANT", "SHARED"]).optional(),
     materialType: materialTypeSchema.optional(),
     approvalStatus: materialApprovalStatusSchema.optional(),
     scope: materialScopeSchema.optional(),

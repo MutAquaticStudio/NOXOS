@@ -34,12 +34,23 @@ import {
   PlatformTenantsScreen,
   PlatformUsersScreen,
   TenantSettingsScreen,
+  NoxApiError,
   type ApiClient
 } from "./platform-control";
 
 const LazyFoundationModule = lazy(async () => {
   const module = await import("./modules/foundation-module");
   return { default: module.FoundationModuleSurface };
+});
+
+const LazyMaterialExperience = lazy(async () => {
+  const module = await import("./material-intelligence");
+  return { default: module.MaterialExperience };
+});
+
+const LazyPlatformMaterialExperience = lazy(async () => {
+  const module = await import("./material-intelligence");
+  return { default: module.PlatformMaterialExperience };
 });
 
 const publicIdentity = publicEnvironment({
@@ -67,6 +78,7 @@ type PlatformIdentity = {
   displayName: string | null;
   status: "ACTIVE" | "DISABLED";
   platformRoleKey: "PLATFORM_OWNER" | null;
+  platformPermissions: string[];
 };
 
 function FoundationRoute({ definition }: { definition: ModuleDefinition }) {
@@ -299,7 +311,13 @@ function AuthenticatedApplication({
         body: options.body === undefined ? undefined : JSON.stringify(options.body)
       });
       if (!response.ok) {
-        throw new Error(`Request was rejected (${response.status}).`);
+        const errorBody = (await response.json().catch(() => undefined)) as
+          { error?: { code?: string; message?: string } } | undefined;
+        throw new NoxApiError(
+          errorBody?.error?.message ?? `Request was rejected (${response.status}).`,
+          response.status,
+          errorBody?.error?.code
+        );
       }
       return (await response.json()) as never;
     },
@@ -339,15 +357,20 @@ function AuthenticatedApplication({
   }, [appRail]);
   const routeEntries = useMemo(
     () =>
-      enabledDefinitions.flatMap((definition) => [
-        { path: definition.descriptor.routeRoot, definition },
-        ...definition.descriptor.childRoutes.map((path) => ({ path, definition }))
-      ]),
+      enabledDefinitions
+        .filter((definition) => definition.descriptor.id !== "material-intelligence")
+        .flatMap((definition) => [
+          { path: definition.descriptor.routeRoot, definition },
+          ...definition.descriptor.childRoutes.map((path) => ({ path, definition }))
+        ]),
     [enabledDefinitions]
   );
-  const activeDefinition = routeEntries.find((route) =>
-    matchPath({ path: route.path, end: true }, location.pathname)
-  )?.definition;
+  const activeDefinition =
+    routeEntries.find((route) => matchPath({ path: route.path, end: true }, location.pathname))
+      ?.definition ??
+    (location.pathname.startsWith("/materials")
+      ? moduleDefinitions.find((definition) => definition.descriptor.id === "material-intelligence")
+      : undefined);
   const density = activeDefinition ? toShellDensity(activeDefinition.uxProfile.density) : "DEFAULT";
   const isPlatformOwner = platformIdentity.identity?.platformRoleKey === "PLATFORM_OWNER";
   const hasNoWorkspace = tenantSelection.state === "ready" && tenantSelection.choices.length === 0;
@@ -393,9 +416,21 @@ function AuthenticatedApplication({
       }}
       systemNavigation={
         isPlatformOwner ? (
-          <button type="button" onClick={() => navigate("/platform/tenants")}>
-            Platform Console
-          </button>
+          <>
+            <button type="button" onClick={() => navigate("/platform/tenants")}>
+              Platform Console
+            </button>
+            {platformIdentity.identity?.platformPermissions.includes(
+              "module.material-intelligence.reference.read"
+            ) ? (
+              <button
+                type="button"
+                onClick={() => navigate("/platform/material-intelligence/review")}
+              >
+                Material review
+              </button>
+            ) : null}
+          </>
         ) : undefined
       }
       tenantControl={tenantControl}
@@ -438,6 +473,41 @@ function AuthenticatedApplication({
             path="/platform/audit"
             element={
               isPlatformOwner ? <PlatformAuditScreen api={api} /> : <PlatformConsoleDenied />
+            }
+          />
+          <Route
+            path="/platform/material-intelligence/review/*"
+            element={
+              <Suspense fallback={<p className="nox-ai-context">Loading Material review…</p>}>
+                <LazyPlatformMaterialExperience
+                  api={api}
+                  platformPermissions={platformIdentity.identity?.platformPermissions ?? []}
+                />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/materials/*"
+            element={
+              <Suspense fallback={<p className="nox-ai-context">Loading Material Intelligence…</p>}>
+                <LazyMaterialExperience
+                  api={api}
+                  tenantId={activeTenant?.tenantId}
+                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/material-intelligence/*"
+            element={
+              <Navigate
+                to={
+                  location.pathname.replace(/^\/material-intelligence/, "/materials") +
+                  location.search
+                }
+                replace
+              />
             }
           />
           <Route

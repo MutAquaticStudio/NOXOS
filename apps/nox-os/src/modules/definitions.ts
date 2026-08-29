@@ -259,8 +259,13 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
   defineModule({
     id: "material-intelligence",
     displayName: "Material Intelligence",
-    routeRoot: "/material-intelligence",
-    childRoutes: ["/material-intelligence/:materialId"],
+    routeRoot: "/materials",
+    childRoutes: [
+      "/materials/new",
+      "/materials/:materialId",
+      "/materials/review",
+      "/materials/review/:requestId"
+    ],
     apiNamespace: "materials",
     navigationGroup: "R&D",
     lifecycle: "INTERNAL",

@@ -11,7 +11,8 @@ import {
   MATERIAL_ENTITLEMENT,
   MATERIAL_PERMISSIONS,
   MaterialProblem,
-  type MaterialRecord
+  type MaterialRecord,
+  type TgscReferenceAdapter
 } from "@nox-os/material-intelligence";
 import { moduleDefinitions } from "../../apps/nox-os/src/modules/definitions";
 import { InMemoryMaterialStore } from "../helpers/in-memory-material-store";
@@ -24,6 +25,7 @@ const IDS = {
   ownerB: "20000000-0000-4000-8000-000000000003",
   platform: "20000000-0000-4000-8000-000000000004",
   molecule: "30000000-0000-4000-8000-000000000009",
+  platformReference: "30000000-0000-4000-8000-000000000010",
   chemical: "40000000-0000-4000-8000-000000000001"
 } as const;
 
@@ -65,8 +67,11 @@ function authenticatedContext(userId: string): AuthenticatedRequestContext {
   };
 }
 
-function fixture() {
+function fixture(input: { tgscReferenceAdapter?: TgscReferenceAdapter } = {}) {
   const store = new InMemoryMaterialStore();
+  store.setTenantName(IDS.tenantA, "Tenant A");
+  store.setTenantName(IDS.tenantB, "Tenant B");
+  store.setPlatformUserDisplayName(IDS.ownerA, "User A");
   const authorization = {
     async tenantContext(request: ApiRequest) {
       const actor = request.headers.authorization?.replace("Bearer ", "");
@@ -93,7 +98,8 @@ function fixture() {
     store,
     authorization,
     definitions: moduleDefinitions,
-    featureFlags: new LocalFeatureFlagResolver(["module.material-intelligence"])
+    featureFlags: new LocalFeatureFlagResolver(["module.material-intelligence"]),
+    tgscReferenceAdapter: input.tgscReferenceAdapter
   });
   const router = new InternalApiRouter();
   service.registerRoutes(router);
@@ -157,7 +163,7 @@ async function createTenantMaterial(
 
 describe("G3-A Material API", () => {
   it("creates tenant Materials atomically as pending CREATE requests and rejects injected tenant authority", async () => {
-    const { request } = fixture();
+    const { request, store } = fixture();
     const created = await createTenantMaterial(request);
     expect(created.material).toMatchObject({
       approvalStatus: "PENDING_REVIEW",
@@ -301,6 +307,9 @@ describe("G3-A Material API", () => {
     });
     expect(crossTenant.status).toBe(200);
     expect(JSON.stringify(crossTenant.body)).not.toContain(IDS.ownerA);
+    expect(crossTenant.body).toMatchObject({
+      material: { contributor: { tenantName: "Tenant A" } }
+    });
   });
 
   it("uses PostgreSQL-backed text and taxonomy filters without widening tenant visibility", async () => {
@@ -329,6 +338,153 @@ describe("G3-A Material API", () => {
     expect(
       (foreign.body as { materials: readonly { id: string }[] }).materials.map((item) => item.id)
     ).not.toContain(created.material.id);
+  });
+
+  it("projects registry views, pinned taxonomy, safe TGSC unavailability, and audit history without cross-tenant actor disclosure", async () => {
+    const { request, store } = fixture();
+    const created = await createTenantMaterial(request, "History material");
+    const taxonomy = await request({
+      path: "/materials/taxonomy",
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      query: { version: "1.2" }
+    });
+    expect(taxonomy.status).toBe(200);
+    expect(
+      (taxonomy.body as { taxonomy: { GRAND_FAMILIES: string[] } }).taxonomy.GRAND_FAMILIES
+    ).toContain("Sweet/Balsamic");
+    const identity = await request({
+      path: "/materials/identity-resolution",
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      query: { displayName: "History material", cas: "121-33-5" }
+    });
+    expect(identity.status).toBe(200);
+    expect(identity.body).toMatchObject({
+      identityResolution: { kind: "EXACT_MATCH", materialId: created.material.id }
+    });
+    const unavailable = await request({
+      path: "/materials/reference/tgsc",
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      query: { cas: "121-33-5" }
+    });
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.body).toMatchObject({ reference: { state: "UNAVAILABLE" } });
+    const ownRegistry = await request({
+      path: "/materials",
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      query: { view: "MY_TENANT" }
+    });
+    expect(
+      (ownRegistry.body as { materials: readonly { id: string }[] }).materials.map(
+        (item) => item.id
+      )
+    ).toContain(created.material.id);
+    const ownHistory = await request({
+      path: `/materials/${created.material.id}/history`,
+      actor: "owner-a",
+      tenantId: IDS.tenantA
+    });
+    expect(ownHistory.status).toBe(200);
+    expect(JSON.stringify(ownHistory.body)).toContain(IDS.ownerA);
+
+    await request({
+      method: "POST",
+      path: `/material-change-requests/${created.changeRequestId}/approve`,
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      body: {}
+    });
+    const sharing = await request({
+      method: "POST",
+      path: `/materials/${created.material.id}/change-requests`,
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      body: { requestType: "GENERAL", visibility: "SHARED" }
+    });
+    const sharingId = (sharing.body as { changeRequest: { id: string } }).changeRequest.id;
+    await request({
+      method: "POST",
+      path: `/material-change-requests/${sharingId}/approve`,
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      body: {}
+    });
+    const sharedRegistry = await request({
+      path: "/materials",
+      actor: "owner-b",
+      tenantId: IDS.tenantB,
+      query: { view: "SHARED" }
+    });
+    expect(
+      (sharedRegistry.body as { materials: readonly { id: string }[] }).materials.map(
+        (item) => item.id
+      )
+    ).toContain(created.material.id);
+    await store.seedMaterial({
+      id: IDS.platformReference,
+      tenantId: null,
+      scope: "PLATFORM",
+      visibility: "SHARED",
+      displayName: "Platform reference",
+      normalizedDisplayName: "platform reference",
+      materialType: "NATURAL",
+      approvalStatus: "APPROVED",
+      noteClassification: null,
+      chemicalEntityId: null,
+      contributorUserId: IDS.platform,
+      approvedByUserId: IDS.platform,
+      approvedByAuthority: "PLATFORM"
+    });
+    const sharedWithPlatformReference = await request({
+      path: "/materials",
+      actor: "owner-b",
+      tenantId: IDS.tenantB,
+      query: { view: "SHARED" }
+    });
+    expect(
+      (sharedWithPlatformReference.body as { materials: readonly { id: string }[] }).materials.map(
+        (item) => item.id
+      )
+    ).toContain(IDS.platformReference);
+    const foreignHistory = await request({
+      path: `/materials/${created.material.id}/history`,
+      actor: "owner-b",
+      tenantId: IDS.tenantB
+    });
+    expect(foreignHistory.status).toBe(200);
+    expect(JSON.stringify(foreignHistory.body)).not.toContain(IDS.ownerA);
+  });
+
+  it("presents a server-side TGSC candidate as explicit reference data without approving Material", async () => {
+    const { request } = fixture({
+      tgscReferenceAdapter: {
+        async lookupByCas() {
+          return {
+            cas: "121-33-5",
+            displayName: "Vanillin",
+            sourceReference: "https://reference.example.test/tgsc/121-33-5",
+            fields: { appearance: "White crystals", assay: "99%" }
+          };
+        }
+      }
+    });
+    const response = await request({
+      path: "/materials/reference/tgsc",
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      query: { cas: "121-33-5" }
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      reference: {
+        source: "https://reference.example.test/tgsc/121-33-5",
+        referenceUrl: "https://reference.example.test/tgsc/121-33-5",
+        values: { appearance: "White crystals", assay: "99%" }
+      }
+    });
   });
 
   it("keeps ChemicalEntity data inside the internal review/snapshot boundary", async () => {

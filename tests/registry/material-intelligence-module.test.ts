@@ -8,6 +8,13 @@ describe("G3-A Material Intelligence Module contract", () => {
   it("registers the canonical entitlement, five tenant permissions, grants, and platform authority", () => {
     expect(definition).toBeDefined();
     expect(definition?.descriptor.entitlement).toBe("module.material-intelligence");
+    expect(definition?.descriptor.routeRoot).toBe("/materials");
+    expect(definition?.descriptor.childRoutes).toEqual([
+      "/materials/new",
+      "/materials/:materialId",
+      "/materials/review",
+      "/materials/review/:requestId"
+    ]);
     expect(definition?.authorization.permissions).toEqual([
       "module.material-intelligence.material.read",
       "module.material-intelligence.material.create",

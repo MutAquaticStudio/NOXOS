@@ -10,6 +10,7 @@ import type {
   MaterialComponentRecord,
   MaterialConcentrateRecord,
   MaterialIdentifierRecord,
+  MaterialHistoryEvent,
   MaterialOdorAssignmentRecord,
   MaterialPropertiesRecord,
   MaterialReadScope,
@@ -111,6 +112,14 @@ type ChangeRow = {
   decision_note: string | null;
   created_at: Date;
   updated_at: Date;
+};
+type MaterialHistoryRow = {
+  id: string;
+  actor_user_id: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  created_at: Date;
 };
 
 function material(row: MaterialRow): MaterialRecord {
@@ -221,6 +230,16 @@ function change(row: ChangeRow): MaterialChangeRequestRecord {
     updatedAt: row.updated_at
   };
 }
+function history(row: MaterialHistoryRow): MaterialHistoryEvent {
+  return {
+    id: row.id,
+    actorUserId: row.actor_user_id,
+    action: row.action,
+    resourceType: row.resource_type,
+    resourceId: row.resource_id,
+    createdAt: row.created_at
+  };
+}
 
 const materialColumns =
   "id, tenant_id, scope, visibility, display_name, normalized_display_name, material_type, approval_status, note_classification, chemical_entity_id, contributor_user_id, approved_by_user_id, approved_by_authority, created_at, updated_at";
@@ -308,6 +327,18 @@ class PostgresMaterialStore implements MaterialStore {
     >`select id, tenant_id, scope, visibility, display_name, normalized_display_name, material_type, approval_status, note_classification, chemical_entity_id, contributor_user_id, approved_by_user_id, approved_by_authority, created_at, updated_at from material_intelligence.materials where normalized_display_name = ${normalizedName} order by id`;
     return rows.map(material);
   }
+  async findTenantName(tenantId: string): Promise<string | null> {
+    const rows = await this.sql<{ name: string }[]>`
+      select name from platform.tenants where id = ${tenantId}
+    `;
+    return rows[0]?.name ?? null;
+  }
+  async findPlatformUserDisplayName(userId: string): Promise<string | null> {
+    const rows = await this.sql<{ display_name: string | null }[]>`
+      select display_name from platform.platform_users where id = ${userId}
+    `;
+    return rows[0]?.display_name ?? null;
+  }
   async searchMaterials(
     input: MaterialSearchInput,
     scope: MaterialReadScope
@@ -326,6 +357,12 @@ class PostgresMaterialStore implements MaterialStore {
       and (${input.scope ?? null}::text is null or m.scope = ${input.scope ?? null})
       and (${input.visibility ?? null}::text is null or m.visibility = ${input.visibility ?? null})
       and (${input.noteClassification ?? null}::text is null or m.note_classification = ${input.noteClassification ?? null})
+      and (
+        ${input.view ?? null}::text is null
+        or (${input.view ?? null} = 'MY_TENANT' and m.scope = 'TENANT' and m.tenant_id = ${scope.tenantId ?? null})
+        or (${input.view ?? null} = 'SHARED' and m.scope = 'PLATFORM')
+        or (${input.view ?? null} = 'SHARED' and m.scope = 'TENANT' and m.visibility = 'SHARED' and m.approval_status = 'APPROVED' and m.tenant_id <> ${scope.tenantId ?? null})
+      )
       and (${term}::text is null or m.display_name ilike ${term} escape '\\' or exists (select 1 from material_intelligence.material_identifiers as i where i.material_id = m.id and i.value ilike ${term} escape '\\'))
       and (
         ${taxonomyFilters.length} = 0 or not exists (
@@ -450,6 +487,16 @@ class PostgresMaterialStore implements MaterialStore {
       ChangeRow[]
     >`select id, material_id, tenant_id, requested_by_user_id, request_type, proposed_patch, status, reviewed_by_user_id, reviewed_by_authority, decision_note, created_at, updated_at from material_intelligence.material_change_requests where (${scope.platformAuthority} = true or tenant_id = ${scope.tenantId ?? null}) and (${status ?? null}::text is null or status = ${status ?? null}) order by created_at, id`;
     return rows.map(change);
+  }
+  async listMaterialHistory(materialId: string): Promise<MaterialHistoryEvent[]> {
+    const rows = await this.sql<MaterialHistoryRow[]>`
+      select distinct a.id, a.actor_user_id, a.action, a.resource_type, a.resource_id, a.created_at
+      from platform.audit_events as a
+      left join material_intelligence.material_change_requests as c on c.id::text = a.resource_id
+      where a.resource_id = ${materialId} or c.material_id = ${materialId}
+      order by a.created_at, a.id
+    `;
+    return rows.map(history);
   }
   async resolveChangeRequest(input: {
     requestId: string;
