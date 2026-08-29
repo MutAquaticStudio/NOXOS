@@ -16,7 +16,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: nox-os-preview-${{ github.event.pull_request.number }}
+  # pull_request and pull_request_target are deliberately separate trust domains.
+  # Their runs must not cancel one another for the same PR.
+  group: nox-os-preview-${{ github.event_name }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
