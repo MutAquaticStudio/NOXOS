@@ -33,6 +33,9 @@ describe("G3 acceptance evidence boundary", () => {
     expect(stagingVerifier).toContain(
       "delete from material_intelligence.materials where id = ${materialId}"
     );
+    expect(stagingVerifier).toContain("function apiBypassHeaders()");
+    expect(stagingVerifier).toContain("...apiBypassHeaders()");
+    expect(stagingVerifier).toContain("await mobileContext.close()");
   });
 
   it("keeps authenticated Preview credentials browser-scoped and out of Material source", () => {
