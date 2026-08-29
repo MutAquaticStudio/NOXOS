@@ -1,4 +1,5 @@
 import { chromium } from "@playwright/test";
+import { resolvePreviewBrowserContract } from "./preview-browser-contract.mjs";
 
 const stagingUrl = process.env.NOX_STAGING_URL;
 const expectedSha = process.env.EXPECTED_SOURCE_SHA;
@@ -15,6 +16,18 @@ const requiredVisible = async (locator, description) => {
   }
 };
 
+const readJson = async (page, path) =>
+  page.evaluate(async (requestPath) => {
+    const response = await fetch(requestPath);
+    let body;
+    try {
+      body = await response.json();
+    } catch {
+      body = undefined;
+    }
+    return { ok: response.ok, status: response.status, body };
+  }, path);
+
 const browser = await chromium.launch({ headless: true });
 try {
   const browserHeaders = protectionBypass
@@ -29,54 +42,73 @@ try {
   });
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await page.goto(stagingUrl, { waitUntil: "networkidle" });
+  const browserContract = resolvePreviewBrowserContract(await readJson(page, "/api/v1/me"));
 
-  await requiredVisible(page.locator(".nox-system-bar"), "System Bar is missing");
-  await requiredVisible(
-    page.getByRole("navigation", { name: "Application modules" }),
-    "App Rail is missing"
-  );
-  await requiredVisible(page.locator(".nox-workspace-tabs"), "Workspace Tabs are missing");
-  await requiredVisible(page.locator(".nox-inspector"), "Inspector is missing");
-  await requiredVisible(
-    page.getByRole("button", { name: "Peek current context" }),
-    "Peek trigger is missing"
-  );
-  await requiredVisible(
-    page.getByRole("button", { name: /NØX Assist/ }),
-    "NØX Assist trigger is missing"
-  );
+  if (browserContract === "AUTHENTICATED_PLATFORM") {
+    await page.goto(new URL("/sign-in", stagingUrl).toString(), { waitUntil: "networkidle" });
+    await requiredVisible(page.getByRole("heading", { name: "Sign in" }), "Sign In is missing");
+    if (await page.getByRole("navigation", { name: "Application modules" }).count()) {
+      throw new Error("Unauthenticated browser rendered protected shell content.");
+    }
+    if ((await page.locator(".nox-os").getAttribute("data-density")) !== "DEFAULT") {
+      throw new Error("Authentication foundation did not preserve the OS density authority.");
+    }
 
-  const identity = await page.locator(".nox-ai-context").last().textContent();
-  if (
-    !identity?.includes("Environment: " + expectedEnvironment) ||
-    !identity.includes("Source: " + expectedSha)
-  ) {
-    throw new Error("Browser-visible environment or source identity is incorrect.");
+    await page.goto(new URL("/settings/tenant", stagingUrl).toString(), {
+      waitUntil: "networkidle"
+    });
+    await requiredVisible(
+      page.getByRole("heading", { name: "Sign in" }),
+      "Protected SPA deep link"
+    );
+  } else {
+    await requiredVisible(page.locator(".nox-system-bar"), "System Bar is missing");
+    await requiredVisible(
+      page.getByRole("navigation", { name: "Application modules" }),
+      "App Rail is missing"
+    );
+    await requiredVisible(page.locator(".nox-workspace-tabs"), "Workspace Tabs are missing");
+    await requiredVisible(page.locator(".nox-inspector"), "Inspector is missing");
+    await requiredVisible(
+      page.getByRole("button", { name: "Peek current context" }),
+      "Peek trigger is missing"
+    );
+    await requiredVisible(
+      page.getByRole("button", { name: /NØX Assist/ }),
+      "NØX Assist trigger is missing"
+    );
+
+    const identity = await page.locator(".nox-ai-context").last().textContent();
+    if (
+      !identity?.includes("Environment: " + expectedEnvironment) ||
+      !identity.includes("Source: " + expectedSha)
+    ) {
+      throw new Error("Browser-visible environment or source identity is incorrect.");
+    }
+    if ((await page.locator(".nox-os").getAttribute("data-density")) !== "COMPACT") {
+      throw new Error("Module-derived compact density is not active on the staging shell.");
+    }
+
+    const commandTrigger = page.getByRole("button", {
+      name: "Search NØX-OS or run a command…"
+    });
+    await commandTrigger.click();
+    await requiredVisible(page.getByRole("dialog", { name: "Command Center" }), "Command Center");
+    await page.keyboard.press("Escape");
+    if (await page.getByRole("dialog", { name: "Command Center" }).count()) {
+      throw new Error("Command Center did not close on Escape.");
+    }
+
+    await page.goto(new URL("/material-intelligence", stagingUrl).toString(), {
+      waitUntil: "networkidle"
+    });
+    await requiredVisible(
+      page.getByRole("heading", { name: "Material Intelligence" }),
+      "SPA deep link did not load"
+    );
   }
-  if ((await page.locator(".nox-os").getAttribute("data-density")) !== "COMPACT") {
-    throw new Error("Module-derived compact density is not active on the staging shell.");
-  }
 
-  const commandTrigger = page.getByRole("button", { name: "Search NØX-OS or run a command…" });
-  await commandTrigger.click();
-  await requiredVisible(page.getByRole("dialog", { name: "Command Center" }), "Command Center");
-  await page.keyboard.press("Escape");
-  if (await page.getByRole("dialog", { name: "Command Center" }).count()) {
-    throw new Error("Command Center did not close on Escape.");
-  }
-
-  await page.goto(new URL("/material-intelligence", stagingUrl).toString(), {
-    waitUntil: "networkidle"
-  });
-  await requiredVisible(
-    page.getByRole("heading", { name: "Material Intelligence" }),
-    "SPA deep link did not load"
-  );
-
-  const health = await page.evaluate(async () => {
-    const response = await fetch("/api/v1/health");
-    return { ok: response.ok, body: await response.json() };
-  });
+  const health = await readJson(page, "/api/v1/health");
   if (
     !health.ok ||
     health.body.environment !== expectedEnvironment ||
@@ -90,18 +122,30 @@ try {
     extraHTTPHeaders: browserHeaders
   });
   try {
-    await mobile.goto(new URL("/material-intelligence", stagingUrl).toString(), {
-      waitUntil: "networkidle"
-    });
-    if (await mobile.locator(".nox-inspector").isVisible()) {
-      throw new Error("Inspector must collapse at the mobile foundation breakpoint.");
-    }
-    if (
-      (await mobile
-        .locator(".nox-app-rail")
-        .evaluate((node) => getComputedStyle(node).position)) !== "fixed"
-    ) {
-      throw new Error("Mobile App Rail is not fixed at the foundation breakpoint.");
+    if (browserContract === "AUTHENTICATED_PLATFORM") {
+      await mobile.goto(new URL("/sign-in", stagingUrl).toString(), { waitUntil: "networkidle" });
+      await requiredVisible(mobile.getByRole("heading", { name: "Sign in" }), "mobile Sign In");
+      const geometry = await mobile.locator(".nox-auth-card").evaluate((node) => {
+        const bounds = node.getBoundingClientRect();
+        return { left: bounds.left, right: bounds.right, viewport: window.innerWidth };
+      });
+      if (geometry.left < 0 || geometry.right > geometry.viewport) {
+        throw new Error("Authentication foundation overflows the mobile viewport.");
+      }
+    } else {
+      await mobile.goto(new URL("/material-intelligence", stagingUrl).toString(), {
+        waitUntil: "networkidle"
+      });
+      if (await mobile.locator(".nox-inspector").isVisible()) {
+        throw new Error("Inspector must collapse at the mobile foundation breakpoint.");
+      }
+      if (
+        (await mobile
+          .locator(".nox-app-rail")
+          .evaluate((node) => getComputedStyle(node).position)) !== "fixed"
+      ) {
+        throw new Error("Mobile App Rail is not fixed at the foundation breakpoint.");
+      }
     }
   } finally {
     await mobile.close();
@@ -110,4 +154,4 @@ try {
   await browser.close();
 }
 
-console.log("DEPLOYMENT_BROWSER_SHELL=PASS");
+console.log("DEPLOYMENT_BROWSER_CONTRACT=PASS");
