@@ -642,27 +642,32 @@ async function cleanupFixtures(): Promise<void> {
   try {
     if (userIds.length > 0 || tenantIds.length > 0) {
       await maintenance.begin(async (transaction) => {
-        if (userIds.length > 0 || tenantIds.length > 0) {
-          await transaction`
-            delete from platform.audit_events
-            where actor_user_id = any(${transaction.array(userIds)})
-              or tenant_id = any(${transaction.array(tenantIds)})
-          `;
+        for (const userId of userIds) {
+          await transaction`delete from platform.audit_events where actor_user_id = ${userId}`;
         }
-        if (tenantIds.length > 0) {
-          await transaction`
-            delete from platform.tenant_entitlements where tenant_id = any(${transaction.array(tenantIds)})
-          `;
-          await transaction`
-            delete from platform.tenant_memberships where tenant_id = any(${transaction.array(tenantIds)})
-          `;
-          await transaction`delete from platform.tenants where id = any(${transaction.array(tenantIds)})`;
+        for (const tenantId of tenantIds) {
+          await transaction`delete from platform.audit_events where tenant_id = ${tenantId}`;
         }
-        if (userIds.length > 0) {
-          await transaction`delete from platform.platform_users where id = any(${transaction.array(userIds)})`;
+        await transaction`
+          delete from platform.audit_events
+          where actor_user_id is null
+            and tenant_id is null
+            and request_id = ${`g2-bootstrap-${suffix}`}
+        `;
+        for (const tenantId of tenantIds) {
+          await transaction`delete from platform.tenant_entitlements where tenant_id = ${tenantId}`;
+          await transaction`delete from platform.tenant_memberships where tenant_id = ${tenantId}`;
+          await transaction`delete from platform.tenants where id = ${tenantId}`;
+        }
+        for (const userId of userIds) {
+          await transaction`delete from platform.platform_users where id = ${userId}`;
         }
       });
     }
+  } catch {
+    throw new Error("G2 Staging database fixture cleanup failed.");
+  }
+  try {
     for (const user of fixtures.values()) {
       const response = await fetch(new URL(`/auth/v1/admin/users/${user.id}`, supabaseUrl), {
         method: "DELETE",
@@ -671,6 +676,6 @@ async function cleanupFixtures(): Promise<void> {
       if (!response.ok) throw new Error("Staging Auth fixture cleanup failed.");
     }
   } catch {
-    throw new Error("G2 Staging fixture cleanup failed.");
+    throw new Error("G2 Staging Auth fixture cleanup failed.");
   }
 }

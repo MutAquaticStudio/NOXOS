@@ -18,4 +18,13 @@ describe("G2 Staging acceptance-fixture boundary", () => {
     expect(deployment).toContain('"NOX_G2_TEST_MODE=true"');
     expect(deployment).toContain('"NOX_FEATURE_FLAGS=module.foundation-test"');
   });
+
+  it("uses deterministic per-fixture cleanup for the protected Staging suite", () => {
+    const verifier = readFileSync("scripts/verify/staging-g2-platform-core.ts", "utf8");
+
+    expect(verifier).not.toContain("transaction.array(");
+    expect(verifier).toContain("delete from platform.audit_events where actor_user_id = ${userId}");
+    expect(verifier).toContain("delete from platform.tenants where id = ${tenantId}");
+    expect(verifier).toContain("G2 Staging database fixture cleanup failed.");
+  });
 });
