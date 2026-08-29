@@ -59,7 +59,8 @@ describe("Vercel project layout", () => {
     expect(stagingDeployer).not.toContain('"--prebuilt"');
     expect(stagingDeployer).not.toContain("function prepareVercelProjectLink");
     expect(stagingDeployer).toContain('"--build-env"');
-    expect(stagingDeployer).toContain('"VITE_TURNSTILE_SITE_KEY="');
+    expect(stagingDeployer).toContain('"VITE_NOX_SOURCE_SHA="');
+    expect(stagingDeployer).not.toContain("TURNSTILE");
     expect(stagingDeployer).not.toContain('"--build-env",\n  "NOX_RUNTIME_DATABASE_URL=');
 
     const productionDeployer = readFileSync("scripts/deploy/production.ts", "utf8");

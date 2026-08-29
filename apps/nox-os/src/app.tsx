@@ -25,8 +25,7 @@ const LazyFoundationModule = lazy(async () => {
 
 const publicIdentity = publicEnvironment({
   VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
-  VITE_NOX_SOURCE_SHA: import.meta.env.VITE_NOX_SOURCE_SHA,
-  VITE_TURNSTILE_SITE_KEY: import.meta.env.VITE_TURNSTILE_SITE_KEY
+  VITE_NOX_SOURCE_SHA: import.meta.env.VITE_NOX_SOURCE_SHA
 });
 
 function FoundationRoute({ definition }: { definition: ModuleDefinition }) {

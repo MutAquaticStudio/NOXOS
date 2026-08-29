@@ -1,29 +1,18 @@
 # NØX-OS Gate 1 — Cloud Engineering Foundation Architecture Contract
 
 **Document version:** 1.0  
-**Lifecycle:** controlled candidate; the immutable acceptance tag is the release-status authority.  
+**Lifecycle:** historical baseline; ADR 0003 is authoritative for G1 v1.1 closure.
 **Gate:** G1 — Cloud Engineering Foundation & Module System
 
 ## Authority and freeze model
 
-This is the canonical G1 architecture contract. The frozen G0 Architecture Contract and
-the frozen UX/UI Guideline are inputs, not editable by G1. Cloud CI receives only encrypted,
-checksum-verified mirrors of those inputs.
+This is the historical G1 architecture contract. ADR 0003 is the concise authoritative
+amendment for G1 v1.1. The frozen G0 Architecture Contract and frozen UX/UI Guideline remain
+inputs and are not editable by G1.
 
-The source document is intentionally not rewritten after Staging acceptance. The authoritative
-freeze record is the annotated tag `g1-staging-accepted-<main-sha>` plus its SHA-bound GitHub
-Actions evidence artifact. That tag is valid only when it records:
-
-```text
-GATE_1_DOCUMENT_VERSION=1.0
-GATE_1_STATUS=FROZEN
-GATE_1_DOD=PASS
-G2_READY=YES
-PRODUCTION_PROMOTION_PERFORMED=NO
-```
-
-Any source change creates a new candidate SHA and invalidates earlier Preview and Staging
-evidence for freeze purposes.
+For G1 v1.1, GitHub Actions run history records the PR Preview and merged-main Staging evidence;
+no annotated tag or source-stored evidence manifest is required. Any source change creates a
+new candidate SHA and invalidates earlier Preview and Staging evidence for freeze purposes.
 
 ## Frozen technical decisions
 
@@ -55,10 +44,8 @@ public-read denial plus authorized put/stat/read/delete. Migration authority is 
 `supabase/migrations/*.sql`; breaking change safety is expand → compatible deploy → backfill →
 verify → contract later.
 
-Cloudflare public application DNS is DNS-only. The privileged ops hostname is proxied only for
-the explicit Access boundary. Turnstile is server-verified anti-abuse infrastructure, and
-Cloudflare Access is edge admission only; neither is NØX authentication, RBAC, entitlement, or
-tenant authorization.
+Cloudflare, Turnstile, custom-domain cutover, and Production promotion are outside G1 v1.1.
+ADR 0003 defines the active Vercel-and-Supabase-only provider boundary.
 
 ## Preview bootstrap amendment B-001
 
@@ -92,7 +79,6 @@ Every group is blocking and must be individually evidenced as `PASS` against the
 | K. Storage               | Private Staging bucket and full controlled diagnostic lifecycle                      |
 | L. Durable workflow      | Queue delivery, retry, idempotency, correlation, workflow DB role                    |
 | M. Scientific            | Gateway graceful degradation; never an ERP critical path                             |
-| N. Cloudflare            | DNS-only public path, protected ops path, Turnstile and Access boundaries            |
 | O. Environment isolation | Preview ≠ Staging ≠ Production and no credential contamination                       |
 | P. CI/CD                 | Required checks, SHA-bound Preview attestation, automated Staging flow               |
 | Q. Security              | Secret scan and negative boundary tests                                              |

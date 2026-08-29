@@ -4,21 +4,10 @@ const requiredVariables = [
   "SUPABASE_STAGING_URL",
   "SUPABASE_STAGING_STORAGE_BUCKET",
   "VERCEL_ORG_ID",
-  "VERCEL_PROJECT_ID",
-  "CF_ZONE_ID",
-  "CF_ACCOUNT_ID",
-  "NOX_PUBLIC_APP_HOSTNAME",
-  "VERCEL_PUBLIC_CNAME_TARGET",
-  "CF_PRIVILEGED_PROXY_APPROVED",
-  "NOX_OPS_HOSTNAME",
-  "CF_PRIVILEGED_CNAME_TARGET",
-  "CF_ACCESS_IDENTITY_GROUP_ID",
-  "VITE_TURNSTILE_SITE_KEY"
+  "VERCEL_PROJECT_ID"
 ];
 
 const requiredSecrets = [
-  "FROZEN_G0_ARCHITECTURE_GZIP_BASE64",
-  "FROZEN_UXUI_GUIDELINE_GZIP_BASE64",
   "NOX_RUNTIME_DATABASE_URL",
   "NOX_WORKFLOW_DATABASE_URL",
   "SUPABASE_SERVICE_ROLE_KEY",
@@ -26,9 +15,7 @@ const requiredSecrets = [
   "SUPABASE_DB_PASSWORD",
   "VERCEL_TOKEN",
   "VERCEL_AUTOMATION_BYPASS_SECRET",
-  "NOX_DIAGNOSTIC_PROBE_TOKEN",
-  "CF_API_TOKEN",
-  "TURNSTILE_SECRET_KEY"
+  "NOX_DIAGNOSTIC_PROBE_TOKEN"
 ];
 
 const canonicalStagingProjectRef = "uyfddpmbszjkhdkqvncz";
@@ -75,9 +62,6 @@ if (!/^[a-z0-9][a-z0-9_-]{2,62}$/i.test(stagingBucket)) {
 }
 if (stagingUrl.protocol !== "https:" || stagingUrl.hostname !== stagingRef + ".supabase.co") {
   throw new Error("Protected Staging Supabase URL does not match its project reference.");
-}
-if (process.env.GITHUB_VAR__CF_PRIVILEGED_PROXY_APPROVED !== "true") {
-  throw new Error("Cloudflare privileged Access reconciliation must be explicit.");
 }
 if (process.env.GITHUB_VAR__VERCEL_PROJECT_ID !== "prj_FPN9pBNMfvE7pQC9scA9j9HwzQpx") {
   throw new Error("Protected Staging targets an unexpected Vercel project.");

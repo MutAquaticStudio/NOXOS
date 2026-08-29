@@ -24,7 +24,7 @@ describe("non-production environment isolation", () => {
         NOX_ISOLATION_MODE: "SECRETLESS_PREVIEW",
         NOX_CURRENT_DATABASE_RESOURCE: stagingProject,
         NOX_PRODUCTION_DATABASE_RESOURCE: productionProject,
-        TURNSTILE_SECRET_KEY: "must-not-reach-preview"
+        NOX_DIAGNOSTIC_PROBE_TOKEN: "must-not-reach-preview"
       })
     ).toThrow(/Secretless Preview verification received runtime credentials/);
   });

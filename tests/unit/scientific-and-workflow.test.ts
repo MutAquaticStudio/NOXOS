@@ -7,7 +7,6 @@ import {
 import { MockScientificAdapter, UnavailableScientificAdapter } from "@nox-os/scientific";
 import {
   processFoundationWorkflowMessage,
-  TransientFoundationWorkflowError,
   VercelQueueWorkflowLauncher
 } from "../../apps/nox-os/workflows/vercel-queue";
 
@@ -131,10 +130,10 @@ describe("provider-neutral resilience ports", () => {
     });
   });
 
-  it("re-authorizes current state, retries once, and records correlated completion", async () => {
+  it("re-authorizes current state and records one correlated durable completion", async () => {
     const message = {
       workflowType: "nox.foundation.diagnostic",
-      input: { purpose: "cloud-foundation-acceptance", simulateRetry: true },
+      input: { purpose: "cloud-foundation-acceptance" },
       context: {
         workflowId: "workflow_123",
         scope: { type: "GLOBAL" as const },
@@ -152,23 +151,20 @@ describe("provider-neutral resilience ports", () => {
       }
     };
 
-    await expect(
-      processFoundationWorkflowMessage(message, { deliveryCount: 1 }, options)
-    ).rejects.toBeInstanceOf(TransientFoundationWorkflowError);
-    await processFoundationWorkflowMessage(message, { deliveryCount: 2 }, options);
+    await processFoundationWorkflowMessage(message, { deliveryCount: 1 }, options);
 
     expect(completions).toEqual([
       {
         workflowId: "workflow_123",
         correlationId: "correlation_123",
         idempotencyKey: "idempotency_123",
-        deliveryCount: 2
+        deliveryCount: 1
       }
     ]);
     await expect(
       processFoundationWorkflowMessage(
         message,
-        { deliveryCount: 2 },
+        { deliveryCount: 1 },
         {
           ...options,
           diagnosticsEnabled: "false"

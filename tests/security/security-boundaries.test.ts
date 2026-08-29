@@ -18,8 +18,7 @@ import { redactDetails } from "@nox-os/observability";
 import {
   noAccessAdmission,
   DEFAULT_API_TIMEOUT_MS,
-  requireCurrentWorkflowAuthority,
-  verifyTurnstile
+  requireCurrentWorkflowAuthority
 } from "@nox-os/platform";
 import { SupabasePrivateFileStore } from "@nox-os/storage";
 
@@ -43,10 +42,9 @@ describe("security boundaries", () => {
   });
 
   it("separates application public config from provider metadata and server-only values", () => {
-    expect(APPLICATION_PUBLIC_ENVIRONMENT_PREFIXES).toEqual(["VITE_NOX_", "VITE_TURNSTILE_"]);
+    expect(APPLICATION_PUBLIC_ENVIRONMENT_PREFIXES).toEqual(["VITE_NOX_"]);
     expect(classifyViteEnvironmentKey("VITE_NOX_ENV")).toBe("APPLICATION_PUBLIC_CONFIG");
     expect(classifyViteEnvironmentKey("VITE_NOX_SOURCE_SHA")).toBe("APPLICATION_PUBLIC_CONFIG");
-    expect(classifyViteEnvironmentKey("VITE_TURNSTILE_SITE_KEY")).toBe("APPLICATION_PUBLIC_CONFIG");
     expect(classifyViteEnvironmentKey("VITE_VERCEL_ENV")).toBe("PROVIDER_PUBLIC_SYSTEM_METADATA");
     expect(classifyViteEnvironmentKey("VITE_VERCEL_GIT_COMMIT_SHA")).toBe(
       "PROVIDER_PUBLIC_SYSTEM_METADATA"
@@ -55,13 +53,12 @@ describe("security boundaries", () => {
     expect(classifyViteEnvironmentKey("VITE_SUPABASE_SERVICE_ROLE_KEY")).toBe(
       "SERVER_ONLY_OR_UNAPPROVED"
     );
-    expect(classifyViteEnvironmentKey("VITE_CF_API_TOKEN")).toBe("SERVER_ONLY_OR_UNAPPROVED");
+    expect(classifyViteEnvironmentKey("VITE_UNAPPROVED_SECRET")).toBe("SERVER_ONLY_OR_UNAPPROVED");
 
     expect(() =>
       assertNoPublicSecrets({
         VITE_NOX_ENV: "preview",
         VITE_NOX_SOURCE_SHA: "sha",
-        VITE_TURNSTILE_SITE_KEY: "public-site-key",
         VITE_VERCEL_ENV: "preview",
         VITE_VERCEL_GIT_COMMIT_SHA: "provider-sha"
       })
@@ -188,38 +185,15 @@ describe("security boundaries", () => {
       redactDetails({
         request: {
           authorization: "Bearer server-secret",
-          nested: [{ cloudflare_api_token: "server-token" }]
+          nested: [{ provider_api_token: "server-token" }]
         }
       })
     ).toEqual({
       request: {
         authorization: "[REDACTED]",
-        nested: [{ cloudflare_api_token: "[REDACTED]" }]
+        nested: [{ provider_api_token: "[REDACTED]" }]
       }
     });
-  });
-
-  it("validates Turnstile server-side against hostname and action", async () => {
-    const request: typeof fetch = async () =>
-      new Response(
-        JSON.stringify({
-          success: true,
-          hostname: "app.example.invalid",
-          action: "foundation-probe"
-        })
-      );
-
-    await expect(
-      verifyTurnstile(
-        {
-          secret: "server-secret",
-          token: "token",
-          expectedHostname: "app.example.invalid",
-          expectedAction: "foundation-probe"
-        },
-        request
-      )
-    ).resolves.toEqual({ valid: true });
   });
 
   it("does not treat object path as storage authorization", async () => {

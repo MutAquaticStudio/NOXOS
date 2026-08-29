@@ -65,24 +65,5 @@ jobs:
         env:
           NOX_STAGING_URL: ${{ steps.preview.outputs.preview_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      - id: attestation
-        run: |
-          attestation_output="$(pnpm evidence:generate:preview)"
-          printf '%s\n' "$attestation_output"
-          attestation_path="$(printf '%s\n' "$attestation_output" | sed -n 's/^G1_PREVIEW_ATTESTATION_PATH=//p' | tail -n 1)"
-          artifact_name="$(printf '%s\n' "$attestation_output" | sed -n 's/^G1_PREVIEW_ATTESTATION_ARTIFACT=//p' | tail -n 1)"
-          test -n "$attestation_path"
-          test -n "$artifact_name"
-          echo "attestation_path=$attestation_path" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
-        env:
-          PREVIEW_DEPLOY_URL: ${{ steps.preview.outputs.preview_url }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ steps.attestation.outputs.artifact_name }}
-          path: ${{ steps.attestation.outputs.attestation_path }}
-          if-no-files-found: error
-          retention-days: 90
       # Ordinary PR Preview is secretless. Database, Storage, and API-to-workflow probes run
       # only in trusted post-merge Staging after its deployment URL is provider-verified.
