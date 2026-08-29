@@ -657,6 +657,53 @@ async function cleanupFixtures(): Promise<void> {
         await transaction`delete from platform.audit_events where tenant_id = ${tenantId}`;
       await transaction`delete from platform.audit_events where request_id = ${`g3-bootstrap-${suffix}`}`;
       for (const tenantId of tenantIds) {
+        await transaction`
+          delete from material_intelligence.material_change_requests
+          where tenant_id = ${tenantId}
+             or material_id in (
+               select id from material_intelligence.materials where tenant_id = ${tenantId}
+             )
+        `;
+        await transaction`
+          delete from material_intelligence.material_components
+          where material_id in (
+                  select id from material_intelligence.materials where tenant_id = ${tenantId}
+                )
+             or component_material_id in (
+                  select id from material_intelligence.materials where tenant_id = ${tenantId}
+                )
+        `;
+        await transaction`
+          delete from material_intelligence.material_concentrates
+          where material_id in (
+                  select id from material_intelligence.materials where tenant_id = ${tenantId}
+                )
+             or source_material_id in (
+                  select id from material_intelligence.materials where tenant_id = ${tenantId}
+                )
+             or solvent_material_id in (
+                  select id from material_intelligence.materials where tenant_id = ${tenantId}
+                )
+        `;
+        await transaction`
+          delete from material_intelligence.material_odor_assignments
+          where material_id in (
+            select id from material_intelligence.materials where tenant_id = ${tenantId}
+          )
+        `;
+        await transaction`
+          delete from material_intelligence.material_properties
+          where material_id in (
+            select id from material_intelligence.materials where tenant_id = ${tenantId}
+          )
+        `;
+        await transaction`
+          delete from material_intelligence.material_identifiers
+          where material_id in (
+            select id from material_intelligence.materials where tenant_id = ${tenantId}
+          )
+        `;
+        await transaction`delete from material_intelligence.materials where tenant_id = ${tenantId}`;
         await transaction`delete from platform.tenant_entitlements where tenant_id = ${tenantId}`;
         await transaction`delete from platform.tenant_memberships where tenant_id = ${tenantId}`;
         await transaction`delete from platform.tenants where id = ${tenantId}`;
