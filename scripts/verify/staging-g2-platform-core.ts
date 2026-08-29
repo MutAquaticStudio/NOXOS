@@ -560,6 +560,8 @@ async function browserAcceptanceBeforeTenantC(): Promise<void> {
 
     await signInInBrowser(page, fixture("D"));
     const selector = page.getByLabel("Current tenant");
+    await selector.waitFor({ state: "visible" });
+    await selector.locator("option").nth(2).waitFor({ state: "attached" });
     if ((await selector.locator("option").count()) < 3) {
       throw new Error("Multi-tenant selector did not expose both memberships.");
     }
