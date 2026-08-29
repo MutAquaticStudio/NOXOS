@@ -35,6 +35,8 @@ describe("G2 Staging acceptance-fixture boundary", () => {
       'const platformConsole = page.getByRole("button", { name: "Platform Console" });'
     );
     expect(verifier).toContain('await platformConsole.waitFor({ state: "visible" });');
-    expect(verifier).toContain("await platformConsole.click();");
+    expect(verifier).toContain("page.waitForURL(/\\/platform\\/tenants$/)");
+    expect(verifier).toContain('getByText(name, { exact: true }).waitFor({ state: "visible" })');
+    expect(verifier).toContain('selector.locator("option").nth(2).waitFor({ state: "attached" })');
   });
 });

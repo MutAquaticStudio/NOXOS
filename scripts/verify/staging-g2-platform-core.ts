@@ -534,7 +534,7 @@ async function browserAcceptanceBeforeTenantC(): Promise<void> {
     await signInInBrowser(page, fixture("P"));
     const platformConsole = page.getByRole("button", { name: "Platform Console" });
     await platformConsole.waitFor({ state: "visible" });
-    await platformConsole.click();
+    await Promise.all([page.waitForURL(/\/platform\/tenants$/), platformConsole.click()]);
     await expectVisible(page, "Platform tenants");
     await page.goto(new URL("/platform/users", stagingUrl).toString(), {
       waitUntil: "networkidle"
@@ -560,6 +560,8 @@ async function browserAcceptanceBeforeTenantC(): Promise<void> {
 
     await signInInBrowser(page, fixture("D"));
     const selector = page.getByLabel("Current tenant");
+    await selector.waitFor({ state: "visible" });
+    await selector.locator("option").nth(2).waitFor({ state: "attached" });
     if ((await selector.locator("option").count()) < 3) {
       throw new Error("Multi-tenant selector did not expose both memberships.");
     }
@@ -588,9 +590,7 @@ async function signOutInBrowser(page: any, _user: FixtureUser): Promise<void> {
 }
 
 async function expectVisible(page: any, name: string): Promise<void> {
-  if (!(await page.getByText(name, { exact: true }).isVisible())) {
-    throw new Error("Staging browser acceptance did not render " + name + ".");
-  }
+  await page.getByText(name, { exact: true }).waitFor({ state: "visible" });
 }
 
 async function verifyOwnerConcurrency(tenantC: string): Promise<void> {
