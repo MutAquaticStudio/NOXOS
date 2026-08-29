@@ -10,6 +10,7 @@ export default defineConfig({
       "@nox-os/config": source("./packages/config/src/index.ts"),
       "@nox-os/contracts": source("./packages/contracts/src/index.ts"),
       "@nox-os/database": source("./packages/database/src/index.ts"),
+      "@nox-os/material-intelligence": source("./packages/material-intelligence/src/index.ts"),
       "@nox-os/module-registry": source("./packages/module-registry/src/index.ts"),
       "@nox-os/observability": source("./packages/observability/src/index.ts"),
       "@nox-os/platform": source("./packages/platform/src/index.ts"),

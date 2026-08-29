@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@nox-os/contracts": "workspace:*",
+    "@nox-os/material-intelligence": "workspace:*",
     "postgres": "3.4.9"
   }
 }

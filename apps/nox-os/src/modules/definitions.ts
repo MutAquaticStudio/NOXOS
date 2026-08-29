@@ -1,6 +1,7 @@
 import type {
   ApiRouteRegistrar,
   IconToken,
+  ModuleAuthorizationManifest,
   ModuleDefinition,
   ModuleDescriptor,
   ModuleUxProfile,
@@ -11,6 +12,7 @@ type DefinitionInput = Omit<ModuleDescriptor, "mobilePriority" | "uxProfileId"> 
   icon: IconToken;
   uxProfile: ModuleUxProfile;
   mobilePriority?: readonly string[];
+  authorization?: Omit<ModuleAuthorizationManifest, "moduleId">;
 };
 
 const foundationStates = [
@@ -46,6 +48,7 @@ function defineModule({
   icon,
   mobilePriority,
   uxProfile,
+  authorization,
   ...input
 }: DefinitionInput): ModuleDefinition {
   const descriptor: ModuleDescriptor = {
@@ -69,11 +72,13 @@ function defineModule({
     },
     // Gate 2 establishes the extension boundary. Existing Gate 0 modules do
     // not receive speculative business permissions until their own Gate.
-    authorization: {
-      moduleId: descriptor.id,
-      permissions: [],
-      defaultRoleGrants: {}
-    }
+    authorization: authorization
+      ? { moduleId: descriptor.id, ...authorization }
+      : {
+          moduleId: descriptor.id,
+          permissions: [],
+          defaultRoleGrants: {}
+        }
   };
 }
 
@@ -260,12 +265,48 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     navigationGroup: "R&D",
     lifecycle: "INTERNAL",
     dependencies: ["platform"],
-    permissions: ["materials.read"],
-    entitlement: "core.materials",
+    permissions: [
+      "module.material-intelligence.material.read",
+      "module.material-intelligence.material.create",
+      "module.material-intelligence.material.request-change",
+      "module.material-intelligence.material.approve",
+      "module.material-intelligence.material.share"
+    ],
+    entitlement: "module.material-intelligence",
     featureFlag: "module.material-intelligence",
     uxProfile: moduleProfiles.materialIntelligence,
     owner: "Material Intelligence owner",
-    icon: "atom"
+    icon: "atom",
+    authorization: {
+      permissions: [
+        "module.material-intelligence.material.read",
+        "module.material-intelligence.material.create",
+        "module.material-intelligence.material.request-change",
+        "module.material-intelligence.material.approve",
+        "module.material-intelligence.material.share"
+      ],
+      defaultRoleGrants: {
+        TENANT_OWNER: [
+          "module.material-intelligence.material.read",
+          "module.material-intelligence.material.create",
+          "module.material-intelligence.material.request-change",
+          "module.material-intelligence.material.approve",
+          "module.material-intelligence.material.share"
+        ],
+        TENANT_ADMIN: [
+          "module.material-intelligence.material.read",
+          "module.material-intelligence.material.create",
+          "module.material-intelligence.material.request-change",
+          "module.material-intelligence.material.approve",
+          "module.material-intelligence.material.share"
+        ],
+        TENANT_MEMBER: [
+          "module.material-intelligence.material.read",
+          "module.material-intelligence.material.create",
+          "module.material-intelligence.material.request-change"
+        ]
+      }
+    }
   }),
   defineModule({
     id: "inventory",

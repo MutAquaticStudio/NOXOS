@@ -181,6 +181,10 @@ export type FoundationApiOptions = {
   platformCore?: {
     registerRoutes: (registrar: ApiRouteRegistrar) => void;
   };
+  /** Domain modules may register their explicit, context-authorized API routes. */
+  additionalRouteRegistrars?: readonly {
+    registerRoutes: (registrar: ApiRouteRegistrar) => void;
+  }[];
   logSink?: LogSink;
   apiTimeoutMs?: number;
 };
@@ -318,6 +322,9 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
   }
 
   options.platformCore?.registerRoutes(router);
+  for (const registrar of options.additionalRouteRegistrars ?? []) {
+    registrar.registerRoutes(router);
+  }
 
   for (const moduleDefinition of options.modules) {
     if (

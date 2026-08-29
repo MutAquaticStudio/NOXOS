@@ -414,7 +414,7 @@ export function resolveDefinitionAvailability(
 
   if (
     definition.authorization.permissions.length > 0 &&
-    !definition.authorization.permissions.every((item) => inputs.permissions.has(item))
+    !definition.authorization.permissions.some((item) => inputs.permissions.has(item))
   ) {
     return {
       moduleId: descriptor.id,

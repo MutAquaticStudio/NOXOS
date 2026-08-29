@@ -19,6 +19,7 @@
       "@nox-os/config": ["./packages/config/src/index.ts"],
       "@nox-os/contracts": ["./packages/contracts/src/index.ts"],
       "@nox-os/database": ["./packages/database/src/index.ts"],
+      "@nox-os/material-intelligence": ["./packages/material-intelligence/src/index.ts"],
       "@nox-os/module-registry": ["./packages/module-registry/src/index.ts"],
       "@nox-os/observability": ["./packages/observability/src/index.ts"],
       "@nox-os/platform": ["./packages/platform/src/index.ts"],
