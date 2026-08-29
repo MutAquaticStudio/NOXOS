@@ -23,12 +23,13 @@ try {
 
   await verifyDeploymentIdentity(page);
   await signIn(page);
+  const tenantId = await resolveActiveTenantId(page);
   await capture(page, "materials-registry-desktop", "/materials");
 
-  const materialId = await resolveAccessibleMaterialId(page);
+  const materialId = await resolveAccessibleMaterialId(page, tenantId);
   await page.goto(url(`/materials/${materialId}`), { waitUntil: "networkidle" });
   await requireVisible(page, "material detail heading", page.locator("h1"));
-  await assertTenantMaterialBoundary(page, materialId);
+  await assertTenantMaterialBoundary(page, materialId, tenantId);
   await capture(page, "material-detail-desktop", `/materials/${materialId}`);
 
   await page.goto(url("/materials/new"), { waitUntil: "networkidle" });
@@ -141,7 +142,7 @@ async function signIn(page: Page): Promise<void> {
   );
 }
 
-async function resolveAccessibleMaterialId(page: Page): Promise<string> {
+async function resolveActiveTenantId(page: Page): Promise<string> {
   const result = await page.evaluate(async () => {
     const storageEntry = Object.entries(localStorage).find(([, value]) =>
       value.includes("access_token")
@@ -149,13 +150,39 @@ async function resolveAccessibleMaterialId(page: Page): Promise<string> {
     if (!storageEntry) return { error: "BROWSER_SESSION_NOT_FOUND" };
     const session = JSON.parse(storageEntry[1]) as { access_token?: string };
     if (!session.access_token) return { error: "BROWSER_ACCESS_TOKEN_NOT_FOUND" };
-    const response = await fetch("/api/v1/materials?limit=1", {
+    const response = await fetch("/api/v1/me/tenants", {
       headers: { authorization: `Bearer ${session.access_token}` }
+    });
+    const body = (await response.json().catch(() => undefined)) as
+      { tenants?: Array<{ tenant?: { id?: string } }> } | undefined;
+    return { status: response.status, tenantId: body?.tenants?.[0]?.tenant?.id };
+  });
+  if (result.status !== 200 || !result.tenantId) {
+    throw new Error(
+      "Authenticated Preview requires one active tenant for Material route acceptance."
+    );
+  }
+  return result.tenantId;
+}
+
+async function resolveAccessibleMaterialId(page: Page, tenantId: string): Promise<string> {
+  const result = await page.evaluate(async (activeTenantId) => {
+    const storageEntry = Object.entries(localStorage).find(([, value]) =>
+      value.includes("access_token")
+    );
+    if (!storageEntry) return { error: "BROWSER_SESSION_NOT_FOUND" };
+    const session = JSON.parse(storageEntry[1]) as { access_token?: string };
+    if (!session.access_token) return { error: "BROWSER_ACCESS_TOKEN_NOT_FOUND" };
+    const response = await fetch("/api/v1/materials?limit=1", {
+      headers: {
+        authorization: `Bearer ${session.access_token}`,
+        "x-nox-tenant-id": activeTenantId
+      }
     });
     const body = (await response.json().catch(() => undefined)) as
       { materials?: Array<{ id?: string }> } | undefined;
     return { status: response.status, materialId: body?.materials?.[0]?.id };
-  });
+  }, tenantId);
   if (result.status !== 200 || !result.materialId) {
     throw new Error(
       "Authenticated Preview requires one accessible, non-production Material fixture for route acceptance."
@@ -164,21 +191,31 @@ async function resolveAccessibleMaterialId(page: Page): Promise<string> {
   return result.materialId;
 }
 
-async function assertTenantMaterialBoundary(page: Page, materialId: string): Promise<void> {
-  const result = await page.evaluate(async (id) => {
-    const storageEntry = Object.entries(localStorage).find(([, value]) =>
-      value.includes("access_token")
-    );
-    const session = storageEntry
-      ? (JSON.parse(storageEntry[1]) as { access_token?: string })
-      : undefined;
-    const response = await fetch(`/api/v1/materials/${id}`, {
-      headers: session?.access_token
-        ? { authorization: `Bearer ${session.access_token}` }
-        : undefined
-    });
-    return await response.json();
-  }, materialId);
+async function assertTenantMaterialBoundary(
+  page: Page,
+  materialId: string,
+  tenantId: string
+): Promise<void> {
+  const result = await page.evaluate(
+    async ({ id, tenantId: activeTenantId }) => {
+      const storageEntry = Object.entries(localStorage).find(([, value]) =>
+        value.includes("access_token")
+      );
+      const session = storageEntry
+        ? (JSON.parse(storageEntry[1]) as { access_token?: string })
+        : undefined;
+      const response = await fetch(`/api/v1/materials/${id}`, {
+        headers: session?.access_token
+          ? {
+              authorization: `Bearer ${session.access_token}`,
+              "x-nox-tenant-id": activeTenantId
+            }
+          : undefined
+      });
+      return await response.json();
+    },
+    { id: materialId, tenantId }
+  );
   const serialized = JSON.stringify(result);
   if (
     /chemical_entity_id|canonical_smiles|isomeric_smiles|inchikey|molecular_formula|molecular_weight|embedding/i.test(

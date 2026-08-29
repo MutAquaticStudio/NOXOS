@@ -48,6 +48,11 @@ describe("G3 acceptance evidence boundary", () => {
     expect(authenticatedPreviewDeployer).not.toContain("SUPABASE_DB_PASSWORD");
   });
 
+  it("resolves the authenticated tenant before exercising tenant-scoped Material APIs", () => {
+    expect(previewVerifier).toContain('fetch("/api/v1/me/tenants"');
+    expect(previewVerifier).toContain('"x-nox-tenant-id": activeTenantId');
+  });
+
   it("does not falsely freeze G3 in a mutable Staging artifact", () => {
     expect(stagingEvidence).toContain('EVIDENCE_SCHEMA: "G3-STAGING-1.0"');
     expect(stagingEvidence).not.toContain("GATE_3_STATUS");
