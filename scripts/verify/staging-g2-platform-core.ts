@@ -261,6 +261,7 @@ try {
     throw new Error("Module availability did not become NOT_ENTITLED after entitlement removal.");
   }
 
+  await addMembership(p, tenantC, "P", "TENANT_OWNER");
   await addMembership(p, tenantA, "P", "TENANT_OWNER");
   expectStatus(
     await api(token("A"), "/tenant", {

@@ -40,4 +40,14 @@ describe("G2 Staging acceptance-fixture boundary", () => {
     expect(verifier).toContain('selector.locator("option").nth(2).waitFor({ state: "attached" })');
     expect(verifier).toContain("await refreshFixtureTokens();");
   });
+
+  it("keeps a second effective Tenant C owner before disabling its initial owner", () => {
+    const verifier = readFileSync("scripts/verify/staging-g2-platform-core.ts", "utf8");
+    const backupOwner = 'await addMembership(p, tenantC, "P", "TENANT_OWNER");';
+
+    expect(verifier).toContain(backupOwner);
+    expect(verifier.indexOf("Platform user status update")).toBeGreaterThan(
+      verifier.indexOf(backupOwner)
+    );
+  });
 });
