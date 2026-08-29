@@ -167,6 +167,7 @@ try {
       `/materials/${createdMaterialIdFromUrl(page.url())}`
     );
     await signOutInBrowser(page);
+    await refreshToken("A");
 
     const created = await findMaterial(token("A"), tenantA, mixtureName);
     materialIds.push(created.id);
@@ -206,6 +207,7 @@ try {
     await page.getByRole("button", { name: "Approve" }).click();
     await page.waitForURL(/\/materials\/review$/);
     await signOutInBrowser(page);
+    await refreshToken("B");
 
     const approved = await api<{ material: MaterialSummary }>(
       token("A"),
@@ -276,6 +278,7 @@ try {
     await expectVisible(page, "TEC");
     await capture(page, "dilution-detail-desktop", `/materials/${dilution.body.material.id}`);
     await signOutInBrowser(page);
+    await refreshToken("A");
 
     const history = await api<{ history: Array<{ action: string }> }>(
       token("A"),
@@ -322,6 +325,7 @@ try {
       throw new Error("Cross-tenant contributor identity was exposed in the browser.");
     }
     await signOutInBrowser(page);
+    await refreshToken("C");
 
     const correction = await api<{ changeRequest: ChangeSummary }>(
       token("A"),
@@ -362,6 +366,7 @@ try {
     await page.getByRole("button", { name: "Approve" }).click();
     await page.waitForURL(/\/platform\/material-intelligence\/review$/);
     await signOutInBrowser(page);
+    await refreshToken("D");
 
     const corrected = await api<{ material: MaterialSummary }>(
       token("A"),
@@ -423,6 +428,10 @@ function token(key: FixtureKey): string {
   const value = tokens.get(key);
   if (!value) throw new Error("G3 fixture token was not issued.");
   return value;
+}
+
+async function refreshToken(key: FixtureKey): Promise<void> {
+  tokens.set(key, await signIn(fixture(key)));
 }
 
 function bypassHeaders(): Record<string, string> {

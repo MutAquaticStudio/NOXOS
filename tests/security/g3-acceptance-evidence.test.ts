@@ -39,6 +39,7 @@ describe("G3 acceptance evidence boundary", () => {
     expect(stagingVerifier).toContain(
       "delete from material_intelligence.materials where tenant_id = ${tenantId}"
     );
+    expect(stagingVerifier).toContain("async function refreshToken(key: FixtureKey)");
     expect(stagingVerifier).toContain("function apiBypassHeaders()");
     expect(stagingVerifier).toContain("...apiBypassHeaders()");
     expect(stagingVerifier).toContain("await mobileContext.close()");
