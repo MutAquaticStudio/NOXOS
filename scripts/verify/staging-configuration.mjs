@@ -2,6 +2,7 @@ const requiredVariables = [
   "SUPABASE_STAGING_PROJECT_REF",
   "SUPABASE_PRODUCTION_PROJECT_REF",
   "SUPABASE_STAGING_URL",
+  "SUPABASE_STAGING_PUBLISHABLE_KEY",
   "SUPABASE_STAGING_STORAGE_BUCKET",
   "VERCEL_ORG_ID",
   "VERCEL_PROJECT_ID"
@@ -45,6 +46,7 @@ const stagingRef = process.env.GITHUB_VAR__SUPABASE_STAGING_PROJECT_REF;
 const productionRef = process.env.GITHUB_VAR__SUPABASE_PRODUCTION_PROJECT_REF;
 const stagingBucket = process.env.GITHUB_VAR__SUPABASE_STAGING_STORAGE_BUCKET;
 const stagingUrl = new URL(process.env.GITHUB_VAR__SUPABASE_STAGING_URL);
+const stagingPublishableKey = process.env.GITHUB_VAR__SUPABASE_STAGING_PUBLISHABLE_KEY;
 
 if (stagingRef === productionRef) {
   throw new Error("Protected Staging project must remain distinct from Production.");
@@ -62,6 +64,9 @@ if (!/^[a-z0-9][a-z0-9_-]{2,62}$/i.test(stagingBucket)) {
 }
 if (stagingUrl.protocol !== "https:" || stagingUrl.hostname !== stagingRef + ".supabase.co") {
   throw new Error("Protected Staging Supabase URL does not match its project reference.");
+}
+if (!/^\S{16,4096}$/.test(stagingPublishableKey)) {
+  throw new Error("Protected Staging Supabase publishable key is invalid.");
 }
 if (process.env.GITHUB_VAR__VERCEL_PROJECT_ID !== "prj_FPN9pBNMfvE7pQC9scA9j9HwzQpx") {
   throw new Error("Protected Staging targets an unexpected Vercel project.");

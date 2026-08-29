@@ -36,6 +36,8 @@ for (const key of [
   "VERCEL_ORG_ID",
   "VERCEL_PROJECT_ID",
   "EXPECTED_SOURCE_SHA",
+  "SUPABASE_URL",
+  "SUPABASE_PUBLISHABLE_KEY",
   "NOX_RUNTIME_DATABASE_URL",
   "NOX_WORKFLOW_DATABASE_URL",
   "NOX_DIAGNOSTIC_PROBE_TOKEN"
@@ -52,6 +54,8 @@ const expectedSourceSha = required("EXPECTED_SOURCE_SHA");
 if (!/^[0-9a-f]{40,128}$/i.test(expectedSourceSha)) {
   throw new Error("EXPECTED_SOURCE_SHA must be a full Git commit SHA.");
 }
+const supabaseUrl = required("SUPABASE_URL");
+const supabasePublishableKey = required("SUPABASE_PUBLISHABLE_KEY");
 
 const identityEnvironment = {
   ...process.env,
@@ -72,10 +76,18 @@ const submittedUrl = deployVercel([
   "VITE_NOX_ENV=" + target,
   "--build-env",
   "VITE_NOX_SOURCE_SHA=" + expectedSourceSha,
+  "--build-env",
+  "VITE_SUPABASE_URL=" + supabaseUrl,
+  "--build-env",
+  "VITE_SUPABASE_PUBLISHABLE_KEY=" + supabasePublishableKey,
   "--env",
   "NOX_ENV=" + target,
   "--env",
   "NOX_SOURCE_SHA=" + expectedSourceSha,
+  "--env",
+  "SUPABASE_URL=" + supabaseUrl,
+  "--env",
+  "SUPABASE_PUBLISHABLE_KEY=" + supabasePublishableKey,
   "--env",
   "NOX_RUNTIME_DATABASE_URL=" + required("NOX_RUNTIME_DATABASE_URL"),
   "--env",

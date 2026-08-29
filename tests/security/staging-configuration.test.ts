@@ -5,6 +5,7 @@ const requiredConfiguration = {
   GITHUB_VAR__SUPABASE_STAGING_PROJECT_REF: "uyfddpmbszjkhdkqvncz",
   GITHUB_VAR__SUPABASE_PRODUCTION_PROJECT_REF: "soioshmcdwxhlgrjzkoc",
   GITHUB_VAR__SUPABASE_STAGING_URL: "https://uyfddpmbszjkhdkqvncz.supabase.co",
+  GITHUB_VAR__SUPABASE_STAGING_PUBLISHABLE_KEY: "sb_publishable_staging_test",
   GITHUB_VAR__SUPABASE_STAGING_STORAGE_BUCKET: "nox-os-private",
   GITHUB_VAR__VERCEL_ORG_ID: "team_nox",
   GITHUB_VAR__VERCEL_PROJECT_ID: "prj_FPN9pBNMfvE7pQC9scA9j9HwzQpx",
@@ -50,5 +51,11 @@ describe("protected Staging configuration contract", () => {
     expect(() =>
       run({ GITHUB_VAR__SUPABASE_PRODUCTION_PROJECT_REF: "bbbbbbbbbbbbbbbbbbbb" })
     ).toThrow(/canonical isolation reference/);
+  });
+
+  it("fails closed when the Staging public Auth configuration is unavailable", () => {
+    expect(() => run({ GITHUB_VAR__SUPABASE_STAGING_PUBLISHABLE_KEY: "" })).toThrow(
+      /Protected staging configuration is incomplete/
+    );
   });
 });
