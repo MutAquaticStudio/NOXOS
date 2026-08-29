@@ -25,7 +25,10 @@ jobs:
   verify-provider-preview:
     # Git-provider Preview acceptance is intentionally limited to same-repository branches.
     # Forks still receive ordinary PR CI but no privileged-provider lookup.
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    # This trusted job must never run from pull_request source. In particular, its
+    # legacy baseline probes are not a substitute for the authenticated G3 Preview
+    # acceptance below and must not be aimed at a PR Preview.
+    if: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-24.04
     environment: Preview
     timeout-minutes: 30
