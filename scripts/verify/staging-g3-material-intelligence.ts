@@ -271,7 +271,7 @@ try {
       waitUntil: "networkidle"
     });
     await expectVisible(page, "Concentration");
-    await expectVisible(page, "Ambroxan");
+    await expectVisible(page, referenceMaterial.displayName);
     await expectVisible(page, "10%");
     await expectVisible(page, "TEC");
     await capture(page, "dilution-detail-desktop", `/materials/${dilution.body.material.id}`);
@@ -535,7 +535,7 @@ async function addMembership(
 
 async function seedPlatformReferenceMaterial(): Promise<MaterialSummary> {
   const id = randomUUID();
-  const displayName = "Ambroxan";
+  const displayName = `Ambroxan G3 ${suffix.slice(0, 8)}`;
   await maintenance`
     insert into material_intelligence.materials (
       id, tenant_id, scope, visibility, display_name, normalized_display_name,

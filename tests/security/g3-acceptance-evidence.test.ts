@@ -39,6 +39,7 @@ describe("G3 acceptance evidence boundary", () => {
     expect(stagingVerifier).toContain("function apiBypassHeaders()");
     expect(stagingVerifier).toContain("...apiBypassHeaders()");
     expect(stagingVerifier).toContain("await mobileContext.close()");
+    expect(stagingVerifier).toContain("const displayName = `Ambroxan G3 ${suffix.slice(0, 8)}`");
   });
 
   it("keeps authenticated Preview credentials browser-scoped and out of Material source", () => {
