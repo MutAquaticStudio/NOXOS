@@ -16,6 +16,10 @@ export type NoxShellProps = {
   railItems: readonly ShellRailItem[];
   activeRoute: string;
   onNavigate: (route: string) => void;
+  identityLabel?: string;
+  onSignOut?: () => void;
+  systemNavigation?: ReactNode;
+  tenantControl?: ReactNode;
   children: ReactNode;
 };
 
@@ -48,6 +52,10 @@ export function NoxShell({
   railItems,
   activeRoute,
   onNavigate,
+  identityLabel,
+  onSignOut,
+  systemNavigation,
+  tenantControl,
   children
 }: NoxShellProps) {
   const [commandOpen, setCommandOpen] = useState(false);
@@ -103,6 +111,8 @@ export function NoxShell({
           <kbd>⌘ K</kbd>
         </button>
         <div className="nox-system-actions" aria-label="System actions">
+          {systemNavigation}
+          {tenantControl}
           <span className="nox-sync-status" aria-label="Synchronization state: foundation offline">
             Sync foundation
           </span>
@@ -116,8 +126,8 @@ export function NoxShell({
           <button type="button" aria-label="Notifications">
             Notifications
           </button>
-          <button type="button" aria-label="User menu">
-            User
+          <button type="button" aria-label="User menu" onClick={onSignOut}>
+            {identityLabel ?? "User"}
           </button>
         </div>
       </header>

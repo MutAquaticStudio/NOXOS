@@ -61,6 +61,9 @@ importers:
 
   apps/nox-os:
     dependencies:
+      "@nox-os/auth":
+        specifier: workspace:*
+        version: link:../../packages/auth
       "@nox-os/config":
         specifier: workspace:*
         version: link:../../packages/config
@@ -82,6 +85,9 @@ importers:
       "@nox-os/ui":
         specifier: workspace:*
         version: link:../../packages/ui
+      "@supabase/supabase-js":
+        specifier: 2.112.4
+        version: 2.112.4
       "@vercel/queue":
         specifier: 0.5.1
         version: 0.5.1
@@ -155,18 +161,33 @@ importers:
 
   packages/platform:
     dependencies:
+      "@nox-os/auth":
+        specifier: workspace:*
+        version: link:../auth
       "@nox-os/config":
         specifier: workspace:*
         version: link:../config
       "@nox-os/contracts":
         specifier: workspace:*
         version: link:../contracts
+      "@nox-os/database":
+        specifier: workspace:*
+        version: link:../database
+      "@nox-os/module-registry":
+        specifier: workspace:*
+        version: link:../module-registry
       "@nox-os/observability":
         specifier: workspace:*
         version: link:../observability
       "@nox-os/shared":
         specifier: workspace:*
         version: link:../shared
+      "@nox-os/tenancy":
+        specifier: workspace:*
+        version: link:../tenancy
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
 
   packages/scientific:
     dependencies:
@@ -4897,6 +4918,12 @@ packages:
         integrity: sha512-WPsqwxITS2tzx1bzhIKsEs19ABD5vmCVa4xBo2tq/SrV4RNZtfws1EnCWQXM6yh8bD08a1idvkB5MZSBiZsjwg==
       }
 
+  zod@4.3.6:
+    resolution:
+      {
+        integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==
+      }
+
   zod@4.4.3:
     resolution:
       {
@@ -7486,5 +7513,7 @@ snapshots:
   zod@3.22.4: {}
 
   zod@4.1.11: {}
+
+  zod@4.3.6: {}
 
   zod@4.4.3: {}

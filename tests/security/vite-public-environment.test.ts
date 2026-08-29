@@ -52,6 +52,19 @@ describe("Vite public-environment boundary", () => {
     expect(result.status, result.stderr + result.stdout).toBe(0);
   });
 
+  it("allows the exact Supabase browser endpoint and publishable key without a broad public prefix", () => {
+    const { output, result } = buildWithEnvironment({
+      VITE_NOX_ENV: "preview",
+      VITE_NOX_SOURCE_SHA: "approved-application-sha",
+      VITE_SUPABASE_URL: "https://preview-project.supabase.co",
+      VITE_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_preview_test"
+    });
+
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    expect(output).toContain("https://preview-project.supabase.co");
+    expect(output).toContain("sb_publishable_preview_test");
+  });
+
   it("does not fail on or expose Vercel public system metadata", () => {
     const { output, result } = buildWithEnvironment({
       VITE_NOX_ENV: "preview",
@@ -76,13 +89,15 @@ describe("Vite public-environment boundary", () => {
     expect(output).toContain(sourceSha);
   });
 
-  it.each(["VITE_DATABASE_URL", "VITE_SUPABASE_SERVICE_ROLE_KEY", "VITE_UNAPPROVED_SECRET"])(
-    "rejects %s before bundling",
-    (key) => {
-      const { result } = buildWithEnvironment({ [key]: "unsafe-test-value" });
+  it.each([
+    "VITE_DATABASE_URL",
+    "VITE_SUPABASE_SERVICE_ROLE_KEY",
+    "VITE_SUPABASE_ACCESS_TOKEN",
+    "VITE_UNAPPROVED_SECRET"
+  ])("rejects %s before bundling", (key) => {
+    const { result } = buildWithEnvironment({ [key]: "unsafe-test-value" });
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr + result.stdout).toMatch(new RegExp(key));
-    }
-  );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr + result.stdout).toMatch(new RegExp(key));
+  });
 });

@@ -4,6 +4,7 @@ import {
   assertNoPublicSecrets,
   classifyViteEnvironmentKey,
   publicBuildEnvironment,
+  publicEnvironment,
   serverIdentity
 } from "@nox-os/config";
 import {
@@ -45,6 +46,10 @@ describe("security boundaries", () => {
     expect(APPLICATION_PUBLIC_ENVIRONMENT_PREFIXES).toEqual(["VITE_NOX_"]);
     expect(classifyViteEnvironmentKey("VITE_NOX_ENV")).toBe("APPLICATION_PUBLIC_CONFIG");
     expect(classifyViteEnvironmentKey("VITE_NOX_SOURCE_SHA")).toBe("APPLICATION_PUBLIC_CONFIG");
+    expect(classifyViteEnvironmentKey("VITE_SUPABASE_URL")).toBe("APPLICATION_PUBLIC_CONFIG");
+    expect(classifyViteEnvironmentKey("VITE_SUPABASE_PUBLISHABLE_KEY")).toBe(
+      "APPLICATION_PUBLIC_CONFIG"
+    );
     expect(classifyViteEnvironmentKey("VITE_VERCEL_ENV")).toBe("PROVIDER_PUBLIC_SYSTEM_METADATA");
     expect(classifyViteEnvironmentKey("VITE_VERCEL_GIT_COMMIT_SHA")).toBe(
       "PROVIDER_PUBLIC_SYSTEM_METADATA"
@@ -59,6 +64,8 @@ describe("security boundaries", () => {
       assertNoPublicSecrets({
         VITE_NOX_ENV: "preview",
         VITE_NOX_SOURCE_SHA: "sha",
+        VITE_SUPABASE_URL: "https://example.supabase.co",
+        VITE_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test",
         VITE_VERCEL_ENV: "preview",
         VITE_VERCEL_GIT_COMMIT_SHA: "provider-sha"
       })
@@ -83,6 +90,25 @@ describe("security boundaries", () => {
         VERCEL_GIT_COMMIT_SHA: "branch-name-is-not-an-immutable-sha"
       })
     ).toThrow(/full Git commit SHA/);
+  });
+
+  it("treats blank optional browser Supabase values as unavailable without accepting malformed values", () => {
+    const sourceSha = "a".repeat(40);
+    expect(
+      publicEnvironment({
+        VITE_NOX_ENV: "preview",
+        VITE_NOX_SOURCE_SHA: sourceSha,
+        VITE_SUPABASE_URL: "",
+        VITE_SUPABASE_PUBLISHABLE_KEY: ""
+      })
+    ).toEqual({ environment: "preview", sourceSha });
+
+    expect(() =>
+      publicEnvironment({
+        VITE_SUPABASE_URL: "not-a-url",
+        VITE_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test"
+      })
+    ).toThrow(/url/i);
   });
 
   it("requires a separate low-privilege connection for serverless runtime traffic", () => {

@@ -17,7 +17,7 @@ const requiredVisible = async (locator, description) => {
     throw new Error("Staging browser acceptance failed: " + description);
   }
   if (!(await locator.isVisible())) {
-    throw new Error("Staging browser acceptance failed: " + description);
+    throw new Error("Browser acceptance failed: " + description);
   }
 };
 
@@ -47,9 +47,17 @@ try {
   });
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await page.goto(stagingUrl, { waitUntil: "networkidle" });
-  const browserContract = resolvePreviewBrowserContract(await readJson(page, "/api/v1/me"));
+  const protectedResponse = await readJson(page, "/api/v1/me");
+  const browserContract = resolvePreviewBrowserContract(protectedResponse);
 
   if (browserContract === "AUTHENTICATED_PLATFORM") {
+    if (
+      protectedResponse.status !== 401 ||
+      protectedResponse.body?.error?.code !== "AUTH_REQUIRED"
+    ) {
+      throw new Error("Unauthenticated protected API did not fail closed.");
+    }
+
     await page.goto(new URL("/sign-in", stagingUrl).toString(), { waitUntil: "networkidle" });
     await requiredVisible(page.getByRole("heading", { name: "Sign in" }), "Sign In is missing");
     if (await page.getByRole("navigation", { name: "Application modules" }).count()) {
@@ -119,7 +127,16 @@ try {
     health.body.environment !== expectedEnvironment ||
     health.body.sourceSha !== expectedSha
   ) {
-    throw new Error("Staging API health identity is incorrect in the browser.");
+    throw new Error("Browser-visible API health identity is incorrect.");
+  }
+
+  const documentText = await page.locator("html").innerText();
+  if (
+    /SUPABASE_SERVICE_ROLE_KEY|NOX_RUNTIME_DATABASE_URL|NOX_WORKFLOW_DATABASE_URL/i.test(
+      documentText
+    )
+  ) {
+    throw new Error("Browser-visible content exposed a server-only configuration name.");
   }
 
   const mobile = await browser.newPage({
