@@ -31,3 +31,14 @@ export function normalizedHeaders(
     ])
   );
 }
+
+export function normalizedQuery(
+  request: Pick<VercelRequest, "query">
+): Record<string, string | undefined> {
+  return Object.fromEntries(
+    Object.entries(request.query).map(([key, value]) => [
+      key,
+      Array.isArray(value) ? undefined : value
+    ])
+  );
+}

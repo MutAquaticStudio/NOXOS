@@ -1,9 +1,11 @@
 import type {
   ApiRouteRegistrar,
   ModuleAvailability,
+  ModuleAuthorizationManifest,
   ModuleDefinition,
   ModuleDescriptor,
-  ModuleLifecycle
+  ModuleLifecycle,
+  TenantRoleKey
 } from "@nox-os/contracts";
 
 const forbiddenGovernanceRoute = /(^|\/)(gate-[^/]+|g[0-9]+|phase-[^/]+|milestone-[^/]+)/i;
@@ -31,6 +33,27 @@ export type AvailabilityInputs = {
   permissions: ReadonlySet<string>;
 };
 
+export type FeatureFlagResolver = {
+  isEnabled: (flag: string | undefined) => boolean;
+};
+
+/** A deliberately small, typed local feature-flag resolver for G2. */
+export class LocalFeatureFlagResolver implements FeatureFlagResolver {
+  private readonly enabledFlags: ReadonlySet<string>;
+
+  constructor(enabledFlags: Iterable<string> = []) {
+    this.enabledFlags = new Set(enabledFlags);
+  }
+
+  isEnabled(flag: string | undefined): boolean {
+    return Boolean(flag && this.enabledFlags.has(flag));
+  }
+
+  toSet(): ReadonlySet<string> {
+    return this.enabledFlags;
+  }
+}
+
 export type AppRailItem = {
   moduleId: string;
   label: string;
@@ -42,6 +65,65 @@ export type AppRailItem = {
 export class RegistryValidationError extends Error {
   constructor(readonly violations: readonly string[]) {
     super("Module Registry validation failed: " + violations.join("; "));
+  }
+}
+
+const tenantRoles = new Set<TenantRoleKey>(["TENANT_OWNER", "TENANT_ADMIN", "TENANT_MEMBER"]);
+
+export function moduleEntitlementKey(moduleId: string): string {
+  return "module." + moduleId;
+}
+
+export function resolveModulePermissions(
+  manifest: ModuleAuthorizationManifest,
+  role: TenantRoleKey | string | null | undefined
+): readonly string[] {
+  if (!tenantRoles.has(role as TenantRoleKey)) {
+    return [];
+  }
+  return manifest.defaultRoleGrants[role as TenantRoleKey] ?? [];
+}
+
+function validateModuleAuthorization(
+  definition: ModuleDefinition,
+  allPermissions: Set<string>,
+  violations: string[]
+): void {
+  const manifest = definition.authorization;
+  const moduleId = definition.descriptor.id;
+  if (manifest.moduleId !== moduleId) {
+    violations.push("Module authorization manifest mismatch: " + moduleId);
+  }
+
+  const declared = new Set<string>();
+  const namespace = "module." + moduleId + ".";
+  for (const permission of manifest.permissions) {
+    if (permission.includes("*")) {
+      violations.push("wildcard module permission: " + permission);
+    }
+    if (permission.startsWith("platform.") || permission.startsWith("tenant.")) {
+      violations.push("core permission claimed by module " + moduleId + ": " + permission);
+    }
+    if (!permission.startsWith(namespace)) {
+      violations.push("module permission namespace mismatch: " + permission);
+    }
+    if (declared.has(permission) || allPermissions.has(permission)) {
+      violations.push("duplicate module permission: " + permission);
+    }
+    declared.add(permission);
+    allPermissions.add(permission);
+  }
+
+  for (const [role, grants] of Object.entries(manifest.defaultRoleGrants)) {
+    if (!tenantRoles.has(role as TenantRoleKey)) {
+      violations.push("unknown module grant role: " + role);
+      continue;
+    }
+    for (const grant of grants ?? []) {
+      if (!declared.has(grant)) {
+        violations.push("module grant references unknown permission: " + grant);
+      }
+    }
   }
 }
 
@@ -83,6 +165,7 @@ export function validateModuleDefinitions(definitions: readonly ModuleDefinition
   const ids = new Set<string>();
   const routeClaims: RouteClaim[] = [];
   const namespaces = new Set<string>();
+  const modulePermissions = new Set<string>();
 
   for (const definition of definitions) {
     const { descriptor, ui, api } = definition;
@@ -126,6 +209,7 @@ export function validateModuleDefinitions(definitions: readonly ModuleDefinition
     if (api.moduleId !== descriptor.id || api.apiNamespace !== descriptor.apiNamespace) {
       violations.push("API manifest mismatch: " + descriptor.id);
     }
+    validateModuleAuthorization(definition, modulePermissions, violations);
     if (namespaces.has(descriptor.apiNamespace)) {
       violations.push("duplicate API namespace: " + descriptor.apiNamespace);
     }
@@ -247,20 +331,6 @@ export function resolveModuleAvailability(
     };
   }
 
-  if (
-    descriptor.lifecycle === "BETA" &&
-    descriptor.featureFlag &&
-    !inputs.featureFlags.has(descriptor.featureFlag)
-  ) {
-    return {
-      moduleId: descriptor.id,
-      state: "BETA_RESTRICTED",
-      visible: false,
-      enabled: false,
-      reason: "Beta feature flag is not enabled."
-    };
-  }
-
   if (descriptor.featureFlag && !inputs.featureFlags.has(descriptor.featureFlag)) {
     return {
       moduleId: descriptor.id,
@@ -302,14 +372,87 @@ export function resolveModuleAvailability(
   };
 }
 
+/**
+ * G2's canonical availability evaluation. G1 descriptor permissions remain
+ * structural metadata; tenant authorization comes only from the module
+ * manifest so module namespaces cannot alter core RBAC maps.
+ */
+export function resolveDefinitionAvailability(
+  definition: ModuleDefinition,
+  inputs: AvailabilityInputs
+): ModuleAvailability {
+  const descriptor = definition.descriptor;
+  if (descriptor.lifecycle === "DISABLED" || descriptor.lifecycle === "DEPRECATED") {
+    return {
+      moduleId: descriptor.id,
+      state: "DISABLED",
+      visible: false,
+      enabled: false,
+      reason: "Module lifecycle is disabled."
+    };
+  }
+
+  if (descriptor.featureFlag && !inputs.featureFlags.has(descriptor.featureFlag)) {
+    return {
+      moduleId: descriptor.id,
+      state: "DISABLED",
+      visible: false,
+      enabled: false,
+      reason: "Feature flag is not enabled."
+    };
+  }
+
+  if (!inputs.entitlements.has(moduleEntitlementKey(descriptor.id))) {
+    return {
+      moduleId: descriptor.id,
+      state: "NOT_ENTITLED",
+      visible: false,
+      enabled: false,
+      reason: "Tenant entitlement is unavailable."
+    };
+  }
+
+  if (
+    definition.authorization.permissions.length > 0 &&
+    !definition.authorization.permissions.every((item) => inputs.permissions.has(item))
+  ) {
+    return {
+      moduleId: descriptor.id,
+      state: "NO_PERMISSION",
+      visible: false,
+      enabled: false,
+      reason: "Required module permission is unavailable."
+    };
+  }
+
+  return {
+    moduleId: descriptor.id,
+    state: "AVAILABLE",
+    visible: true,
+    enabled: true
+  };
+}
+
 export function projectAppRail(
   definitions: readonly ModuleDefinition[],
-  inputs: AvailabilityInputs
+  inputs: AvailabilityInputs | readonly ModuleAvailability[]
 ): AppRailItem[] {
+  const precomputedAvailability = isResolvedAvailability(inputs)
+    ? new Map(inputs.map((availability) => [availability.moduleId, availability]))
+    : undefined;
   return definitions
     .map((definition) => ({
       definition,
-      availability: resolveModuleAvailability(definition.descriptor, inputs)
+      availability:
+        precomputedAvailability?.get(definition.descriptor.id) ??
+        (precomputedAvailability
+          ? {
+              moduleId: definition.descriptor.id,
+              state: "DISABLED" as const,
+              visible: false,
+              enabled: false
+            }
+          : resolveDefinitionAvailability(definition, inputs as AvailabilityInputs))
     }))
     .filter((item) => item.availability.visible)
     .map(({ definition }) => ({
@@ -319,6 +462,12 @@ export function projectAppRail(
       navigationGroup: definition.descriptor.navigationGroup,
       uxProfileId: definition.descriptor.uxProfileId
     }));
+}
+
+function isResolvedAvailability(
+  inputs: AvailabilityInputs | readonly ModuleAvailability[]
+): inputs is readonly ModuleAvailability[] {
+  return Array.isArray(inputs);
 }
 
 export function registerModuleApiRoutes(

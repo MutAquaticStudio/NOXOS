@@ -14,7 +14,8 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: "pnpm --filter @nox-os/web preview --host 127.0.0.1 --port 4173",
+    command:
+      "VITE_SUPABASE_URL=https://example.supabase.co VITE_SUPABASE_PUBLISHABLE_KEY=g2-test-publishable-key pnpm --filter @nox-os/web build && pnpm --filter @nox-os/web preview --host 127.0.0.1 --port 4173",
     port: 4173,
     reuseExistingServer: !process.env.CI
   }

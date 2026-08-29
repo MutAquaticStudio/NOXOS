@@ -142,6 +142,32 @@ jobs:
         env:
           NOX_STAGING_URL: ${{ steps.deploy.outputs.staging_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      - id: g2-platform-core
+        run: pnpm verify:staging:g2-platform-core
+        env:
+          NOX_EXPECTED_ENV: staging
+          NOX_STAGING_URL: ${{ steps.deploy.outputs.staging_url }}
+          SUPABASE_URL: ${{ vars.SUPABASE_STAGING_URL }}
+          SUPABASE_STAGING_PROJECT_REF: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
+          SUPABASE_PRODUCTION_PROJECT_REF: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      - id: g2-evidence
+        run: |
+          artifact_path="$RUNNER_TEMP/g2-evidence/G2_ACCEPTANCE_${GITHUB_SHA}.env"
+          node scripts/evidence/write-g2-staging-evidence.mjs "$artifact_path"
+          echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
+        env:
+          NOX_STAGING_URL: ${{ steps.deploy.outputs.staging_url }}
+      - name: Upload G2 exact-SHA acceptance evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g2-staging-evidence-${{ github.sha }}
+          path: ${{ steps.g2-evidence.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 365
       - name: Record exact accepted Staging identity
         run: |
           echo "EXPECTED_STAGING_SHA=${GITHUB_SHA}"

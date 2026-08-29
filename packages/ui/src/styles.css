@@ -106,7 +106,8 @@
 }
 
 .nox-os button:focus-visible,
-.nox-os input:focus-visible {
+.nox-os input:focus-visible,
+.nox-os select:focus-visible {
   outline: 2px solid var(--accent-strong);
   outline-offset: 2px;
 }
@@ -341,6 +342,174 @@ kbd {
   border: 0;
 }
 
+.nox-auth-page {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: var(--space-6);
+  color: var(--text-primary);
+  background: var(--surface-00);
+}
+
+.nox-auth-card {
+  display: grid;
+  width: min(400px, 100%);
+  gap: var(--space-4);
+  padding: var(--space-7);
+  background: var(--surface-02);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-dialog);
+}
+
+.nox-auth-card form,
+.nox-auth-card label {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.nox-auth-card input,
+.nox-tenant-selector select {
+  min-height: 34px;
+  color: var(--text-primary);
+  background: var(--surface-01);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+}
+
+.nox-auth-card input {
+  padding: 0 var(--space-3);
+}
+
+.nox-tenant-selector select {
+  max-width: 176px;
+  padding: 0 var(--space-2);
+}
+
+.nox-control-plane,
+.nox-tenant-detail {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.nox-section-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.nox-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-panel);
+  background: var(--surface-01);
+}
+
+.nox-inline-form label {
+  display: grid;
+  min-width: min(100%, 180px);
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.nox-inline-form input,
+.nox-inline-form select,
+.nox-table-actions select {
+  min-height: 34px;
+  color: var(--text-primary);
+  background: var(--surface-00);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: 0 var(--space-2);
+}
+
+.nox-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-panel);
+  background: var(--surface-01);
+}
+
+.nox-table-wrap:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.nox-table-wrap table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.nox-table-wrap th,
+.nox-table-wrap td {
+  padding: var(--space-3);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.nox-table-wrap th {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.nox-table-wrap tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.nox-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.nox-danger-action {
+  color: var(--danger);
+}
+
+.nox-definition-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.nox-definition-list div {
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+}
+
+.nox-definition-list dt {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.nox-definition-list dd {
+  margin: var(--space-1) 0 0;
+}
+
+.nox-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.nox-read-only-list {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
 @media (max-width: 1439px) {
   .nox-shell-grid {
     grid-template-columns: 52px minmax(0, 1fr) minmax(240px, 320px);
@@ -409,6 +578,20 @@ kbd {
   .nox-workspace-content {
     padding: var(--space-6);
     padding-bottom: 72px;
+  }
+
+  .nox-section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .nox-inline-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .nox-inline-form label {
+    min-width: 0;
   }
 }
 

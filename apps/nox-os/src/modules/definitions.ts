@@ -66,6 +66,13 @@ function defineModule({
       moduleId: descriptor.id,
       apiNamespace: descriptor.apiNamespace,
       registerRoutes: (registrar) => registerFoundationApi(descriptor.apiNamespace, registrar)
+    },
+    // Gate 2 establishes the extension boundary. Existing Gate 0 modules do
+    // not receive speculative business permissions until their own Gate.
+    authorization: {
+      moduleId: descriptor.id,
+      permissions: [],
+      defaultRoleGrants: {}
     }
   };
 }
@@ -232,7 +239,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     id: "platform",
     displayName: "Platform Admin",
     routeRoot: "/admin",
-    childRoutes: ["/login", "/signup", "/dashboard", "/admin/tenants"],
+    childRoutes: ["/dashboard", "/admin/tenants"],
     apiNamespace: "platform",
     navigationGroup: "System",
     lifecycle: "INTERNAL",
@@ -376,7 +383,7 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     id: "settings",
     displayName: "Settings",
     routeRoot: "/settings",
-    childRoutes: [],
+    childRoutes: ["/settings/tenant"],
     apiNamespace: "settings",
     navigationGroup: "System",
     lifecycle: "INTERNAL",

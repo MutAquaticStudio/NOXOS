@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@nox-os/auth": "workspace:*",
     "@nox-os/config": "workspace:*",
     "@nox-os/contracts": "workspace:*",
     "@nox-os/database": "workspace:*",
@@ -16,6 +17,7 @@
     "@nox-os/platform": "workspace:*",
     "@nox-os/scientific": "workspace:*",
     "@nox-os/ui": "workspace:*",
+    "@supabase/supabase-js": "2.112.4",
     "@vercel/queue": "0.5.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",

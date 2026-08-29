@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { build } from "esbuild";
 import fg from "fast-glob";
 
-const entryPoints = fg.sync(["packages/*/src/index.ts", "packages/*/src/index.tsx"], {
+const entryPoints = fg.sync(["packages/*/src/**/*.ts", "packages/*/src/**/*.tsx"], {
   onlyFiles: true
 });
 
@@ -13,7 +13,7 @@ if (entryPoints.length === 0) {
 
 await Promise.all(
   entryPoints.map(async (entryPoint) => {
-    const outputFile = entryPoint.replace(/\/src\/index\.tsx?$/, "/dist/index.js");
+    const outputFile = entryPoint.replace(/\/src\/(.+)\.tsx?$/, "/dist/$1.js");
     await mkdir(dirname(outputFile), { recursive: true });
     await build({
       entryPoints: [entryPoint],

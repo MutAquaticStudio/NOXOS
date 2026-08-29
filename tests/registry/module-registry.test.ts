@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   projectAppRail,
+  moduleEntitlementKey,
   registerModuleApiRoutes,
   resolveModuleAvailability,
   validateModuleDefinitions
@@ -38,9 +39,7 @@ describe("canonical Module Registry", () => {
         .filter((value): value is string => Boolean(value))
     );
     const allEntitlements = new Set(
-      moduleDefinitions
-        .map((definition) => definition.descriptor.entitlement)
-        .filter((value): value is string => Boolean(value))
+      moduleDefinitions.map((definition) => moduleEntitlementKey(definition.descriptor.id))
     );
     const allPermissions = new Set(
       moduleDefinitions.flatMap((definition) => definition.descriptor.permissions)
@@ -57,6 +56,19 @@ describe("canonical Module Registry", () => {
       "settings",
       "support"
     ]);
+  });
+
+  it("projects server-resolved availability without rebuilding a second navigation authority", () => {
+    const rail = projectAppRail(moduleDefinitions, [
+      {
+        moduleId: "settings",
+        state: "AVAILABLE",
+        visible: true,
+        enabled: true
+      }
+    ]);
+
+    expect(rail.map((item) => item.moduleId)).toEqual(["settings"]);
   });
 
   it("keeps disabled future modules unavailable even when a UI caller presents flags", () => {

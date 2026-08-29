@@ -16,10 +16,16 @@ import { serverIdentity, type ServerIdentity } from "@nox-os/config";
 import { createLogger, type LogSink } from "@nox-os/observability";
 import { createOpaqueId } from "@nox-os/shared";
 
+export * from "./platform-core.js";
+export * from "./module-access.js";
+
 type RouteKey = string;
 type RouteRegistration = {
   handler: ApiRouteHandler;
   moduleId?: string;
+  path: string;
+  parameterNames?: readonly string[];
+  matcher?: RegExp;
 };
 type DatabaseHealth = { healthy: boolean; unconfigured?: boolean };
 
@@ -35,6 +41,8 @@ function key(method: string, path: string): RouteKey {
 
 export class InternalApiRouter implements ApiRouteRegistrar {
   private readonly routes = new Map<RouteKey, RouteRegistration>();
+  private readonly parameterizedRoutes: Array<{ method: string; registration: RouteRegistration }> =
+    [];
 
   get(path: string, handler: ApiRouteHandler): void {
     this.register("GET", path, handler);
@@ -49,7 +57,7 @@ export class InternalApiRouter implements ApiRouteRegistrar {
   }
 
   moduleIdFor(request: ApiRequest): string | undefined {
-    return this.routes.get(key(request.method, request.path))?.moduleId;
+    return this.match(request)?.registration.moduleId;
   }
 
   private registerRoute(
@@ -62,12 +70,26 @@ export class InternalApiRouter implements ApiRouteRegistrar {
     if (this.routes.has(routeKey)) {
       throw new Error("Duplicate API route: " + routeKey);
     }
-    this.routes.set(routeKey, { handler, moduleId });
+    const parameterNames = [...path.matchAll(/:([A-Za-z][A-Za-z0-9_]*)/g)].map((match) => match[1]);
+    const registration: RouteRegistration =
+      parameterNames.length === 0
+        ? { handler, moduleId, path }
+        : {
+            handler,
+            moduleId,
+            path,
+            parameterNames,
+            matcher: new RegExp("^" + path.replace(/:[A-Za-z][A-Za-z0-9_]*/g, "([^/]+)") + "$")
+          };
+    this.routes.set(routeKey, registration);
+    if (registration.matcher) {
+      this.parameterizedRoutes.push({ method: method.toUpperCase(), registration });
+    }
   }
 
   async dispatch(request: ApiRequest): Promise<ApiResponse> {
-    const route = this.routes.get(key(request.method, request.path));
-    if (!route) {
+    const match = this.match(request);
+    if (!match) {
       return {
         status: 404,
         body: toErrorEnvelope(
@@ -77,7 +99,33 @@ export class InternalApiRouter implements ApiRouteRegistrar {
         )
       };
     }
-    return route.handler(request);
+    return match.registration.handler({ ...request, params: match.params });
+  }
+
+  private match(
+    request: ApiRequest
+  ): { registration: RouteRegistration; params: Record<string, string> } | undefined {
+    const exact = this.routes.get(key(request.method, request.path));
+    if (exact && !exact.matcher) {
+      return { registration: exact, params: {} };
+    }
+    for (const candidate of this.parameterizedRoutes) {
+      if (candidate.method !== request.method.toUpperCase()) {
+        continue;
+      }
+      const values = candidate.registration.matcher?.exec(request.path);
+      if (!values) {
+        continue;
+      }
+      const params = Object.fromEntries(
+        (candidate.registration.parameterNames ?? []).map((name, index) => [
+          name,
+          values[index + 1]
+        ])
+      );
+      return { registration: candidate.registration, params };
+    }
+    return undefined;
   }
 }
 
@@ -130,6 +178,9 @@ export type FoundationApiOptions = {
   databaseProbe?: () => Promise<{ healthy: boolean }>;
   workflowLauncher?: WorkflowLauncher;
   diagnosticProbeToken?: string;
+  platformCore?: {
+    registerRoutes: (registrar: ApiRouteRegistrar) => void;
+  };
   logSink?: LogSink;
   apiTimeoutMs?: number;
 };
@@ -265,6 +316,8 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
       };
     });
   }
+
+  options.platformCore?.registerRoutes(router);
 
   for (const moduleDefinition of options.modules) {
     if (

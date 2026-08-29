@@ -5,10 +5,17 @@ const environmentSchema = z.enum(["preview", "staging", "production", "developme
 
 const publicEnvironmentSchema = z.object({
   VITE_NOX_ENV: environmentSchema.optional(),
-  VITE_NOX_SOURCE_SHA: z.string().min(1).max(128).optional()
+  VITE_NOX_SOURCE_SHA: z.string().min(1).max(128).optional(),
+  VITE_SUPABASE_URL: z.url().optional(),
+  VITE_SUPABASE_PUBLISHABLE_KEY: z.string().min(1).max(4_096).optional()
 });
 
-const allowedPublicEnvironmentKeys = new Set(["VITE_NOX_ENV", "VITE_NOX_SOURCE_SHA"]);
+const allowedPublicEnvironmentKeys = new Set([
+  "VITE_NOX_ENV",
+  "VITE_NOX_SOURCE_SHA",
+  "VITE_SUPABASE_URL",
+  "VITE_SUPABASE_PUBLISHABLE_KEY"
+]);
 
 export const APPLICATION_PUBLIC_ENVIRONMENT_PREFIXES = ["VITE_NOX_"] as const;
 
@@ -30,6 +37,8 @@ const serverIdentitySchema = z.object({
 export type PublicEnvironment = {
   environment: NoxEnvironment;
   sourceSha: string;
+  supabaseUrl?: string;
+  supabasePublishableKey?: string;
 };
 
 export type ServerIdentity = {
@@ -37,6 +46,22 @@ export type ServerIdentity = {
   sourceSha: string;
   providerTargetEnvironment?: string;
 };
+
+/**
+ * Vite substitutes an absent exposed value with an empty string in the browser
+ * bundle. Browser Supabase configuration is optional for a secretless Preview,
+ * so distinguish that deliberate absence from a malformed non-empty value.
+ */
+function normalizeOptionalPublicValues(
+  raw: Record<string, string | undefined>
+): Record<string, string | undefined> {
+  return Object.fromEntries(
+    Object.entries(raw).map(([key, value]) => [
+      key,
+      typeof value === "string" && value.trim() === "" ? undefined : value
+    ])
+  );
+}
 
 function providerBuildEnvironment(raw: Record<string, string | undefined>): NoxEnvironment {
   if (raw.VERCEL_TARGET_ENV === "staging") {
@@ -69,20 +94,24 @@ function providerBuildSourceSha(raw: Record<string, string | undefined>): string
  */
 export function publicBuildEnvironment(raw: Record<string, string | undefined>): PublicEnvironment {
   assertNoPublicSecrets(raw);
-  const parsed = publicEnvironmentSchema.parse(raw);
+  const parsed = publicEnvironmentSchema.parse(normalizeOptionalPublicValues(raw));
 
   return {
     environment: parsed.VITE_NOX_ENV ?? providerBuildEnvironment(raw),
-    sourceSha: parsed.VITE_NOX_SOURCE_SHA ?? providerBuildSourceSha(raw)
+    sourceSha: parsed.VITE_NOX_SOURCE_SHA ?? providerBuildSourceSha(raw),
+    supabaseUrl: parsed.VITE_SUPABASE_URL,
+    supabasePublishableKey: parsed.VITE_SUPABASE_PUBLISHABLE_KEY
   };
 }
 
 export function publicEnvironment(raw: Record<string, string | undefined>): PublicEnvironment {
-  const parsed = publicEnvironmentSchema.parse(raw);
+  const parsed = publicEnvironmentSchema.parse(normalizeOptionalPublicValues(raw));
 
   return {
     environment: parsed.VITE_NOX_ENV ?? "development",
-    sourceSha: parsed.VITE_NOX_SOURCE_SHA ?? "local"
+    sourceSha: parsed.VITE_NOX_SOURCE_SHA ?? "local",
+    supabaseUrl: parsed.VITE_SUPABASE_URL,
+    supabasePublishableKey: parsed.VITE_SUPABASE_PUBLISHABLE_KEY
   };
 }
 

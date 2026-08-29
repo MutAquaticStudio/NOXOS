@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizedHeaders, routePath } from "../../apps/nox-os/api/_transport";
+import { normalizedHeaders, normalizedQuery, routePath } from "../../apps/nox-os/api/_transport";
 
 describe("Vercel API transport", () => {
   it("uses catch-all query metadata when Vercel provides it", () => {
@@ -28,5 +28,13 @@ describe("Vercel API transport", () => {
       "x-correlation-id": "corr_test",
       "x-forwarded-for": "198.51.100.1,198.51.100.2"
     });
+  });
+
+  it("keeps scalar query filters and rejects repeated values at the transport boundary", () => {
+    expect(
+      normalizedQuery({
+        query: { tenantId: "tenant", action: "platform.tenant.create", limit: ["50", "100"] }
+      })
+    ).toEqual({ tenantId: "tenant", action: "platform.tenant.create", limit: undefined });
   });
 });

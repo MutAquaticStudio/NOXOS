@@ -11,9 +11,14 @@
     }
   },
   "dependencies": {
+    "@nox-os/auth": "workspace:*",
     "@nox-os/config": "workspace:*",
     "@nox-os/contracts": "workspace:*",
+    "@nox-os/database": "workspace:*",
+    "@nox-os/module-registry": "workspace:*",
     "@nox-os/observability": "workspace:*",
-    "@nox-os/shared": "workspace:*"
+    "@nox-os/shared": "workspace:*",
+    "@nox-os/tenancy": "workspace:*",
+    "zod": "4.3.6"
   }
 }

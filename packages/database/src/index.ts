@@ -1,5 +1,8 @@
 import postgres, { type Sql } from "postgres";
 
+export * from "./platform-store.js";
+export * from "./staging-fixture-maintenance.js";
+
 export type RuntimeDatabaseOptions = {
   connectionUrl: string;
   applicationName: string;
