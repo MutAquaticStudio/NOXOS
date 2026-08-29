@@ -5,6 +5,10 @@ const stagingWorkflow = readFileSync(".github/workflows/staging.yml", "utf8");
 const previewWorkflow = readFileSync(".github/workflows/preview.yml", "utf8");
 const stagingVerifier = readFileSync("scripts/verify/staging-g3-material-intelligence.ts", "utf8");
 const previewVerifier = readFileSync("scripts/verify/preview-g3-material-intelligence.ts", "utf8");
+const authenticatedPreviewDeployer = readFileSync(
+  "scripts/deploy/authenticated-preview.ts",
+  "utf8"
+);
 const stagingEvidence = readFileSync("scripts/evidence/write-g3-staging-evidence.mjs", "utf8");
 const tagWorkflow = readFileSync(".github/workflows/g3-acceptance-tag.yml", "utf8");
 
@@ -39,6 +43,9 @@ describe("G3 acceptance evidence boundary", () => {
     expect(previewVerifier).not.toContain("SUPABASE_SERVICE_ROLE_KEY");
     expect(previewVerifier).not.toContain("NOX_RUNTIME_DATABASE_URL");
     expect(previewVerifier).not.toContain("NOX_WORKFLOW_DATABASE_URL");
+    expect(authenticatedPreviewDeployer).not.toContain("SUPABASE_SERVICE_ROLE_KEY");
+    expect(authenticatedPreviewDeployer).not.toContain("SUPABASE_ACCESS_TOKEN");
+    expect(authenticatedPreviewDeployer).not.toContain("SUPABASE_DB_PASSWORD");
   });
 
   it("does not falsely freeze G3 in a mutable Staging artifact", () => {

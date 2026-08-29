@@ -101,24 +101,65 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - id: preview
+      - name: Verify protected authenticated Preview configuration
+        run: pnpm verify:preview:authenticated:configuration
+        env:
+          GITHUB_VAR__SUPABASE_PREVIEW_PROJECT_REF: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
+          GITHUB_VAR__SUPABASE_PRODUCTION_PROJECT_REF: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF || secrets.SUPABASE_PRODUCTION_PROJECT_REF }}
+          GITHUB_VAR__SUPABASE_PREVIEW_URL: ${{ vars.SUPABASE_PREVIEW_URL || secrets.SUPABASE_PREVIEW_URL }}
+          GITHUB_VAR__SUPABASE_PREVIEW_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PREVIEW_PUBLISHABLE_KEY || secrets.SUPABASE_PREVIEW_PUBLISHABLE_KEY }}
+          GITHUB_VAR__VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          GITHUB_VAR__VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          GITHUB_SECRET__SUPABASE_PREVIEW_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_ACCESS_TOKEN }}
+          GITHUB_SECRET__SUPABASE_PREVIEW_DB_PASSWORD: ${{ secrets.SUPABASE_PREVIEW_DB_PASSWORD }}
+          GITHUB_SECRET__NOX_PREVIEW_RUNTIME_DATABASE_URL: ${{ secrets.NOX_PREVIEW_RUNTIME_DATABASE_URL }}
+          GITHUB_SECRET__NOX_PREVIEW_MATERIAL_USER_ID: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_ID }}
+          GITHUB_SECRET__NOX_PREVIEW_MATERIAL_USER_EMAIL: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_EMAIL }}
+          GITHUB_SECRET__NOX_PREVIEW_MATERIAL_USER_PASSWORD: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_PASSWORD }}
+          GITHUB_SECRET__VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          GITHUB_SECRET__VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      - name: Verify authenticated Preview is isolated from Production
+        run: pnpm verify:environment-isolation
+        env:
+          NOX_EXPECTED_ENV: preview
+          NOX_ISOLATION_MODE: CONNECTED_AUTHENTICATED_PREVIEW
+          NOX_CURRENT_DATABASE_RESOURCE: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
+          NOX_PRODUCTION_DATABASE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF || secrets.SUPABASE_PRODUCTION_PROJECT_REF }}
+          SUPABASE_URL: ${{ vars.SUPABASE_PREVIEW_URL || secrets.SUPABASE_PREVIEW_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PREVIEW_PUBLISHABLE_KEY || secrets.SUPABASE_PREVIEW_PUBLISHABLE_KEY }}
+          NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_PREVIEW_RUNTIME_DATABASE_URL }}
+      - name: Replay version-controlled Preview migrations
+        run: pnpm db:migrate:cloud
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_PREVIEW_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
+          NOX_MIGRATION_ENV: preview
+      - name: Reconcile the isolated authenticated Preview fixture
         run: |
-          preview_output="$(pnpm verify:preview:deployment)"
+          pnpm platform:bootstrap-owner
+          pnpm platform:bootstrap-preview-material-acceptance
+        env:
+          NOX_PLATFORM_OWNER_BOOTSTRAP_USER_ID: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_ID }}
+          NOX_PREVIEW_MATERIAL_USER_ID: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_ID }}
+          NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_PREVIEW_RUNTIME_DATABASE_URL }}
+          SUPABASE_URL: ${{ vars.SUPABASE_PREVIEW_URL || secrets.SUPABASE_PREVIEW_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PREVIEW_PUBLISHABLE_KEY || secrets.SUPABASE_PREVIEW_PUBLISHABLE_KEY }}
+      - id: preview
+        name: Deploy protected authenticated Preview
+        run: |
+          preview_output="$(pnpm deploy:preview:authenticated)"
           printf '%s\n' "$preview_output"
-          preview_url="$(printf '%s\n' "$preview_output" | sed -n 's/^PREVIEW_DEPLOY_URL=//p' | tail -n 1)"
+          preview_url="$(printf '%s\n' "$preview_output" | sed -n 's/^AUTHENTICATED_PREVIEW_URL=//p' | tail -n 1)"
           test -n "$preview_url"
           echo "preview_url=$preview_url" >> "$GITHUB_OUTPUT"
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
-      - name: Verify Preview is isolated from Production
-        run: pnpm verify:environment-isolation
-        env:
-          NOX_EXPECTED_ENV: preview
-          NOX_ISOLATION_MODE: SECRETLESS_PREVIEW
-          NOX_CURRENT_DATABASE_RESOURCE: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
-          NOX_PRODUCTION_DATABASE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF || secrets.SUPABASE_PRODUCTION_PROJECT_REF }}
+          SUPABASE_URL: ${{ vars.SUPABASE_PREVIEW_URL || secrets.SUPABASE_PREVIEW_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PREVIEW_PUBLISHABLE_KEY || secrets.SUPABASE_PREVIEW_PUBLISHABLE_KEY }}
+          NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_PREVIEW_RUNTIME_DATABASE_URL }}
       - run: pnpm exec playwright install --with-deps chromium
       - name: Verify authenticated Material Intelligence Preview
         run: pnpm verify:preview:g3-material-intelligence

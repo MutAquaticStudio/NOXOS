@@ -5,7 +5,8 @@ import {
   type RuntimeDatabaseRole
 } from "@nox-os/database";
 
-type IsolationMode = "SECRETLESS_PREVIEW" | "CONNECTED_NON_PRODUCTION";
+type IsolationMode =
+  "SECRETLESS_PREVIEW" | "CONNECTED_AUTHENTICATED_PREVIEW" | "CONNECTED_NON_PRODUCTION";
 
 function required(raw: Record<string, string | undefined>, name: string): string {
   const value = raw[name];
@@ -117,6 +118,35 @@ function assertConnectedResourceIdentity(raw: Record<string, string | undefined>
   assertRuntimeDatabaseIdentity(workflowDatabaseUrl, currentProjectRef, "nox_workflow_runtime");
 }
 
+/** ADR-0004's narrow, isolated data-plane exception for authenticated acceptance. */
+function assertAuthenticatedPreviewResourceIdentity(raw: Record<string, string | undefined>): void {
+  const currentProjectRef = requiredProjectReference(raw, "NOX_CURRENT_DATABASE_RESOURCE");
+  const supabaseUrl = required(raw, "SUPABASE_URL");
+  const runtimeDatabaseUrl = required(raw, "NOX_RUNTIME_DATABASE_URL");
+  const publishableKey = required(raw, "SUPABASE_PUBLISHABLE_KEY");
+  const forbidden = [
+    "NOX_WORKFLOW_DATABASE_URL",
+    "NOX_MIGRATION_DATABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_ACCESS_TOKEN",
+    "SUPABASE_DB_PASSWORD",
+    "SUPABASE_STORAGE_BUCKET",
+    "NOX_DIAGNOSTIC_PROBE_TOKEN"
+  ].filter((name) => raw[name]);
+
+  if (forbidden.length > 0) {
+    throw new Error(
+      "Authenticated Preview received credentials outside its limited runtime boundary: " +
+        forbidden.join(", ")
+    );
+  }
+  if (publishableKey.length < 16) {
+    throw new Error("Authenticated Preview requires a valid public Supabase key.");
+  }
+  assertSupabaseEndpoint(supabaseUrl, currentProjectRef);
+  assertRuntimeDatabaseIdentity(runtimeDatabaseUrl, currentProjectRef, "nox_app_runtime");
+}
+
 export function verifyEnvironmentIsolation(
   raw: Record<string, string | undefined> = process.env
 ): void {
@@ -135,6 +165,8 @@ export function verifyEnvironmentIsolation(
 
   if (environment === "preview" && mode === "SECRETLESS_PREVIEW") {
     assertNoRuntimeCredentials(raw);
+  } else if (environment === "preview" && mode === "CONNECTED_AUTHENTICATED_PREVIEW") {
+    assertAuthenticatedPreviewResourceIdentity(raw);
   } else if (environment === "staging" && mode === "CONNECTED_NON_PRODUCTION") {
     assertConnectedResourceIdentity(raw);
   } else {

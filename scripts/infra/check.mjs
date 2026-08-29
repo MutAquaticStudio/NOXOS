@@ -24,6 +24,8 @@ if (
 
 const previewSecurity =
   configuration["infra/vercel/preview-security.json"].ordinaryPullRequestPreview;
+const authenticatedPreview =
+  configuration["infra/vercel/preview-security.json"].protectedAuthenticatedAcceptancePreview;
 const requiredPreviewSecretlessKeys = [
   "NOX_RUNTIME_DATABASE_URL",
   "NOX_WORKFLOW_DATABASE_URL",
@@ -47,6 +49,43 @@ if (
   )
 ) {
   throw new Error("Ordinary pull-request Preview must remain a secretless provider runtime.");
+}
+
+const requiredAuthenticatedPreviewRuntimeKeys = [
+  "NOX_ENV",
+  "NOX_SOURCE_SHA",
+  "SUPABASE_URL",
+  "SUPABASE_PUBLISHABLE_KEY",
+  "NOX_RUNTIME_DATABASE_URL",
+  "NOX_FEATURE_FLAGS"
+];
+const forbiddenAuthenticatedPreviewRuntimeKeys = [
+  "NOX_WORKFLOW_DATABASE_URL",
+  "NOX_MIGRATION_DATABASE_URL",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "SUPABASE_ACCESS_TOKEN",
+  "SUPABASE_DB_PASSWORD",
+  "SUPABASE_STORAGE_BUCKET",
+  "NOX_DIAGNOSTIC_PROBE_TOKEN"
+];
+if (
+  authenticatedPreview.authority !== "ADR-0004" ||
+  authenticatedPreview.providerGitIntegration !== false ||
+  authenticatedPreview.deploymentSource !== "protected GitHub Preview environment" ||
+  authenticatedPreview.dataPlane !== "isolated-preview" ||
+  authenticatedPreview.productionAccess !== false ||
+  authenticatedPreview.credentialScope !== "limited runtime role only" ||
+  authenticatedPreview.ordinaryPullRequestPreviewUnchanged !== true ||
+  !requiredAuthenticatedPreviewRuntimeKeys.every((key) =>
+    authenticatedPreview.allowedRuntimeEnvironmentKeys.includes(key)
+  ) ||
+  !forbiddenAuthenticatedPreviewRuntimeKeys.every((key) =>
+    authenticatedPreview.forbiddenRuntimeEnvironmentKeys.includes(key)
+  )
+) {
+  throw new Error(
+    "Protected authenticated Preview must remain a limited, isolated acceptance path."
+  );
 }
 
 console.log("INFRA_CONTRACT=PASS");

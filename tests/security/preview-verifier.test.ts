@@ -247,16 +247,45 @@ describe("trusted Preview verification", () => {
 
   it("keeps ordinary pull-request Preview secretless and executes only trusted base verifier code", () => {
     const workflow = readFileSync(".github/workflows/preview.yml", "utf8");
+    const ordinaryPreviewJob = workflow.slice(
+      workflow.indexOf("  verify-provider-preview:"),
+      workflow.indexOf("  authenticated-g3-material-intelligence:")
+    );
 
     expect(workflow).toMatch(/^\s*pull_request_target:/m);
     expect(workflow).not.toMatch(/^\s*workflow_run:/m);
-    expect(workflow).toContain("ref: ${{ github.event.pull_request.base.sha }}");
-    expect(workflow).toContain("NOX_ISOLATION_MODE: SECRETLESS_PREVIEW");
-    expect(workflow).not.toContain("pnpm db:migrate:cloud");
-    expect(workflow).not.toContain("pnpm infra:apply");
-    expect(workflow).not.toContain("verify:staging:data-plane");
-    expect(workflow).not.toMatch(/NOX_(RUNTIME|MIGRATION)_DATABASE_URL/);
-    expect(workflow).not.toMatch(/SUPABASE_(URL|SERVICE_ROLE_KEY|ACCESS_TOKEN|STORAGE_BUCKET)/);
-    expect(workflow).not.toMatch(/NOX_(WORKFLOW_PROBE|DIAGNOSTIC_PROBE)_TOKEN/);
+    expect(ordinaryPreviewJob).toContain("ref: ${{ github.event.pull_request.base.sha }}");
+    expect(ordinaryPreviewJob).toContain("NOX_ISOLATION_MODE: SECRETLESS_PREVIEW");
+    expect(ordinaryPreviewJob).not.toContain("pnpm db:migrate:cloud");
+    expect(ordinaryPreviewJob).not.toContain("pnpm infra:apply");
+    expect(ordinaryPreviewJob).not.toContain("verify:staging:data-plane");
+    expect(ordinaryPreviewJob).not.toMatch(/NOX_(RUNTIME|MIGRATION)_DATABASE_URL/);
+    expect(ordinaryPreviewJob).not.toMatch(
+      /SUPABASE_(URL|SERVICE_ROLE_KEY|ACCESS_TOKEN|STORAGE_BUCKET)/
+    );
+    expect(ordinaryPreviewJob).not.toMatch(/NOX_(WORKFLOW_PROBE|DIAGNOSTIC_PROBE)_TOKEN/);
+  });
+
+  it("keeps the authenticated acceptance deployment distinct, non-production, and limited", () => {
+    const workflow = readFileSync(".github/workflows/preview.yml", "utf8");
+    const contract = JSON.parse(readFileSync("infra/vercel/preview-security.json", "utf8"));
+    const deployer = readFileSync("scripts/deploy/authenticated-preview.ts", "utf8");
+
+    expect(workflow).toContain("NOX_ISOLATION_MODE: CONNECTED_AUTHENTICATED_PREVIEW");
+    expect(workflow).toContain("pnpm db:migrate:cloud");
+    expect(workflow).toContain("pnpm deploy:preview:authenticated");
+    expect(contract.protectedAuthenticatedAcceptancePreview).toMatchObject({
+      authority: "ADR-0004",
+      providerGitIntegration: false,
+      dataPlane: "isolated-preview",
+      productionAccess: false,
+      credentialScope: "limited runtime role only",
+      ordinaryPullRequestPreviewUnchanged: true
+    });
+    expect(deployer).toContain("NOX_RUNTIME_DATABASE_URL");
+    expect(deployer).not.toContain("SUPABASE_SERVICE_ROLE_KEY");
+    expect(deployer).not.toContain("SUPABASE_ACCESS_TOKEN");
+    expect(deployer).not.toContain("SUPABASE_DB_PASSWORD");
+    expect(deployer).not.toContain("NOX_WORKFLOW_DATABASE_URL");
   });
 });
