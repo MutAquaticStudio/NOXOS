@@ -11,7 +11,7 @@ import type {
   TenantRequestContext
 } from "@nox-os/contracts";
 import type { FeatureFlagResolver } from "@nox-os/module-registry";
-import osmoV12 from "../../../taxonomy/osmo/1.2.json";
+import osmoV12 from "../../../taxonomy/osmo/1.2.json" with { type: "json" };
 
 export const MATERIAL_MODULE_ID = "material-intelligence";
 export const MATERIAL_ENTITLEMENT = "module.material-intelligence";

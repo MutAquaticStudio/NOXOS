@@ -24,6 +24,7 @@ await Promise.all(
       logLevel: "warning",
       platform: "neutral",
       sourcemap: true,
+      supported: { "import-attributes": true },
       target: "es2024",
       tsconfig: "tsconfig.json"
     });

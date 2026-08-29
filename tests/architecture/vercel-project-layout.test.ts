@@ -9,6 +9,9 @@ const appConfig = JSON.parse(readFileSync(appConfigPath, "utf8")) as {
   regions?: string[];
   functions?: Record<string, unknown>;
 };
+const appPackage = JSON.parse(readFileSync("apps/nox-os/package.json", "utf8")) as {
+  dependencies?: Record<string, string>;
+};
 
 describe("Vercel project layout", () => {
   it("keeps the Vercel project configuration and API within the configured app root", () => {
@@ -48,6 +51,30 @@ describe("Vercel project layout", () => {
         packageJson.name
       ).toBe(true);
     }
+  });
+
+  it("declares every workspace package imported by the Vercel API as an app runtime dependency", () => {
+    const handler = readFileSync("apps/nox-os/api/v1/[...route].ts", "utf8");
+    const runtimePackages = [
+      "@nox-os/auth",
+      "@nox-os/contracts",
+      "@nox-os/database",
+      "@nox-os/material-intelligence",
+      "@nox-os/module-registry",
+      "@nox-os/platform",
+      "@nox-os/scientific"
+    ];
+
+    for (const packageName of runtimePackages) {
+      expect(handler).toContain(`from \"${packageName}\"`);
+      expect(appPackage.dependencies?.[packageName]).toBe("workspace:*");
+    }
+  });
+
+  it("preserves JSON import attributes in runtime package output for Node Functions", () => {
+    const runtimeBuilder = readFileSync("scripts/build/runtime-packages.mjs", "utf8");
+
+    expect(runtimeBuilder).toContain('supported: { "import-attributes": true }');
   });
 
   it("deploys Staging source through the reconciled Vercel project without a local prebuilt artifact", () => {

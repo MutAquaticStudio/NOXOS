@@ -73,6 +73,9 @@ importers:
       "@nox-os/database":
         specifier: workspace:*
         version: link:../../packages/database
+      "@nox-os/material-intelligence":
+        specifier: workspace:*
+        version: link:../../packages/material-intelligence
       "@nox-os/module-registry":
         specifier: workspace:*
         version: link:../../packages/module-registry

@@ -1,4 +1,9 @@
-const requiredRuntimePackages = ["@nox-os/database", "@nox-os/platform", "@nox-os/scientific"];
+const requiredRuntimePackages = [
+  "@nox-os/database",
+  "@nox-os/material-intelligence",
+  "@nox-os/platform",
+  "@nox-os/scientific"
+];
 
 await Promise.all(requiredRuntimePackages.map((packageName) => import(packageName)));
 
