@@ -140,7 +140,7 @@ async function signIn(page: Page): Promise<void> {
   await requireVisible(
     page,
     "authenticated NØX shell",
-    page.getByRole("button", { name: "User menu" })
+    page.getByRole("navigation", { name: "Application modules" })
   );
 }
 
