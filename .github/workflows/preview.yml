@@ -34,17 +34,20 @@ concurrency:
 
 jobs:
   bootstrap-authenticated-preview-migrations:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    # The PR path is deliberately limited to the one protected G3 integration
+    # branch. It is removed from ordinary PR trust domains: the job has only
+    # Supabase migration credentials and never sees Vercel or runtime secrets.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feature/g3-material-intelligence') }}
     runs-on: ubuntu-24.04
     environment: Preview
     timeout-minutes: 20
     env:
-      EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+      EXPECTED_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_source_sha || github.event.pull_request.head.sha }}
       NOX_MIGRATION_ENV: preview
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.expected_source_sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_source_sha || github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Bind the bootstrap to the requested immutable source
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
