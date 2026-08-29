@@ -36,7 +36,6 @@ for (const key of [
   "VERCEL_ORG_ID",
   "VERCEL_PROJECT_ID",
   "EXPECTED_SOURCE_SHA",
-  "VITE_TURNSTILE_SITE_KEY",
   "NOX_RUNTIME_DATABASE_URL",
   "NOX_WORKFLOW_DATABASE_URL",
   "NOX_DIAGNOSTIC_PROBE_TOKEN"
@@ -73,8 +72,6 @@ const submittedUrl = deployVercel([
   "VITE_NOX_ENV=" + target,
   "--build-env",
   "VITE_NOX_SOURCE_SHA=" + expectedSourceSha,
-  "--build-env",
-  "VITE_TURNSTILE_SITE_KEY=" + required("VITE_TURNSTILE_SITE_KEY"),
   "--env",
   "NOX_ENV=" + target,
   "--env",

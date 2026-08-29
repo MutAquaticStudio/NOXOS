@@ -5,17 +5,12 @@ const environmentSchema = z.enum(["preview", "staging", "production", "developme
 
 const publicEnvironmentSchema = z.object({
   VITE_NOX_ENV: environmentSchema.optional(),
-  VITE_NOX_SOURCE_SHA: z.string().min(1).max(128).optional(),
-  VITE_TURNSTILE_SITE_KEY: z.string().min(1).optional()
+  VITE_NOX_SOURCE_SHA: z.string().min(1).max(128).optional()
 });
 
-const allowedPublicEnvironmentKeys = new Set([
-  "VITE_NOX_ENV",
-  "VITE_NOX_SOURCE_SHA",
-  "VITE_TURNSTILE_SITE_KEY"
-]);
+const allowedPublicEnvironmentKeys = new Set(["VITE_NOX_ENV", "VITE_NOX_SOURCE_SHA"]);
 
-export const APPLICATION_PUBLIC_ENVIRONMENT_PREFIXES = ["VITE_NOX_", "VITE_TURNSTILE_"] as const;
+export const APPLICATION_PUBLIC_ENVIRONMENT_PREFIXES = ["VITE_NOX_"] as const;
 
 const providerPublicSystemMetadataPrefixes = ["VITE_VERCEL_"] as const;
 
@@ -35,7 +30,6 @@ const serverIdentitySchema = z.object({
 export type PublicEnvironment = {
   environment: NoxEnvironment;
   sourceSha: string;
-  turnstileSiteKey?: string;
 };
 
 export type ServerIdentity = {
@@ -79,8 +73,7 @@ export function publicBuildEnvironment(raw: Record<string, string | undefined>):
 
   return {
     environment: parsed.VITE_NOX_ENV ?? providerBuildEnvironment(raw),
-    sourceSha: parsed.VITE_NOX_SOURCE_SHA ?? providerBuildSourceSha(raw),
-    turnstileSiteKey: parsed.VITE_TURNSTILE_SITE_KEY
+    sourceSha: parsed.VITE_NOX_SOURCE_SHA ?? providerBuildSourceSha(raw)
   };
 }
 
@@ -89,8 +82,7 @@ export function publicEnvironment(raw: Record<string, string | undefined>): Publ
 
   return {
     environment: parsed.VITE_NOX_ENV ?? "development",
-    sourceSha: parsed.VITE_NOX_SOURCE_SHA ?? "local",
-    turnstileSiteKey: parsed.VITE_TURNSTILE_SITE_KEY
+    sourceSha: parsed.VITE_NOX_SOURCE_SHA ?? "local"
   };
 }
 

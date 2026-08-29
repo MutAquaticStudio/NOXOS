@@ -495,7 +495,7 @@ export async function launchWorkflowProbe(
   };
   const handle = await launcher.start(
     "nox.foundation.diagnostic",
-    { purpose: "cloud-foundation-acceptance", simulateRetry: true },
+    { purpose: "cloud-foundation-acceptance" },
     context
   );
 
@@ -540,66 +540,6 @@ export async function requireCurrentWorkflowAuthority(
   if (!allowed) {
     throw new Error("Workflow authority must be revalidated before a consequential step.");
   }
-}
-
-export type TurnstileVerificationOptions = {
-  secret: string;
-  token: string;
-  expectedHostname?: string;
-  expectedAction?: string;
-  remoteIp?: string;
-  idempotencyKey?: string;
-};
-
-export type TurnstileVerificationResult = {
-  valid: boolean;
-  reason?: string;
-};
-
-type TurnstileResponse = {
-  success: boolean;
-  hostname?: string;
-  action?: string;
-  "error-codes"?: string[];
-};
-
-export async function verifyTurnstile(
-  options: TurnstileVerificationOptions,
-  request: typeof fetch = fetch
-): Promise<TurnstileVerificationResult> {
-  if (!options.secret || !options.token || options.token.length > 2048) {
-    return { valid: false, reason: "Turnstile token is invalid." };
-  }
-
-  const form = new URLSearchParams({
-    secret: options.secret,
-    response: options.token
-  });
-  if (options.remoteIp) {
-    form.set("remoteip", options.remoteIp);
-  }
-  if (options.idempotencyKey) {
-    form.set("idempotency_key", options.idempotencyKey);
-  }
-
-  const response = await request("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: form
-  });
-  const result = (await response.json()) as TurnstileResponse;
-
-  if (!result.success) {
-    return { valid: false, reason: "Turnstile validation failed." };
-  }
-  if (options.expectedHostname && result.hostname !== options.expectedHostname) {
-    return { valid: false, reason: "Turnstile hostname did not match." };
-  }
-  if (options.expectedAction && result.action !== options.expectedAction) {
-    return { valid: false, reason: "Turnstile action did not match." };
-  }
-
-  return { valid: true };
 }
 
 export interface AccessAdmissionPort {

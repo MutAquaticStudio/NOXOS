@@ -9,16 +9,11 @@ export default defineConfig(({ mode }) => {
     "import.meta.env.VITE_NOX_ENV": JSON.stringify(clientEnvironment.environment),
     "import.meta.env.VITE_NOX_SOURCE_SHA": JSON.stringify(clientEnvironment.sourceSha)
   };
-  if (clientEnvironment.turnstileSiteKey) {
-    clientDefinitions["import.meta.env.VITE_TURNSTILE_SITE_KEY"] = JSON.stringify(
-      clientEnvironment.turnstileSiteKey
-    );
-  }
 
   return {
     plugins: [react()],
-    // Vercel's VITE_VERCEL_* metadata may exist during a build, but only
-    // application-owned, explicitly validated namespaces may enter client code.
+    // Vercel's VITE_VERCEL_* metadata may exist during a build, but only the
+    // application-owned, explicitly validated namespace may enter client code.
     envPrefix: [...APPLICATION_PUBLIC_ENVIRONMENT_PREFIXES],
     define: clientDefinitions,
     build: {

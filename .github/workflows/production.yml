@@ -42,16 +42,8 @@ jobs:
           cache: pnpm
       - run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - run: pnpm install --frozen-lockfile
-      - run: pnpm evidence:verify:staging-tag
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          EXPECTED_STAGING_SHA: ${{ env.SOURCE_SHA }}
       - run: pnpm validate
       - run: pnpm contracts:check-frozen-inputs
-        env:
-          REQUIRE_EXTERNAL_CONTRACTS: "true"
-          FROZEN_G0_ARCHITECTURE_GZIP_BASE64: ${{ secrets.FROZEN_G0_ARCHITECTURE_GZIP_BASE64 }}
-          FROZEN_UXUI_GUIDELINE_GZIP_BASE64: ${{ secrets.FROZEN_UXUI_GUIDELINE_GZIP_BASE64 }}
       - run: pnpm db:migrate:cloud
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

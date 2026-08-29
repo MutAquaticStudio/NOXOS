@@ -1,42 +1,9 @@
 import { readFileSync } from "node:fs";
 
-const files = [
-  "infra/cloudflare/dns.json",
-  "infra/cloudflare/turnstile.json",
-  "infra/cloudflare/access.json",
-  "infra/environments.json",
-  "infra/vercel/preview-security.json"
-];
+const files = ["infra/environments.json", "infra/vercel/preview-security.json"];
 const configuration = Object.fromEntries(
   files.map((file) => [file, JSON.parse(readFileSync(file, "utf8"))])
 );
-
-if (configuration["infra/cloudflare/dns.json"].publicApplication.proxied !== false) {
-  throw new Error("Public Vercel application must remain Cloudflare DNS-only.");
-}
-if (
-  configuration["infra/cloudflare/access.json"].applicationAuthorization.accessIsNotRbac !== true
-) {
-  throw new Error("Cloudflare Access must not be represented as NØX RBAC.");
-}
-if (
-  configuration["infra/cloudflare/access.json"].policy.identityGroupEnvironmentKey !==
-  "CF_ACCESS_IDENTITY_GROUP_ID"
-) {
-  throw new Error(
-    "Cloudflare Access policy must source its identity group from cloud configuration."
-  );
-}
-if (configuration["infra/cloudflare/turnstile.json"].serverValidation.singleUse !== true) {
-  throw new Error("Turnstile must be verified server-side as a single-use token.");
-}
-if (
-  configuration["infra/cloudflare/turnstile.json"].credentialBootstrap.autoCreateWidget !== false ||
-  configuration["infra/cloudflare/turnstile.json"].credentialBootstrap
-    .externalSecretStoreRequired !== true
-) {
-  throw new Error("Turnstile credentials require explicit one-time secret-store bootstrap.");
-}
 
 const environments = configuration["infra/environments.json"];
 if (
@@ -67,12 +34,8 @@ const requiredPreviewSecretlessKeys = [
   "SUPABASE_DB_PASSWORD",
   "SUPABASE_STORAGE_BUCKET",
   "NOX_DIAGNOSTIC_PROBE_TOKEN",
-  "TURNSTILE_SECRET_KEY",
-  "CF_API_TOKEN",
   "VERCEL_TOKEN",
-  "VERCEL_AUTOMATION_BYPASS_SECRET",
-  "FROZEN_G0_ARCHITECTURE_GZIP_BASE64",
-  "FROZEN_UXUI_GUIDELINE_GZIP_BASE64"
+  "VERCEL_AUTOMATION_BYPASS_SECRET"
 ];
 if (
   previewSecurity.providerGitIntegration !== true ||

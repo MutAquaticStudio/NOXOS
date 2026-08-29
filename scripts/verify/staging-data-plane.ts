@@ -124,9 +124,9 @@ if (
   !workflowCompletion ||
   workflowCompletion.correlationId !== correlationId ||
   workflowCompletion.idempotencyKey !== idempotencyKey ||
-  workflowCompletion.deliveryCount < 2
+  workflowCompletion.deliveryCount < 1
 ) {
-  throw new Error("Durable workflow retry, idempotency, or correlation verification failed.");
+  throw new Error("Durable workflow delivery, idempotency, or correlation verification failed.");
 }
 
 console.log("STAGING_DATABASE_PROBE=PASS");

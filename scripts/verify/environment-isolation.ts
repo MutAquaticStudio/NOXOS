@@ -36,12 +36,8 @@ function assertNoRuntimeCredentials(raw: Record<string, string | undefined>): vo
     "NOX_WORKFLOW_PROBE_URL",
     "NOX_WORKFLOW_PROBE_TOKEN",
     "NOX_DIAGNOSTIC_PROBE_TOKEN",
-    "TURNSTILE_SECRET_KEY",
-    "CF_API_TOKEN",
     "VERCEL_TOKEN",
-    "VERCEL_AUTOMATION_BYPASS_SECRET",
-    "FROZEN_G0_ARCHITECTURE_GZIP_BASE64",
-    "FROZEN_UXUI_GUIDELINE_GZIP_BASE64"
+    "VERCEL_AUTOMATION_BYPASS_SECRET"
   ].filter((name) => raw[name]);
 
   if (forbidden.length > 0) {

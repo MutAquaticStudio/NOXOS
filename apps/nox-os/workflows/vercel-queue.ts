@@ -64,11 +64,9 @@ export class VercelQueueWorkflowLauncher implements WorkflowLauncher {
 }
 
 export class PermanentFoundationWorkflowError extends Error {}
-export class TransientFoundationWorkflowError extends Error {}
 
 type FoundationDiagnosticInput = {
   purpose: "cloud-foundation-acceptance";
-  simulateRetry: true;
 };
 
 export type FoundationWorkflowProcessorOptions = {
@@ -101,7 +99,6 @@ function parseFoundationDiagnosticMessage(
   if (
     !isObject(input) ||
     input.purpose !== "cloud-foundation-acceptance" ||
-    input.simulateRetry !== true ||
     !isObject(context) ||
     !isIdentifier(context.workflowId) ||
     !isIdentifier(context.correlationId) ||
@@ -136,12 +133,6 @@ export async function processFoundationWorkflowMessage(
       );
     }
   });
-
-  if (metadata.deliveryCount === 1 && message.input.simulateRetry) {
-    throw new TransientFoundationWorkflowError(
-      "Foundation diagnostic intentionally requested one durable retry."
-    );
-  }
 
   await options.recordCompletion({
     workflowId: message.context.workflowId,

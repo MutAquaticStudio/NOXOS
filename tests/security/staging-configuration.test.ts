@@ -8,17 +8,6 @@ const requiredConfiguration = {
   GITHUB_VAR__SUPABASE_STAGING_STORAGE_BUCKET: "nox-os-private",
   GITHUB_VAR__VERCEL_ORG_ID: "team_nox",
   GITHUB_VAR__VERCEL_PROJECT_ID: "prj_FPN9pBNMfvE7pQC9scA9j9HwzQpx",
-  GITHUB_VAR__CF_ZONE_ID: "zone-id",
-  GITHUB_VAR__CF_ACCOUNT_ID: "account-id",
-  GITHUB_VAR__NOX_PUBLIC_APP_HOSTNAME: "app.example.com",
-  GITHUB_VAR__VERCEL_PUBLIC_CNAME_TARGET: "cname.vercel-dns.com",
-  GITHUB_VAR__CF_PRIVILEGED_PROXY_APPROVED: "true",
-  GITHUB_VAR__NOX_OPS_HOSTNAME: "ops.example.com",
-  GITHUB_VAR__CF_PRIVILEGED_CNAME_TARGET: "ops.vercel.app",
-  GITHUB_VAR__CF_ACCESS_IDENTITY_GROUP_ID: "group-id",
-  GITHUB_VAR__VITE_TURNSTILE_SITE_KEY: "site-key",
-  GITHUB_SECRET__FROZEN_G0_ARCHITECTURE_GZIP_BASE64: "encrypted-g0",
-  GITHUB_SECRET__FROZEN_UXUI_GUIDELINE_GZIP_BASE64: "encrypted-ux",
   GITHUB_SECRET__NOX_RUNTIME_DATABASE_URL: "runtime-url",
   GITHUB_SECRET__NOX_WORKFLOW_DATABASE_URL: "workflow-url",
   GITHUB_SECRET__SUPABASE_SERVICE_ROLE_KEY: "service-role",
@@ -26,9 +15,7 @@ const requiredConfiguration = {
   GITHUB_SECRET__SUPABASE_DB_PASSWORD: "db-password",
   GITHUB_SECRET__VERCEL_TOKEN: "vercel-token",
   GITHUB_SECRET__VERCEL_AUTOMATION_BYPASS_SECRET: "bypass",
-  GITHUB_SECRET__NOX_DIAGNOSTIC_PROBE_TOKEN: "diagnostic",
-  GITHUB_SECRET__CF_API_TOKEN: "cloudflare-token",
-  GITHUB_SECRET__TURNSTILE_SECRET_KEY: "turnstile-secret"
+  GITHUB_SECRET__NOX_DIAGNOSTIC_PROBE_TOKEN: "diagnostic"
 } as const;
 
 function run(overrides: Record<string, string> = {}): string {

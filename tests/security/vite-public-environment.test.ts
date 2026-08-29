@@ -46,8 +46,7 @@ describe("Vite public-environment boundary", () => {
   it("allows only approved application public configuration", () => {
     const { result } = buildWithEnvironment({
       VITE_NOX_ENV: "preview",
-      VITE_NOX_SOURCE_SHA: "approved-application-sha",
-      VITE_TURNSTILE_SITE_KEY: "approved-public-site-key"
+      VITE_NOX_SOURCE_SHA: "approved-application-sha"
     });
 
     expect(result.status, result.stderr + result.stdout).toBe(0);
@@ -77,7 +76,7 @@ describe("Vite public-environment boundary", () => {
     expect(output).toContain(sourceSha);
   });
 
-  it.each(["VITE_DATABASE_URL", "VITE_SUPABASE_SERVICE_ROLE_KEY", "VITE_CF_API_TOKEN"])(
+  it.each(["VITE_DATABASE_URL", "VITE_SUPABASE_SERVICE_ROLE_KEY", "VITE_UNAPPROVED_SECRET"])(
     "rejects %s before bundling",
     (key) => {
       const { result } = buildWithEnvironment({ [key]: "unsafe-test-value" });

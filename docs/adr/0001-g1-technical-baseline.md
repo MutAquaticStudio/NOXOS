@@ -2,8 +2,7 @@
 
 ## Status
 
-Accepted. Live provider acceptance remains a separate evidence requirement and cannot
-change these selections silently.
+Accepted. ADR 0003 amends this baseline for G1 v1.1 where the two documents conflict.
 
 ## Decisions
 
@@ -22,7 +21,7 @@ change these selections silently.
 | Provider tooling | Vercel CLI 59.9.1 and Supabase CLI 2.116.0                                                                                                                                         |
 | Workflow         | `@vercel/queue@0.5.1` behind `WorkflowLauncher`, using the private raw-Node callback consumer and provider idempotency; provider types stay outside domain and contract packages   |
 | Region           | Existing Supabase Staging and Production remain in `ap-southeast-2`; Vercel Functions and Queues run in `syd1`, the matching AWS region                                            |
-| Frozen inputs    | Local canonical files remain the human authority; cloud CI reads encrypted gzip/base64 mirrors from protected GitHub secrets and verifies the versioned SHA-256 baseline           |
+| Frozen inputs    | Local canonical files remain the human authority; committed checksum identities and trusted PR controls protect their G1 integration without CI secret mirrors                     |
 | Performance      | Lazy module routes, 350 kB Vite chunk warning, 8s API response budget, 10s public API Function cap, and no synchronous dependency on workflow or Scientific Runtime during startup |
 
 ## Consequences
@@ -41,15 +40,14 @@ observed `iad1`/Sydney distance while preserving the existing data projects.
 The evaluated Vercel Workflow Vite integration requires Nitro to supply its server routes.
 Introducing Nitro or migrating to Next.js solely for durable execution would change the
 frozen React/Vite/raw-Function stack. `@vercel/queue@0.5.1` exposes a Connect-style
-`handleNodeCallback` for plain Vercel Node Functions, provides durable at-least-once delivery,
-retries and idempotency, and therefore fits behind the existing provider-neutral port without
-a framework migration. A live queue retry/idempotency/correlation probe is still mandatory
-before this Gate can pass.
+`handleNodeCallback` for plain Vercel Node Functions, provides durable at-least-once delivery
+and idempotency, and therefore fits behind the existing provider-neutral port without a
+framework migration. G1 v1.1 requires one live API-to-queue-to-completion round-trip with
+idempotency and correlation preserved.
 
 The API response budget intentionally remains shorter than the Vercel Function cap. No
 long-running work is permitted to rely on an HTTP request lifetime; later consequential API
 commands must be cancellation-aware and idempotent before they are introduced.
 
-The public app uses Cloudflare DNS-only. Cloudflare Turnstile is verified server-side.
-Cloudflare Access is a separate privileged-surface admission layer and never an RBAC
-source.
+Cloudflare and Turnstile are outside the G1 v1.1 provider boundary. They are not a G1
+runtime, deployment, evidence, or credential requirement.
