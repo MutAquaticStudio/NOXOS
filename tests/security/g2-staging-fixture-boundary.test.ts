@@ -27,4 +27,14 @@ describe("G2 Staging acceptance-fixture boundary", () => {
     expect(verifier).toContain("delete from platform.tenants where id = ${tenantId}");
     expect(verifier).toContain("G2 Staging database fixture cleanup failed.");
   });
+
+  it("waits for the asynchronously resolved PlatformOwner control before navigation", () => {
+    const verifier = readFileSync("scripts/verify/staging-g2-platform-core.ts", "utf8");
+
+    expect(verifier).toContain(
+      'const platformConsole = page.getByRole("button", { name: "Platform Console" });'
+    );
+    expect(verifier).toContain('await platformConsole.waitFor({ state: "visible" });');
+    expect(verifier).toContain("await platformConsole.click();");
+  });
 });

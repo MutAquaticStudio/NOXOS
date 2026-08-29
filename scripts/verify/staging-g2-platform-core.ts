@@ -532,8 +532,9 @@ async function browserAcceptanceBeforeTenantC(): Promise<void> {
     await signOutInBrowser(page, fixture("F"));
 
     await signInInBrowser(page, fixture("P"));
-    await expectVisible(page, "Platform tenants");
-    await page.getByRole("button", { name: "Platform Console" }).click();
+    const platformConsole = page.getByRole("button", { name: "Platform Console" });
+    await platformConsole.waitFor({ state: "visible" });
+    await platformConsole.click();
     await expectVisible(page, "Platform tenants");
     await page.goto(new URL("/platform/users", stagingUrl).toString(), {
       waitUntil: "networkidle"
