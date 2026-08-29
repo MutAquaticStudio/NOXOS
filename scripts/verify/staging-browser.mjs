@@ -11,6 +11,11 @@ if (!stagingUrl || !expectedSha) {
 }
 
 const requiredVisible = async (locator, description) => {
+  try {
+    await locator.waitFor({ state: "visible", timeout: 10_000 });
+  } catch {
+    throw new Error("Staging browser acceptance failed: " + description);
+  }
   if (!(await locator.isVisible())) {
     throw new Error("Staging browser acceptance failed: " + description);
   }
