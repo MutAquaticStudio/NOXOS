@@ -51,6 +51,7 @@ describe("G3 acceptance evidence boundary", () => {
   it("resolves the authenticated tenant before exercising tenant-scoped Material APIs", () => {
     expect(previewVerifier).toContain('fetch("/api/v1/me/tenants"');
     expect(previewVerifier).toContain('"x-nox-tenant-id": activeTenantId');
+    expect(previewVerifier).toContain("await signIn(mobile)");
   });
 
   it("does not falsely freeze G3 in a mutable Staging artifact", () => {

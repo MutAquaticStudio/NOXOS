@@ -53,12 +53,14 @@ try {
     page.getByText(/Global Material review|not granted|Permission denied/i)
   );
 
-  const mobile = await browser.newPage({
+  const mobileContext = await browser.newContext({
     viewport: { width: 390, height: 844 },
     extraHTTPHeaders: bypassHeaders()
   });
+  const mobile = await mobileContext.newPage();
   try {
     await mobile.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+    await signIn(mobile);
     await mobile.goto(url(`/materials/${materialId}`), { waitUntil: "networkidle" });
     await requireVisible(mobile, "mobile Material detail", mobile.locator("h1"));
     if (await mobile.locator(".nox-inspector").isVisible()) {
@@ -73,7 +75,7 @@ try {
     );
     await capture(mobile, "material-create-mobile", "/materials/new");
   } finally {
-    await mobile.close();
+    await mobileContext.close();
   }
 } finally {
   await browser.close();
