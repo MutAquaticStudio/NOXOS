@@ -358,10 +358,11 @@ class PostgresPlatformStore implements PlatformStore {
     if (tenantIds.length === 0) {
       return;
     }
+    const orderedTenantIds = [...new Set(tenantIds)].sort();
     await this.sql`
       select id
       from platform.tenants
-      where id = any(${this.sql.array([...tenantIds])})
+      where id = any(${this.sql.array(orderedTenantIds)}::uuid[])
       order by id
       for update
     `;
