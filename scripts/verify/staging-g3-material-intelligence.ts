@@ -644,6 +644,9 @@ async function cleanupFixtures(): Promise<void> {
     await maintenance.begin(async (transaction) => {
       for (const materialId of materialIds) {
         await transaction`delete from material_intelligence.material_change_requests where material_id = ${materialId}`;
+        await transaction`delete from material_intelligence.material_odor_assignments where material_id = ${materialId}`;
+        await transaction`delete from material_intelligence.material_properties where material_id = ${materialId}`;
+        await transaction`delete from material_intelligence.material_identifiers where material_id = ${materialId}`;
         await transaction`delete from material_intelligence.material_components where material_id = ${materialId} or component_material_id = ${materialId}`;
         await transaction`delete from material_intelligence.material_concentrates where material_id = ${materialId} or source_material_id = ${materialId} or solvent_material_id = ${materialId}`;
         await transaction`delete from material_intelligence.materials where id = ${materialId}`;
@@ -668,7 +671,8 @@ async function cleanupFixtures(): Promise<void> {
       });
       if (!response.ok) throw new Error("G3 Staging Auth fixture cleanup failed.");
     }
-  } catch {
-    throw new Error("G3 Staging fixture cleanup failed.");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`G3 Staging fixture cleanup failed: ${reason}`);
   }
 }
