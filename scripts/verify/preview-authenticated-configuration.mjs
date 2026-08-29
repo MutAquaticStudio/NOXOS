@@ -7,16 +7,20 @@ const requiredVariables = [
   "VERCEL_PROJECT_ID"
 ];
 
-const requiredSecrets = [
-  "SUPABASE_PREVIEW_ACCESS_TOKEN",
-  "SUPABASE_PREVIEW_DB_PASSWORD",
-  "NOX_PREVIEW_RUNTIME_DATABASE_URL",
-  "NOX_PREVIEW_MATERIAL_USER_ID",
-  "NOX_PREVIEW_MATERIAL_USER_EMAIL",
-  "NOX_PREVIEW_MATERIAL_USER_PASSWORD",
-  "VERCEL_TOKEN",
-  "VERCEL_AUTOMATION_BYPASS_SECRET"
-];
+const bootstrapMigrationMode = process.env.NOX_PREVIEW_BOOTSTRAP_MODE === "MIGRATIONS_ONLY";
+
+const requiredSecrets = bootstrapMigrationMode
+  ? ["SUPABASE_PREVIEW_ACCESS_TOKEN", "SUPABASE_PREVIEW_DB_PASSWORD"]
+  : [
+      "SUPABASE_PREVIEW_ACCESS_TOKEN",
+      "SUPABASE_PREVIEW_DB_PASSWORD",
+      "NOX_PREVIEW_RUNTIME_DATABASE_URL",
+      "NOX_PREVIEW_MATERIAL_USER_ID",
+      "NOX_PREVIEW_MATERIAL_USER_EMAIL",
+      "NOX_PREVIEW_MATERIAL_USER_PASSWORD",
+      "VERCEL_TOKEN",
+      "VERCEL_AUTOMATION_BYPASS_SECRET"
+    ];
 
 function configured(kind, name) {
   return Boolean(process.env["GITHUB_" + kind + "__" + name]);
@@ -54,3 +58,6 @@ if (process.env.GITHUB_VAR__VERCEL_PROJECT_ID !== "prj_FPN9pBNMfvE7pQC9scA9j9Hwz
   throw new Error("Protected Preview targets an unexpected Vercel project.");
 }
 console.log("PROTECTED_AUTHENTICATED_PREVIEW_CONFIGURATION=PASS");
+if (bootstrapMigrationMode) {
+  console.log("PROTECTED_AUTHENTICATED_PREVIEW_BOOTSTRAP=MIGRATIONS_ONLY");
+}

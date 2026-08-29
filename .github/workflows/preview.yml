@@ -11,6 +11,17 @@ on:
   pull_request:
     branches: [main]
     types: [opened, reopened, synchronize]
+  # This deliberately constrained manual path exists only to solve the initial
+  # Preview bootstrap ordering: version-controlled migrations create the
+  # limited runtime role before any role URL or acceptance identity exists.
+  # It cannot deploy the application, run browser acceptance, or access
+  # Vercel credentials.
+  workflow_dispatch:
+    inputs:
+      expected_source_sha:
+        description: Exact PR commit whose version-controlled migrations may bootstrap Preview
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -22,6 +33,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  bootstrap-authenticated-preview-migrations:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    environment: Preview
+    timeout-minutes: 20
+    env:
+      EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+      NOX_MIGRATION_ENV: preview
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.expected_source_sha }}
+          persist-credentials: false
+      - name: Bind the bootstrap to the requested immutable source
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify migration-only Preview bootstrap configuration
+        run: pnpm verify:preview:authenticated:configuration
+        env:
+          NOX_PREVIEW_BOOTSTRAP_MODE: MIGRATIONS_ONLY
+          GITHUB_VAR__SUPABASE_PREVIEW_PROJECT_REF: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
+          GITHUB_VAR__SUPABASE_PRODUCTION_PROJECT_REF: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF || secrets.SUPABASE_PRODUCTION_PROJECT_REF }}
+          GITHUB_VAR__SUPABASE_PREVIEW_URL: ${{ vars.SUPABASE_PREVIEW_URL || secrets.SUPABASE_PREVIEW_URL }}
+          GITHUB_VAR__SUPABASE_PREVIEW_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PREVIEW_PUBLISHABLE_KEY || secrets.SUPABASE_PREVIEW_PUBLISHABLE_KEY }}
+          GITHUB_VAR__VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          GITHUB_VAR__VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          GITHUB_SECRET__SUPABASE_PREVIEW_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_ACCESS_TOKEN }}
+          GITHUB_SECRET__SUPABASE_PREVIEW_DB_PASSWORD: ${{ secrets.SUPABASE_PREVIEW_DB_PASSWORD }}
+      - name: Replay version-controlled Preview migrations
+        run: pnpm db:migrate:cloud
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_PREVIEW_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
+
   verify-provider-preview:
     # Git-provider Preview acceptance is intentionally limited to same-repository branches.
     # Forks still receive ordinary PR CI but no privileged-provider lookup.
