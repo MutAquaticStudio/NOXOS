@@ -373,10 +373,11 @@ try {
       throw new Error("Platform Owner did not resolve the global Material correction.");
     }
 
-    const mobile = await browser.newPage({
+    const mobileContext = await browser.newContext({
       viewport: { width: 390, height: 844 },
       extraHTTPHeaders: bypassHeaders()
     });
+    const mobile = await mobileContext.newPage();
     try {
       await signInInBrowser(mobile, fixture("A"));
       await mobile.goto(new URL(`/materials/${created.id}`, stagingUrl).toString(), {
@@ -392,9 +393,8 @@ try {
       });
       await expectVisible(mobile, "Add Material");
       await capture(mobile, "material-create-mobile", "/materials/new");
-      await signOutInBrowser(mobile);
     } finally {
-      await mobile.close();
+      await mobileContext.close();
     }
   } finally {
     await browser.close();
@@ -430,6 +430,10 @@ function bypassHeaders(): Record<string, string> {
     "x-vercel-protection-bypass": protectionBypass,
     "x-vercel-set-bypass-cookie": "true"
   };
+}
+
+function apiBypassHeaders(): Record<string, string> {
+  return { "x-vercel-protection-bypass": protectionBypass };
 }
 
 function adminHeaders(): Record<string, string> {
@@ -470,7 +474,7 @@ async function api<T = unknown>(
   const headers: Record<string, string> = {
     authorization: `Bearer ${accessToken}`,
     "x-correlation-id": `g3-${suffix}`,
-    ...bypassHeaders()
+    ...apiBypassHeaders()
   };
   if (options.tenantId) headers["x-nox-tenant-id"] = options.tenantId;
   if (options.body !== undefined) headers["content-type"] = "application/json";
@@ -593,7 +597,7 @@ async function signInInBrowser(page: Page, user: FixtureUser): Promise<void> {
   await page.getByLabel("Email").fill(user.email);
   await page.getByLabel("Password").fill(user.password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("button", { name: "User menu" }).waitFor({ state: "visible" });
+  await page.getByRole("navigation", { name: "Application modules" }).waitFor({ state: "visible" });
 }
 
 async function signOutInBrowser(page: Page): Promise<void> {
