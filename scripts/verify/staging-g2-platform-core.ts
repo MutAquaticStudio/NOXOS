@@ -78,6 +78,7 @@ try {
 
   const tenantA = await createTenant(p, "A", "tenant-a");
   const tenantB = await createTenant(p, "B", "tenant-b");
+  tenantIds.push(tenantA, tenantB);
   await addMembership(p, tenantA, "C", "TENANT_MEMBER");
   await addMembership(p, tenantA, "D", "TENANT_ADMIN");
   await addMembership(p, tenantB, "D", "TENANT_MEMBER");
