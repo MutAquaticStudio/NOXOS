@@ -29,6 +29,25 @@ describe("non-production environment isolation", () => {
     ).toThrow(/Secretless Preview verification received runtime credentials/);
   });
 
+  it("permits only the limited application role in the separate authenticated Preview", () => {
+    const base = {
+      NOX_EXPECTED_ENV: "preview",
+      NOX_ISOLATION_MODE: "CONNECTED_AUTHENTICATED_PREVIEW",
+      NOX_CURRENT_DATABASE_RESOURCE: stagingProject,
+      NOX_PRODUCTION_DATABASE_RESOURCE: productionProject,
+      SUPABASE_URL: "https://abcdefghijklmno12345.supabase.co",
+      SUPABASE_PUBLISHABLE_KEY: "sb_publishable_preview_test",
+      NOX_RUNTIME_DATABASE_URL: runtimeDatabaseUrl
+    };
+    expect(() => verifyEnvironmentIsolation(base)).not.toThrow();
+    expect(() =>
+      verifyEnvironmentIsolation({ ...base, SUPABASE_SERVICE_ROLE_KEY: "must-not-reach-function" })
+    ).toThrow(/outside its limited runtime boundary/);
+    expect(() =>
+      verifyEnvironmentIsolation({ ...base, NOX_WORKFLOW_DATABASE_URL: workflowDatabaseUrl })
+    ).toThrow(/outside its limited runtime boundary/);
+  });
+
   it("binds connected Staging credentials to its Supabase project without Production secrets", () => {
     const base = {
       NOX_EXPECTED_ENV: "staging",

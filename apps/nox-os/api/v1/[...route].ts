@@ -4,9 +4,11 @@ import { SupabaseAccessTokenVerifier } from "@nox-os/auth";
 import { LocalFeatureFlagResolver } from "@nox-os/module-registry";
 import {
   createPostgresPlatformStore,
+  createPostgresMaterialStore,
   createRuntimeDatabase,
   probeDatabase
 } from "@nox-os/database";
+import { createMaterialIntelligenceApi } from "@nox-os/material-intelligence";
 import { createPlatformCoreApi, createRequestContext, createFoundationApi } from "@nox-os/platform";
 import { UnavailableScientificAdapter } from "@nox-os/scientific";
 import { moduleDefinitions } from "../../src/modules/definitions.js";
@@ -49,6 +51,15 @@ const platformCore =
         featureFlags
       })
     : undefined;
+const materialIntelligence =
+  runtimeDatabase && platformCore
+    ? createMaterialIntelligenceApi({
+        store: createPostgresMaterialStore(runtimeDatabase),
+        authorization: platformCore,
+        definitions: [...moduleDefinitions, ...acceptanceModules],
+        featureFlags
+      })
+    : undefined;
 
 const foundationApi = createFoundationApi({
   modules: moduleDefinitions,
@@ -58,7 +69,8 @@ const foundationApi = createFoundationApi({
     : undefined,
   workflowLauncher,
   diagnosticProbeToken,
-  platformCore
+  platformCore,
+  additionalRouteRegistrars: materialIntelligence ? [materialIntelligence] : []
 });
 
 export default async function handler(

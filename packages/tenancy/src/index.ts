@@ -20,7 +20,10 @@ export const PLATFORM_PERMISSIONS = [
   "platform.membership.owner.manage",
   "platform.entitlement.read",
   "platform.entitlement.manage",
-  "platform.audit.read"
+  "platform.audit.read",
+  "module.material-intelligence.reference.read",
+  "module.material-intelligence.reference.manage",
+  "module.material-intelligence.review.approve"
 ] as const satisfies readonly PlatformPermission[];
 
 export const TENANT_PERMISSIONS = [

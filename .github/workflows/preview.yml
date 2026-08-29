@@ -6,19 +6,85 @@ on:
   pull_request_target:
     branches: [main]
     types: [opened, reopened, synchronize]
+  # Authenticated Material UI verification runs only for an internal PR and a
+  # protected Preview environment. It cannot run against an untrusted fork.
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+  # This deliberately constrained manual path exists only to solve the initial
+  # Preview bootstrap ordering: version-controlled migrations create the
+  # limited runtime role before any role URL or acceptance identity exists.
+  # It cannot deploy the application, run browser acceptance, or access
+  # Vercel credentials.
+  workflow_dispatch:
+    inputs:
+      expected_source_sha:
+        description: Exact PR commit whose version-controlled migrations may bootstrap Preview
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: nox-os-preview-${{ github.event.pull_request.number }}
+  # pull_request and pull_request_target are deliberately separate trust domains.
+  # Their runs must not cancel one another for the same PR.
+  group: nox-os-preview-${{ github.event_name }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
+  bootstrap-authenticated-preview-migrations:
+    # The PR path is deliberately limited to the one protected G3 integration
+    # branch. It is removed from ordinary PR trust domains: the job has only
+    # Supabase migration credentials and never sees Vercel or runtime secrets.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feature/g3-material-intelligence') }}
+    runs-on: ubuntu-24.04
+    environment: Preview
+    timeout-minutes: 20
+    env:
+      EXPECTED_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_source_sha || github.event.pull_request.head.sha }}
+      NOX_MIGRATION_ENV: preview
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_source_sha || github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Bind the bootstrap to the requested immutable source
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify migration-only Preview bootstrap configuration
+        run: pnpm verify:preview:authenticated:configuration
+        env:
+          NOX_PREVIEW_BOOTSTRAP_MODE: MIGRATIONS_ONLY
+          GITHUB_VAR__SUPABASE_PREVIEW_PROJECT_REF: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
+          GITHUB_VAR__SUPABASE_PRODUCTION_PROJECT_REF: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF || secrets.SUPABASE_PRODUCTION_PROJECT_REF }}
+          GITHUB_VAR__SUPABASE_PREVIEW_URL: ${{ vars.SUPABASE_PREVIEW_URL || secrets.SUPABASE_PREVIEW_URL }}
+          GITHUB_VAR__SUPABASE_PREVIEW_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PREVIEW_PUBLISHABLE_KEY || secrets.SUPABASE_PREVIEW_PUBLISHABLE_KEY }}
+          GITHUB_VAR__VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          GITHUB_VAR__VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          GITHUB_SECRET__SUPABASE_PREVIEW_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_ACCESS_TOKEN }}
+          GITHUB_SECRET__SUPABASE_PREVIEW_DB_PASSWORD: ${{ secrets.SUPABASE_PREVIEW_DB_PASSWORD }}
+      - name: Replay version-controlled Preview migrations
+        run: pnpm db:migrate:cloud
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_PREVIEW_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
+
   verify-provider-preview:
     # Git-provider Preview acceptance is intentionally limited to same-repository branches.
     # Forks still receive ordinary PR CI but no privileged-provider lookup.
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    # This trusted job must never run from pull_request source. In particular, its
+    # legacy baseline probes are not a substitute for the authenticated G3 Preview
+    # acceptance below and must not be aimed at a PR Preview.
+    if: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-24.04
     environment: Preview
     timeout-minutes: 30
@@ -54,8 +120,8 @@ jobs:
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
       - run: pnpm verify:environment-isolation
         env:
-          NOX_CURRENT_DATABASE_RESOURCE: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF }}
-          NOX_PRODUCTION_DATABASE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF }}
+          NOX_CURRENT_DATABASE_RESOURCE: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
+          NOX_PRODUCTION_DATABASE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF || secrets.SUPABASE_PRODUCTION_PROJECT_REF }}
       - run: pnpm verify:staging
         env:
           NOX_STAGING_URL: ${{ steps.preview.outputs.preview_url }}
@@ -67,3 +133,116 @@ jobs:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
       # Ordinary PR Preview is secretless. Database, Storage, and API-to-workflow probes run
       # only in trusted post-merge Staging after its deployment URL is provider-verified.
+
+  authenticated-g3-material-intelligence:
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    environment: Preview
+    timeout-minutes: 30
+    env:
+      EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      EXPECTED_GIT_REF: ${{ github.event.pull_request.head.ref }}
+      EXPECTED_GIT_REPOSITORY: ${{ github.repository }}
+      NOX_EXPECTED_ENV: preview
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify protected authenticated Preview configuration
+        run: pnpm verify:preview:authenticated:configuration
+        env:
+          GITHUB_VAR__SUPABASE_PREVIEW_PROJECT_REF: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
+          GITHUB_VAR__SUPABASE_PRODUCTION_PROJECT_REF: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF || secrets.SUPABASE_PRODUCTION_PROJECT_REF }}
+          GITHUB_VAR__SUPABASE_PREVIEW_URL: ${{ vars.SUPABASE_PREVIEW_URL || secrets.SUPABASE_PREVIEW_URL }}
+          GITHUB_VAR__SUPABASE_PREVIEW_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PREVIEW_PUBLISHABLE_KEY || secrets.SUPABASE_PREVIEW_PUBLISHABLE_KEY }}
+          GITHUB_VAR__VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          GITHUB_VAR__VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          GITHUB_SECRET__SUPABASE_PREVIEW_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_ACCESS_TOKEN }}
+          GITHUB_SECRET__SUPABASE_PREVIEW_DB_PASSWORD: ${{ secrets.SUPABASE_PREVIEW_DB_PASSWORD }}
+          GITHUB_SECRET__NOX_PREVIEW_RUNTIME_DATABASE_URL: ${{ secrets.NOX_PREVIEW_RUNTIME_DATABASE_URL }}
+          GITHUB_SECRET__NOX_PREVIEW_MATERIAL_USER_ID: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_ID }}
+          GITHUB_SECRET__NOX_PREVIEW_MATERIAL_USER_EMAIL: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_EMAIL }}
+          GITHUB_SECRET__NOX_PREVIEW_MATERIAL_USER_PASSWORD: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_PASSWORD }}
+          GITHUB_SECRET__VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          GITHUB_SECRET__VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      - name: Verify authenticated Preview is isolated from Production
+        run: pnpm verify:environment-isolation
+        env:
+          NOX_EXPECTED_ENV: preview
+          NOX_ISOLATION_MODE: CONNECTED_AUTHENTICATED_PREVIEW
+          NOX_CURRENT_DATABASE_RESOURCE: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
+          NOX_PRODUCTION_DATABASE_RESOURCE: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF || secrets.SUPABASE_PRODUCTION_PROJECT_REF }}
+          SUPABASE_URL: ${{ vars.SUPABASE_PREVIEW_URL || secrets.SUPABASE_PREVIEW_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PREVIEW_PUBLISHABLE_KEY || secrets.SUPABASE_PREVIEW_PUBLISHABLE_KEY }}
+          NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_PREVIEW_RUNTIME_DATABASE_URL }}
+      - name: Replay version-controlled Preview migrations
+        run: pnpm db:migrate:cloud
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_PREVIEW_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
+          NOX_MIGRATION_ENV: preview
+      - name: Reconcile the isolated authenticated Preview fixture
+        run: |
+          pnpm platform:bootstrap-owner
+          pnpm platform:bootstrap-preview-material-acceptance
+        env:
+          NOX_PLATFORM_OWNER_BOOTSTRAP_USER_ID: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_ID }}
+          NOX_PREVIEW_MATERIAL_USER_ID: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_ID }}
+          NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_PREVIEW_RUNTIME_DATABASE_URL }}
+          SUPABASE_URL: ${{ vars.SUPABASE_PREVIEW_URL || secrets.SUPABASE_PREVIEW_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PREVIEW_PUBLISHABLE_KEY || secrets.SUPABASE_PREVIEW_PUBLISHABLE_KEY }}
+      - id: preview
+        name: Deploy protected authenticated Preview
+        run: |
+          preview_output="$(pnpm deploy:preview:authenticated)"
+          printf '%s\n' "$preview_output"
+          preview_url="$(printf '%s\n' "$preview_output" | sed -n 's/^AUTHENTICATED_PREVIEW_URL=//p' | tail -n 1)"
+          test -n "$preview_url"
+          echo "preview_url=$preview_url" >> "$GITHUB_OUTPUT"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          SUPABASE_URL: ${{ vars.SUPABASE_PREVIEW_URL || secrets.SUPABASE_PREVIEW_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PREVIEW_PUBLISHABLE_KEY || secrets.SUPABASE_PREVIEW_PUBLISHABLE_KEY }}
+          NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_PREVIEW_RUNTIME_DATABASE_URL }}
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Verify authenticated Material Intelligence Preview
+        run: pnpm verify:preview:g3-material-intelligence
+        env:
+          NOX_PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
+          NOX_PREVIEW_MATERIAL_USER_EMAIL: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_EMAIL }}
+          NOX_PREVIEW_MATERIAL_USER_PASSWORD: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_PASSWORD }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          G3_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g3-preview-visual
+      - id: g3-preview-evidence
+        run: |
+          artifact_path="$RUNNER_TEMP/g3-preview-evidence/G3_PREVIEW_${EXPECTED_SOURCE_SHA}.env"
+          node scripts/evidence/write-g3-preview-evidence.mjs "$artifact_path"
+          echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
+        env:
+          NOX_PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
+      - name: Upload G3 exact-SHA Preview evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g3-preview-evidence-${{ github.event.pull_request.head.sha }}
+          path: ${{ steps.g3-preview-evidence.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 365
+      - name: Upload G3 Preview visual acceptance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g3-preview-visual-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/g3-preview-visual
+          if-no-files-found: error
+          retention-days: 365

@@ -13,6 +13,7 @@
     "@nox-os/config": "workspace:*",
     "@nox-os/contracts": "workspace:*",
     "@nox-os/database": "workspace:*",
+    "@nox-os/material-intelligence": "workspace:*",
     "@nox-os/module-registry": "workspace:*",
     "@nox-os/platform": "workspace:*",
     "@nox-os/scientific": "workspace:*",

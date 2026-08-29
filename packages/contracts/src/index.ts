@@ -199,7 +199,12 @@ export type ErrorCode =
   | "LAST_ACTIVE_PLATFORM_OWNER_REQUIRED"
   | "LAST_ACTIVE_TENANT_OWNER_REQUIRED"
   | "TENANT_OWNER_DEPENDENCY_EXISTS"
-  | "UNKNOWN_ENTITLEMENT_KEY";
+  | "UNKNOWN_ENTITLEMENT_KEY"
+  | "ALREADY_RESOLVED"
+  | "POSSIBLE_MATCH"
+  | "INVALID_MATERIAL_TYPE_OPERATION"
+  | "INVALID_TAXONOMY_TERM"
+  | "INVALID_COMPONENT_TOTAL";
 
 export type ErrorEnvelope = {
   error: {
@@ -228,7 +233,10 @@ export const platformPermissionSchema = z.enum([
   "platform.membership.owner.manage",
   "platform.entitlement.read",
   "platform.entitlement.manage",
-  "platform.audit.read"
+  "platform.audit.read",
+  "module.material-intelligence.reference.read",
+  "module.material-intelligence.reference.manage",
+  "module.material-intelligence.review.approve"
 ]);
 export type PlatformPermission = z.infer<typeof platformPermissionSchema>;
 

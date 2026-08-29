@@ -12,15 +12,25 @@ if (!process.env.SUPABASE_DB_PASSWORD) {
   throw new Error("SUPABASE_DB_PASSWORD must be supplied through the cloud secret store.");
 }
 
-execFileSync("pnpm", ["exec", "supabase", "link", "--project-ref", projectRef], {
-  stdio: "inherit",
-  env: process.env
-});
-execFileSync("pnpm", ["exec", "supabase", "db", "push", "--include-all", "--dry-run"], {
-  stdio: "inherit",
-  env: process.env
-});
-execFileSync("pnpm", ["exec", "supabase", "db", "push", "--include-all"], {
+const cliPasswordArgs = ["--password", process.env.SUPABASE_DB_PASSWORD];
+
+execFileSync(
+  "pnpm",
+  ["exec", "supabase", "link", "--project-ref", projectRef, ...cliPasswordArgs],
+  {
+    stdio: "inherit",
+    env: process.env
+  }
+);
+execFileSync(
+  "pnpm",
+  ["exec", "supabase", "db", "push", "--include-all", "--dry-run", ...cliPasswordArgs],
+  {
+    stdio: "inherit",
+    env: process.env
+  }
+);
+execFileSync("pnpm", ["exec", "supabase", "db", "push", "--include-all", ...cliPasswordArgs], {
   stdio: "inherit",
   env: process.env
 });

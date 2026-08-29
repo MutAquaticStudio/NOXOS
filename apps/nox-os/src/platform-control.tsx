@@ -6,6 +6,17 @@ export type ApiClient = <T>(
   options?: { method?: "GET" | "POST" | "PATCH" | "PUT"; body?: unknown; tenantId?: string }
 ) => Promise<T>;
 
+export class NoxApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string
+  ) {
+    super(message);
+    this.name = "NoxApiError";
+  }
+}
+
 type PlatformUser = {
   id: string;
   displayName: string | null;
