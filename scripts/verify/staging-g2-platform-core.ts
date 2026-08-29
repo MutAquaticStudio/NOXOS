@@ -628,7 +628,6 @@ async function verifyOwnerConcurrency(tenantC: string): Promise<void> {
     throw new Error("Concurrent PlatformOwner mutation could not prove owner preservation.");
   }
 
-  await addMembership(token("P"), tenantC, "P", "TENANT_OWNER");
   const tenantResults = await Promise.all([
     api(token("P"), `/tenant/members/${fixture("P").id}`, {
       method: "PATCH",

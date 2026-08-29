@@ -49,5 +49,15 @@ describe("G2 Staging acceptance-fixture boundary", () => {
     expect(verifier.indexOf("Platform user status update")).toBeGreaterThan(
       verifier.indexOf(backupOwner)
     );
+    expect(verifier.indexOf("await verifyOwnerConcurrency(tenantC);")).toBeGreaterThan(
+      verifier.indexOf(backupOwner)
+    );
+  });
+
+  it("reuses the established Tenant C owners during the concurrency check", () => {
+    const verifier = readFileSync("scripts/verify/staging-g2-platform-core.ts", "utf8");
+    const concurrency = verifier.slice(verifier.indexOf("async function verifyOwnerConcurrency"));
+
+    expect(concurrency).not.toContain('await addMembership(token("P"), tenantC');
   });
 });
