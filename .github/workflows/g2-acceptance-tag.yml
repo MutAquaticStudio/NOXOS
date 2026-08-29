@@ -1,0 +1,81 @@
+name: g2-acceptance-tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact accepted main SHA from the successful G2 Staging run
+        required: true
+        type: string
+      evidence_run_id:
+        description: Successful Staging workflow run that uploaded the exact-SHA G2 evidence
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nox-os-g2-acceptance-tag
+  cancel-in-progress: false
+
+jobs:
+  create-annotated-tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+    steps:
+      - name: Validate exact G2 acceptance evidence
+        id: evidence
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if ! [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "target_sha must be a lowercase full 40-character Git SHA" >&2
+            exit 1
+          fi
+          if ! [[ "$EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "evidence_run_id must be a GitHub Actions run number" >&2
+            exit 1
+          fi
+
+          run_json="$(curl -fsS \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$EVIDENCE_RUN_ID")"
+          test "$(printf '%s' "$run_json" | jq -r '.conclusion')" = "success"
+          test "$(printf '%s' "$run_json" | jq -r '.head_branch')" = "main"
+          test "$(printf '%s' "$run_json" | jq -r '.head_sha')" = "$TARGET_SHA"
+
+          expected_artifact="g2-staging-evidence-$TARGET_SHA"
+          artifacts_json="$(curl -fsS \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$EVIDENCE_RUN_ID/artifacts")"
+          printf '%s' "$artifacts_json" | jq -e --arg name "$expected_artifact" \
+            '.artifacts[] | select(.name == $name and .expired == false)' >/dev/null
+
+          echo "tag_name=g2-v1.0-accepted-${TARGET_SHA:0:8}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Create immutable annotated acceptance tag
+        env:
+          TAG_NAME: ${{ steps.evidence.outputs.tag_name }}
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$TARGET_SHA" "origin/main"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG_NAME"; then
+            echo "Acceptance tag already exists; refusing to overwrite immutable evidence." >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG_NAME" "$TARGET_SHA" -m "NØX-OS Gate 2 accepted Staging SHA $TARGET_SHA"
+          git push origin "refs/tags/$TAG_NAME"
+          test "$(git cat-file -t "refs/tags/$TAG_NAME")" = "tag"
+          test "$(git rev-parse "refs/tags/$TAG_NAME^{}")" = "$TARGET_SHA"
