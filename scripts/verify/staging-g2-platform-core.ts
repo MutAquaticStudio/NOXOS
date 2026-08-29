@@ -63,7 +63,7 @@ try {
   for (const key of ["P", "A", "B", "C", "D", "E", "F"] as const) {
     tokens.set(key, await signIn(fixture(key)));
   }
-  const p = token("P");
+  let p = token("P");
 
   for (const key of ["A", "B", "C", "D", "E", "F"] as const) {
     expectStatus(
@@ -209,6 +209,8 @@ try {
   );
 
   await browserAcceptanceBeforeTenantC();
+  await refreshFixtureTokens();
+  p = token("P");
 
   expectStatus(
     await api(p, "/platform/tenants", {
@@ -413,6 +415,12 @@ async function signIn(user: FixtureUser): Promise<string> {
     throw new Error("Staging Auth fixture sign-in failed.");
   }
   return body.access_token;
+}
+
+async function refreshFixtureTokens(): Promise<void> {
+  for (const key of ["P", "A", "B", "C", "D", "E", "F"] as const) {
+    tokens.set(key, await signIn(fixture(key)));
+  }
 }
 
 function adminHeaders(): Record<string, string> {
