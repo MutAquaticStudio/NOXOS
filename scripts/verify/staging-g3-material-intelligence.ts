@@ -716,7 +716,7 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
     candidate: Candidate;
   };
 
-  const actor = token("B");
+  let actor = token("B");
   const asset = await api<{ asset: { assetId: string; sourceName: string; modality: string } }>(
     actor,
     "/design-studio/assets",
@@ -925,6 +925,11 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
     }
     if (!unfreezeRejected) throw new Error("Database allowed a FROZEN version to return to DRAFT.");
     await runG5Acceptance(page, tenantA, tenantB, frozen);
+    // Browser sign-out revokes all Supabase sessions for the fixture user, including
+    // the password-grant token used by the API acceptance path. Re-authenticate
+    // before continuing the enclosing G4 journey instead of reusing a revoked token.
+    await refreshToken("B");
+    actor = token("B");
     expectStatus(
       await api(actor, `/design-studio/formula-versions/${frozen.formulaVersionId}/trial-context`, {
         method: "POST",
@@ -1007,6 +1012,8 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
       "G4 Accord G5 TrialContext handoff"
     );
     await runG5AccordAcceptance(page, tenantA, frozenAccord.body.formulaVersion);
+    await refreshToken("B");
+    actor = token("B");
     expectStatus(
       await api(actor, `/design-studio/briefs/${accordBriefId}/generate`, {
         method: "POST",
