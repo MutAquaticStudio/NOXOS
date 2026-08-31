@@ -368,23 +368,24 @@ class PostgresDesignStudioStore implements DesignStudioStore {
         where tenant_id = ${input.tenantId} and id = ${formulaVersionId} and status = 'DRAFT'
         returning frozen_at
       `;
-      await tx`
-        insert into platform.audit_events (
-          tenant_id, actor_user_id, action, resource_type, resource_id,
-          request_id, correlation_id, metadata
-        )
-        select
-          ${input.tenantId}, ${input.actorUserId}, 'formula.generated', 'FormulaVersion',
-          ${formulaVersionId}, ${input.requestId}, ${input.correlationId},
-          ${tx.json({
-            operation: "SENSORY_REVISION",
-            generationStrategy: input.candidate.generationStrategy,
-            parentFormulaVersionId: input.parentFormulaVersionId,
-            sourceTrialId: input.sourceTrialId,
-            sourceEvaluationId: input.sourceEvaluationId
-          })}
-        where ${input.parentFormulaVersionId ?? null} is not null
-      `;
+      if (input.parentFormulaVersionId) {
+        await tx`
+          insert into platform.audit_events (
+            tenant_id, actor_user_id, action, resource_type, resource_id,
+            request_id, correlation_id, metadata
+          ) values (
+            ${input.tenantId}, ${input.actorUserId}, 'formula.generated', 'FormulaVersion',
+            ${formulaVersionId}, ${input.requestId}, ${input.correlationId},
+            ${tx.json({
+              operation: "SENSORY_REVISION",
+              generationStrategy: input.candidate.generationStrategy,
+              parentFormulaVersionId: input.parentFormulaVersionId,
+              sourceTrialId: input.sourceTrialId,
+              sourceEvaluationId: input.sourceEvaluationId
+            })}
+          )
+        `;
+      }
       await tx`
         insert into platform.audit_events (
           tenant_id, actor_user_id, action, resource_type, resource_id,

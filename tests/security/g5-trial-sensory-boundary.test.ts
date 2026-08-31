@@ -5,6 +5,7 @@ const migration = readFileSync("supabase/migrations/20260831190719_g5_trial_sens
 const contracts = readFileSync("packages/trial-sensory/src/contracts.ts", "utf8");
 const api = readFileSync("packages/trial-sensory/src/api.ts", "utf8");
 const designApi = readFileSync("packages/design-studio/src/api.ts", "utf8");
+const designStore = readFileSync("packages/database/src/design-studio-store.ts", "utf8");
 const ui = readFileSync("apps/nox-os/src/trial-sensory.tsx", "utf8");
 
 describe("Gate 5 security boundary", () => {
@@ -39,5 +40,7 @@ describe("Gate 5 security boundary", () => {
     );
     expect(designApi).toContain("parentFormulaVersionId,");
     expect(designApi).toContain("sourceEvaluationId: input.sourceEvaluationId");
+    expect(designStore).toContain("if (input.parentFormulaVersionId)");
+    expect(designStore).not.toContain("where ${input.parentFormulaVersionId ?? null} is not null");
   });
 });
