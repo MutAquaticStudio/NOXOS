@@ -25,6 +25,8 @@ describe("G3 acceptance evidence boundary", () => {
   it("uses disposable non-production Auth fixtures and proves the four required authority paths", () => {
     expect(stagingVerifier).toContain('type FixtureKey = "A" | "B" | "C" | "D" | "E"');
     expect(stagingVerifier).toContain("Cross-tenant private Material access");
+    expect(stagingVerifier).toContain('getByText("Tenant A", { exact: true }).first()');
+    expect(stagingVerifier).toContain("Cross-tenant contributor identity was exposed");
     expect(stagingVerifier).toContain("Tenant approver Platform correction");
     expect(stagingVerifier).toContain(
       "Platform Owner did not resolve the global Material correction."
