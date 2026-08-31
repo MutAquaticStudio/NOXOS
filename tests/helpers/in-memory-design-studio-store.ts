@@ -11,6 +11,7 @@ const PROJECT_ID = "51000000-0000-4000-8000-000000000001";
 const BRIEF_ID = "52000000-0000-4000-8000-000000000001";
 const FORMULA_ID = "53000000-0000-4000-8000-000000000001";
 const VERSION_ID = "54000000-0000-4000-8000-000000000001";
+const REVISION_VERSION_ID = "54000000-0000-4000-8000-000000000002";
 
 export class InMemoryDesignStudioStore implements DesignStudioStore {
   readonly projects = new Map<string, DesignProject>();
@@ -124,14 +125,21 @@ export class InMemoryDesignStudioStore implements DesignStudioStore {
       normalizedMassMg: line.normalizedMassMg,
       snapshotHash: line.materialSnapshot.snapshotHash
     }));
+    const parent = input.parentFormulaVersionId
+      ? this.formulaVersions.get(input.parentFormulaVersionId)
+      : undefined;
+    if (input.parentFormulaVersionId && (!parent || parent.tenantId !== input.tenantId)) {
+      throw new Error("REVISION_CONTEXT_INVALID");
+    }
     const value: FrozenFormulaVersion = {
-      formulaId: FORMULA_ID,
-      formulaVersionId: VERSION_ID,
+      formulaId: parent?.formulaId ?? FORMULA_ID,
+      formulaVersionId: parent ? REVISION_VERSION_ID : VERSION_ID,
       tenantId: input.tenantId,
       projectId: input.projectId,
       sourceBriefId: input.sourceBriefId,
-      name: input.formulaName,
-      versionNumber: 1,
+      name: parent?.name ?? input.formulaName,
+      versionNumber: parent ? parent.versionNumber + 1 : 1,
+      parentFormulaVersionId: input.parentFormulaVersionId ?? null,
       compositionKind: input.candidate.compositionKind,
       generationStrategy: input.candidate.generationStrategy,
       engineVersion: input.candidate.engineVersion,

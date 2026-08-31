@@ -236,6 +236,19 @@ export const moduleProfiles = {
     supportedViews: ["canvas", "list"],
     mobilePriority: ["review brief", "inspect intent"],
     reactBitsIntensity: "low"
+  }),
+  trialSensory: profile({
+    id: "trial-sensory",
+    name: "Trial & Sensory",
+    archetype: "workflow",
+    secondaryArchetype: "data-grid",
+    density: "compact",
+    primaryObject: "Trial",
+    primaryTasks: ["prepare trial", "record sensory evidence", "request formula revision"],
+    navigation: { inspector: true, aiSidecar: false, workspaceTabs: true, splitView: true },
+    supportedViews: ["table", "form"],
+    mobilePriority: ["review trial", "record sensory evidence"],
+    reactBitsIntensity: "none"
   })
 } as const satisfies Record<string, ModuleUxProfile>;
 
@@ -509,6 +522,69 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
           "module.design-studio.scientific-artifact.read"
         ],
         TENANT_MEMBER: ["module.design-studio.studio.read"]
+      }
+    }
+  }),
+  defineModule({
+    id: "trial-sensory",
+    displayName: "Trial & Sensory",
+    routeRoot: "/trials",
+    childRoutes: ["/trials/:trialId"],
+    apiNamespace: "trials",
+    navigationGroup: "R&D",
+    lifecycle: "INTERNAL",
+    dependencies: ["platform", "design-studio"],
+    permissions: ["module.trial-sensory.trial.read"],
+    entitlement: "module.trial-sensory",
+    featureFlag: "module.trial-sensory",
+    uxProfile: moduleProfiles.trialSensory,
+    owner: "Trial & Sensory owner",
+    icon: "sense",
+    authorization: {
+      permissions: [
+        "module.trial-sensory.trial.read",
+        "module.trial-sensory.trial.create",
+        "module.trial-sensory.trial.prepare",
+        "module.trial-sensory.trial.cancel",
+        "module.trial-sensory.evaluation.create",
+        "module.trial-sensory.evaluation.edit",
+        "module.trial-sensory.evaluation.finalize",
+        "module.trial-sensory.revision.request",
+        "module.trial-sensory.approval.recommend"
+      ],
+      defaultRoleGrants: {
+        TENANT_OWNER: [
+          "module.trial-sensory.trial.read",
+          "module.trial-sensory.trial.create",
+          "module.trial-sensory.trial.prepare",
+          "module.trial-sensory.trial.cancel",
+          "module.trial-sensory.evaluation.create",
+          "module.trial-sensory.evaluation.edit",
+          "module.trial-sensory.evaluation.finalize",
+          "module.trial-sensory.revision.request",
+          "module.trial-sensory.approval.recommend"
+        ],
+        TENANT_ADMIN: [
+          "module.trial-sensory.trial.read",
+          "module.trial-sensory.trial.create",
+          "module.trial-sensory.trial.prepare",
+          "module.trial-sensory.trial.cancel",
+          "module.trial-sensory.evaluation.create",
+          "module.trial-sensory.evaluation.edit",
+          "module.trial-sensory.evaluation.finalize",
+          "module.trial-sensory.revision.request",
+          "module.trial-sensory.approval.recommend"
+        ],
+        TENANT_MEMBER: [
+          "module.trial-sensory.trial.read",
+          "module.trial-sensory.trial.create",
+          "module.trial-sensory.trial.prepare",
+          "module.trial-sensory.evaluation.create",
+          "module.trial-sensory.evaluation.edit",
+          "module.trial-sensory.evaluation.finalize",
+          "module.trial-sensory.revision.request",
+          "module.trial-sensory.approval.recommend"
+        ]
       }
     }
   })

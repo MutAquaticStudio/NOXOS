@@ -7,11 +7,17 @@ import {
   createPostgresMaterialStore,
   createPostgresDesignStudioStore,
   createPostgresMaterialCandidateRetriever,
+  createPostgresTrialSensoryStore,
   createRuntimeDatabase,
   probeDatabase
 } from "@nox-os/database";
 import { createMaterialIntelligenceApi } from "@nox-os/material-intelligence";
-import { createDesignStudioApi, DesignStudioApplication } from "@nox-os/design-studio";
+import {
+  createDesignStudioApi,
+  DesignStudioApplication,
+  DesignStudioFormulaRevisionPort
+} from "@nox-os/design-studio";
+import { createTrialSensoryApi, TrialSensoryApplication } from "@nox-os/trial-sensory";
 import { createPlatformCoreApi, createRequestContext, createFoundationApi } from "@nox-os/platform";
 import { NoxOeScientificAdapter, UnavailableScientificAdapter } from "@nox-os/scientific";
 import { SupabasePrivateFileStore } from "@nox-os/storage";
@@ -72,17 +78,43 @@ const privateFileStore =
         bucket: process.env.SUPABASE_STORAGE_BUCKET
       })
     : undefined;
+const designStudioStore = runtimeDatabase
+  ? createPostgresDesignStudioStore(runtimeDatabase)
+  : undefined;
+const designStudioApplication = runtimeDatabase
+  ? new DesignStudioApplication(createPostgresMaterialCandidateRetriever(runtimeDatabase))
+  : undefined;
+const trialSensoryApplication =
+  runtimeDatabase && designStudioStore
+    ? new TrialSensoryApplication(
+        createPostgresTrialSensoryStore(runtimeDatabase),
+        designStudioStore
+      )
+    : undefined;
 const designStudio =
-  runtimeDatabase && platformCore
+  platformCore && designStudioStore && designStudioApplication
     ? createDesignStudioApi({
-        store: createPostgresDesignStudioStore(runtimeDatabase),
-        application: new DesignStudioApplication(
-          createPostgresMaterialCandidateRetriever(runtimeDatabase)
-        ),
+        store: designStudioStore,
+        application: designStudioApplication,
         authorization: platformCore,
         definitions: [...moduleDefinitions, ...acceptanceModules],
         featureFlags,
-        fileStore: privateFileStore
+        fileStore: privateFileStore,
+        approvalEvidenceReader: trialSensoryApplication,
+        revisionContextReader: trialSensoryApplication,
+        revisionPortFactory: (context) =>
+          new DesignStudioFormulaRevisionPort(designStudioApplication, designStudioStore, context)
+      })
+    : undefined;
+const trialSensory =
+  platformCore && trialSensoryApplication && designStudioStore && designStudioApplication
+    ? createTrialSensoryApi({
+        application: trialSensoryApplication,
+        authorization: platformCore,
+        definitions: [...moduleDefinitions, ...acceptanceModules],
+        featureFlags,
+        revisionPortFactory: (context) =>
+          new DesignStudioFormulaRevisionPort(designStudioApplication, designStudioStore, context)
       })
     : undefined;
 const scientificGateway =
@@ -104,7 +136,8 @@ const foundationApi = createFoundationApi({
   platformCore,
   additionalRouteRegistrars: [
     ...(materialIntelligence ? [materialIntelligence] : []),
-    ...(designStudio ? [designStudio] : [])
+    ...(designStudio ? [designStudio] : []),
+    ...(trialSensory ? [trialSensory] : [])
   ]
 });
 

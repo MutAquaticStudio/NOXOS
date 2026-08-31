@@ -28,7 +28,10 @@ import {
   sourceSignalSchema,
   taxonomyTargetSchema,
   trialContextSchema,
-  type FormulaCandidate
+  type FormulaApprovalEvidenceReader,
+  type FormulaCandidate,
+  type FormulaRevisionContextReader,
+  type FormulaRevisionPort
 } from "./contracts.js";
 import { RuleBasedFormulaPerceptionScorer } from "./formula.js";
 import { arbitrateIntent, confirmIntent, type ConfirmedIntent } from "./intent.js";
@@ -79,6 +82,16 @@ const freezeSchema = generateSchema.extend({
   strategy: z.string().trim().min(1).max(80),
   formulaName: z.string().trim().min(1).max(160)
 });
+const approvalSchema = z.object({
+  sourceTrialId: uuid,
+  sourceEvaluationId: uuid
+});
+const revisionFreezeSchema = z.object({
+  sourceTrialId: uuid,
+  sourceEvaluationId: uuid,
+  strategy: z.string().trim().min(1).max(80),
+  formulaName: z.string().trim().min(1).max(160)
+});
 const assetUploadSchema = z.object({
   sourceName: z.string().trim().min(1).max(240),
   modality: z.enum(["IMAGE", "REFERENCE"]),
@@ -93,6 +106,9 @@ export type DesignStudioApiOptions = {
   definitions: readonly ModuleDefinition[];
   featureFlags: FeatureFlagResolver;
   fileStore?: FileStore;
+  approvalEvidenceReader?: FormulaApprovalEvidenceReader;
+  revisionContextReader?: FormulaRevisionContextReader;
+  revisionPortFactory?: (context: DesignStudioTenantContext) => FormulaRevisionPort;
 };
 
 function routeUuid(request: ApiRequest, name: string): string {
@@ -428,12 +444,40 @@ export class DesignStudioApi {
       "/design-studio/formula-versions/:formulaVersionId/approve",
       this.handle(async (request) => {
         const context = await this.tenant(request, designStudioPermissions.approveFormula);
+        const formulaVersionId = routeUuid(request, "formulaVersionId");
+        const input = body(approvalSchema, request);
+        if (!this.options.approvalEvidenceReader)
+          throw new DesignStudioProblem(
+            409,
+            "APPROVAL_EVIDENCE_REQUIRED",
+            "FINAL Trial and Sensory evidence is required before Formula approval."
+          );
+        const evidence = await this.options.approvalEvidenceReader.findApprovalEvidence({
+          tenantId: context.tenant.tenantId,
+          formulaVersionId,
+          sourceTrialId: input.sourceTrialId,
+          sourceEvaluationId: input.sourceEvaluationId
+        });
+        if (
+          !evidence ||
+          evidence.formulaVersionId !== formulaVersionId ||
+          evidence.sourceTrialId !== input.sourceTrialId ||
+          evidence.sourceEvaluationId !== input.sourceEvaluationId ||
+          evidence.decision !== "READY_FOR_APPROVAL"
+        )
+          throw new DesignStudioProblem(
+            409,
+            "APPROVAL_EVIDENCE_INVALID",
+            "Trial and Sensory evidence is invalid for this FormulaVersion."
+          );
         const formulaVersion = await this.options.store.approveFrozenFormulaVersion({
           tenantId: context.tenant.tenantId,
-          formulaVersionId: routeUuid(request, "formulaVersionId"),
+          formulaVersionId,
           actorUserId: context.actor.userId,
           requestId: request.context.requestId,
-          correlationId: request.context.correlationId
+          correlationId: request.context.correlationId,
+          sourceTrialId: input.sourceTrialId,
+          sourceEvaluationId: input.sourceEvaluationId
         });
         if (!formulaVersion)
           throw new DesignStudioProblem(
@@ -442,6 +486,57 @@ export class DesignStudioApi {
             "Frozen Formula version cannot be approved in its current state."
           );
         return { status: 200, body: { formulaVersion: frozenPayload(formulaVersion) } };
+      })
+    );
+    registrar.register(
+      "POST",
+      "/design-studio/formula-versions/:formulaVersionId/revisions/freeze",
+      this.handle(async (request) => {
+        const context = await this.tenant(request, designStudioPermissions.freezeFormula);
+        const parentFormulaVersionId = routeUuid(request, "formulaVersionId");
+        const input = body(revisionFreezeSchema, request);
+        if (!this.options.revisionContextReader || !this.options.revisionPortFactory)
+          throw new DesignStudioProblem(
+            409,
+            "REVISION_CONTEXT_INVALID",
+            "Trial and Sensory revision boundary is unavailable."
+          );
+        const revisionContext = await this.options.revisionContextReader.findRevisionContext({
+          tenantId: context.tenant.tenantId,
+          sourceTrialId: input.sourceTrialId,
+          sourceEvaluationId: input.sourceEvaluationId
+        });
+        if (!revisionContext || revisionContext.parentFormulaVersionId !== parentFormulaVersionId)
+          throw new DesignStudioProblem(
+            409,
+            "REVISION_CONTEXT_INVALID",
+            "Revision evidence does not match the FROZEN parent FormulaVersion."
+          );
+        const candidates = await this.options
+          .revisionPortFactory(tenantApplicationContext(context))
+          .createRevisionCandidate(revisionContext);
+        const candidate = candidates.find((value) => value.generationStrategy === input.strategy);
+        if (!candidate)
+          throw new DesignStudioProblem(
+            409,
+            "FORMULA_CONSTRAINTS_INFEASIBLE",
+            "Selected deterministic revision candidate is unavailable."
+          );
+        const frozen = await this.options.store.freezeFormula({
+          tenantId: context.tenant.tenantId,
+          actorUserId: context.actor.userId,
+          requestId: request.context.requestId,
+          correlationId: request.context.correlationId,
+          projectId: candidate.projectId,
+          sourceBriefId: candidate.sourceBriefId,
+          formulaName: input.formulaName,
+          candidate,
+          freshSnapshots: candidate.lines.map((line) => line.materialSnapshot),
+          parentFormulaVersionId,
+          sourceTrialId: input.sourceTrialId,
+          sourceEvaluationId: input.sourceEvaluationId
+        });
+        return { status: 201, body: { formulaVersion: frozenPayload(frozen) } };
       })
     );
     registrar.register(

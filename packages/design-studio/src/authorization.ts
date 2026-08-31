@@ -87,8 +87,40 @@ export class DesignStudioApplication {
     }
   ): Promise<FormulaCandidate[]> {
     requireDesignStudioPermission(context, designStudioPermissions.generateFormula);
+    return this.generateResolved(context.tenantId, input);
+  }
+
+  /** Internal G4 port used only after G5 has authorized and validated a FINAL revision request. */
+  async generateRevisionCandidates(
+    tenantId: string,
+    input: {
+      projectId: string;
+      sourceBriefId: string;
+      confirmedIntent: ConfirmedIntent;
+      compositionKind: CompositionKind;
+      budget: BudgetContext;
+      scorer: FormulaPerceptionScorer;
+      costResolver?: CostResolver;
+    }
+  ): Promise<FormulaCandidate[]> {
+    return this.generateResolved(tenantId, input);
+  }
+
+  private async generateResolved(
+    tenantId: string,
+    input: {
+      projectId: string;
+      sourceBriefId: string;
+      confirmedIntent: ConfirmedIntent;
+      compositionKind?: CompositionKind;
+      accordPlan?: AccordArchitecturePlan;
+      budget: BudgetContext;
+      scorer: FormulaPerceptionScorer;
+      costResolver?: CostResolver;
+    }
+  ): Promise<FormulaCandidate[]> {
     const records = await this.snapshots.retrieveApprovedForTenant({
-      tenantId: context.tenantId,
+      tenantId,
       intent: input.confirmedIntent.intent,
       applicationKey: input.confirmedIntent.intent.applicationProfile.applicationKey,
       compositionKind: input.compositionKind ?? "FULL_FORMULA",

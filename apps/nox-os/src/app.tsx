@@ -58,6 +58,11 @@ const LazyDesignStudioExperience = lazy(async () => {
   return { default: module.DesignStudioExperience };
 });
 
+const LazyTrialSensoryExperience = lazy(async () => {
+  const module = await import("./trial-sensory");
+  return { default: module.TrialSensoryExperience };
+});
+
 const publicIdentity = publicEnvironment({
   VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
   VITE_NOX_SOURCE_SHA: import.meta.env.VITE_NOX_SOURCE_SHA,
@@ -366,7 +371,8 @@ function AuthenticatedApplication({
         .filter(
           (definition) =>
             definition.descriptor.id !== "material-intelligence" &&
-            definition.descriptor.id !== "design-studio"
+            definition.descriptor.id !== "design-studio" &&
+            definition.descriptor.id !== "trial-sensory"
         )
         .flatMap((definition) => [
           { path: definition.descriptor.routeRoot, definition },
@@ -381,7 +387,9 @@ function AuthenticatedApplication({
       ? moduleDefinitions.find((definition) => definition.descriptor.id === "material-intelligence")
       : location.pathname.startsWith("/design-studio")
         ? moduleDefinitions.find((definition) => definition.descriptor.id === "design-studio")
-        : undefined);
+        : location.pathname.startsWith("/trials")
+          ? moduleDefinitions.find((definition) => definition.descriptor.id === "trial-sensory")
+          : undefined);
   const density = activeDefinition ? toShellDensity(activeDefinition.uxProfile.density) : "DEFAULT";
   const isPlatformOwner = platformIdentity.identity?.platformRoleKey === "PLATFORM_OWNER";
   const hasNoWorkspace = tenantSelection.state === "ready" && tenantSelection.choices.length === 0;
@@ -514,6 +522,18 @@ function AuthenticatedApplication({
             element={
               <Suspense fallback={<p className="nox-ai-context">Loading Design Studio…</p>}>
                 <LazyDesignStudioExperience
+                  api={api}
+                  tenantId={activeTenant?.tenantId}
+                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/trials/*"
+            element={
+              <Suspense fallback={<p className="nox-ai-context">Loading Trial & Sensory…</p>}>
+                <LazyTrialSensoryExperience
                   api={api}
                   tenantId={activeTenant?.tenantId}
                   modulePermissions={tenantContext?.authorization.modulePermissions ?? []}

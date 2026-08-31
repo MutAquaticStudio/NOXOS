@@ -9,4 +9,5 @@ export * from "./mass.js";
 export * from "./materials.js";
 export * from "./problem.js";
 export * from "./persistence.js";
+export * from "./revision.js";
 export * from "./taxonomy.js";

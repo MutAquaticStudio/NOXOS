@@ -19,6 +19,7 @@
     "@nox-os/platform": "workspace:*",
     "@nox-os/scientific": "workspace:*",
     "@nox-os/storage": "workspace:*",
+    "@nox-os/trial-sensory": "workspace:*",
     "@nox-os/ui": "workspace:*",
     "@supabase/supabase-js": "2.112.4",
     "@vercel/queue": "0.5.1",

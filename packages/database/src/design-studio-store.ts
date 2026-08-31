@@ -61,6 +61,7 @@ type FrozenRow = {
   source_brief_id: string;
   name: string;
   version_number: number;
+  parent_formula_version_id: string | null;
   composition_kind: FrozenFormulaVersion["compositionKind"];
   generation_strategy: string;
   engine_version: string;
@@ -249,22 +250,70 @@ class PostgresDesignStudioStore implements DesignStudioStore {
           );
         }
       }
-      const formulaRows = await tx<{ id: string }[]>`
-        insert into design_studio.formulas (
-          tenant_id, project_id, source_brief_id, name, composition_kind, created_by_user_id
-        ) values (
-          ${input.tenantId}, ${input.projectId}, ${input.sourceBriefId}, ${input.formulaName},
-          ${input.candidate.compositionKind}, ${input.actorUserId}
-        ) returning id
-      `;
-      const formulaId = formulaRows[0].id;
+      let formulaId: string;
+      let versionNumber = 1;
+      let formulaName = input.formulaName;
+      if (input.parentFormulaVersionId) {
+        const parentRows = await tx<
+          {
+            formula_id: string;
+            project_id: string;
+            source_brief_id: string;
+            name: string;
+            composition_kind: FrozenFormulaVersion["compositionKind"];
+          }[]
+        >`
+          select version.formula_id, formula.project_id, formula.source_brief_id,
+                 formula.name, formula.composition_kind
+          from design_studio.formula_versions as version
+          join design_studio.formulas as formula
+            on formula.tenant_id = version.tenant_id and formula.id = version.formula_id
+          where version.tenant_id = ${input.tenantId}
+            and version.id = ${input.parentFormulaVersionId}
+            and version.status = 'FROZEN'
+          for update of formula
+        `;
+        const parent = parentRows[0];
+        if (
+          !parent ||
+          parent.project_id !== input.projectId ||
+          parent.source_brief_id !== input.sourceBriefId ||
+          parent.composition_kind !== input.candidate.compositionKind
+        ) {
+          throw new DesignStudioProblem(
+            409,
+            "REVISION_CONTEXT_INVALID",
+            "Revision candidate does not match its FROZEN parent FormulaVersion."
+          );
+        }
+        formulaId = parent.formula_id;
+        formulaName = parent.name;
+        const nextRows = await tx<{ version_number: number }[]>`
+          select coalesce(max(version_number), 0)::integer + 1 as version_number
+          from design_studio.formula_versions
+          where tenant_id = ${input.tenantId} and formula_id = ${formulaId}
+        `;
+        versionNumber = nextRows[0].version_number;
+      } else {
+        const formulaRows = await tx<{ id: string }[]>`
+          insert into design_studio.formulas (
+            tenant_id, project_id, source_brief_id, name, composition_kind, created_by_user_id
+          ) values (
+            ${input.tenantId}, ${input.projectId}, ${input.sourceBriefId}, ${input.formulaName},
+            ${input.candidate.compositionKind}, ${input.actorUserId}
+          ) returning id
+        `;
+        formulaId = formulaRows[0].id;
+      }
       const versionRows = await tx<{ id: string }[]>`
         insert into design_studio.formula_versions (
-          tenant_id, formula_id, version_number, generation_strategy, engine_version,
+          tenant_id, formula_id, version_number, parent_formula_version_id,
+          generation_strategy, engine_version,
           intent_snapshot, resolved_composition, validation, scientific_context,
           created_by_user_id
         ) values (
-          ${input.tenantId}, ${formulaId}, 1, ${input.candidate.generationStrategy},
+          ${input.tenantId}, ${formulaId}, ${versionNumber},
+          ${input.parentFormulaVersionId ?? null}, ${input.candidate.generationStrategy},
           ${input.candidate.engineVersion}, ${tx.json(input.candidate.intentSnapshot)},
           ${tx.json(input.candidate.resolvedComposition)}, ${tx.json(input.candidate.validation)},
           ${tx.json(input.candidate.scientificContext)}, ${input.actorUserId}
@@ -323,10 +372,35 @@ class PostgresDesignStudioStore implements DesignStudioStore {
         insert into platform.audit_events (
           tenant_id, actor_user_id, action, resource_type, resource_id,
           request_id, correlation_id, metadata
+        )
+        select
+          ${input.tenantId}, ${input.actorUserId}, 'formula.generated', 'FormulaVersion',
+          ${formulaVersionId}, ${input.requestId}, ${input.correlationId},
+          ${tx.json({
+            operation: "SENSORY_REVISION",
+            generationStrategy: input.candidate.generationStrategy,
+            parentFormulaVersionId: input.parentFormulaVersionId,
+            sourceTrialId: input.sourceTrialId,
+            sourceEvaluationId: input.sourceEvaluationId
+          })}
+        where ${input.parentFormulaVersionId ?? null} is not null
+      `;
+      await tx`
+        insert into platform.audit_events (
+          tenant_id, actor_user_id, action, resource_type, resource_id,
+          request_id, correlation_id, metadata
         ) values (
           ${input.tenantId}, ${input.actorUserId}, 'formula.frozen',
           'FormulaVersion', ${formulaVersionId}, ${input.requestId}, ${input.correlationId},
-          ${tx.json({ formulaId, bundleHash, compositionKind: input.candidate.compositionKind })}
+          ${tx.json({
+            formulaId,
+            bundleHash,
+            compositionKind: input.candidate.compositionKind,
+            generationStrategy: input.candidate.generationStrategy,
+            parentFormulaVersionId: input.parentFormulaVersionId ?? null,
+            sourceTrialId: input.sourceTrialId ?? null,
+            sourceEvaluationId: input.sourceEvaluationId ?? null
+          })}
         )
       `;
       return {
@@ -335,8 +409,9 @@ class PostgresDesignStudioStore implements DesignStudioStore {
         tenantId: input.tenantId,
         projectId: input.projectId,
         sourceBriefId: input.sourceBriefId,
-        name: input.formulaName,
-        versionNumber: 1,
+        name: formulaName,
+        versionNumber,
+        parentFormulaVersionId: input.parentFormulaVersionId ?? null,
         compositionKind: input.candidate.compositionKind,
         generationStrategy: input.candidate.generationStrategy,
         engineVersion: input.candidate.engineVersion,
@@ -355,7 +430,8 @@ class PostgresDesignStudioStore implements DesignStudioStore {
   ): Promise<FrozenFormulaVersion | undefined> {
     const rows = await this.sql<FrozenRow[]>`
       select f.id as formula_id, v.id as formula_version_id, v.tenant_id, f.project_id,
-             f.source_brief_id, f.name, v.version_number, f.composition_kind,
+             f.source_brief_id, f.name, v.version_number, v.parent_formula_version_id,
+             f.composition_kind,
              v.generation_strategy, v.engine_version, v.intent_snapshot,
              v.resolved_composition, v.validation, v.scientific_context,
              v.approval_state, v.bundle_hash, v.frozen_at
@@ -414,6 +490,7 @@ class PostgresDesignStudioStore implements DesignStudioStore {
       sourceBriefId: row.source_brief_id,
       name: row.name,
       versionNumber: row.version_number,
+      parentFormulaVersionId: row.parent_formula_version_id,
       compositionKind: row.composition_kind,
       generationStrategy: row.generation_strategy,
       engineVersion: row.engine_version,
@@ -431,6 +508,8 @@ class PostgresDesignStudioStore implements DesignStudioStore {
     actorUserId: string;
     requestId: string;
     correlationId: string;
+    sourceTrialId: string;
+    sourceEvaluationId: string;
   }): Promise<FrozenFormulaVersion | undefined> {
     if (!("begin" in this.sql))
       throw new Error("Approval requires a transaction-capable SQL client.");
@@ -456,7 +535,12 @@ class PostgresDesignStudioStore implements DesignStudioStore {
         ) values (
           ${input.tenantId}, ${input.actorUserId}, 'formula.approved', 'FormulaVersion',
           ${input.formulaVersionId}, ${input.requestId}, ${input.correlationId},
-          ${tx.json({ formulaId: rows[0].formula_id, compositionKind: rows[0].composition_kind })}
+          ${tx.json({
+            formulaId: rows[0].formula_id,
+            compositionKind: rows[0].composition_kind,
+            sourceTrialId: input.sourceTrialId,
+            sourceEvaluationId: input.sourceEvaluationId
+          })}
         )
       `;
       return true;

@@ -82,6 +82,11 @@ try {
       key: "module.design-studio",
       enabled: true
     });
+    await store.upsertTenantEntitlement({
+      tenantId: tenant.id,
+      key: "module.trial-sensory",
+      enabled: true
+    });
     return tenant;
   });
 
@@ -146,7 +151,7 @@ try {
     await store.touchMaterial(aggregate.material.id);
   });
 
-  console.log("PREVIEW_G3_G4_ACCEPTANCE_FIXTURE=READY");
+  console.log("PREVIEW_G3_G4_G5_ACCEPTANCE_FIXTURE=READY");
   console.log("PREVIEW_MATERIAL_ACCEPTANCE_TENANT=" + tenant.id);
 } finally {
   await database.end({ timeout: 5 });

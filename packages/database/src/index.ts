@@ -3,6 +3,7 @@ import postgres, { type Sql } from "postgres";
 export * from "./platform-store.js";
 export * from "./material-store.js";
 export * from "./design-studio-store.js";
+export * from "./trial-sensory-store.js";
 export * from "./staging-fixture-maintenance.js";
 
 export type RuntimeDatabaseOptions = {

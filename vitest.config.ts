@@ -20,6 +20,8 @@ export default defineConfig({
       "@nox-os/shared": source("./packages/shared/src/index.ts"),
       "@nox-os/storage": source("./packages/storage/src/index.ts"),
       "@nox-os/tenancy": source("./packages/tenancy/src/index.ts"),
+      "@nox-os/trial-sensory": source("./packages/trial-sensory/src/index.ts"),
+      "@nox-os/trial-sensory/browser": source("./packages/trial-sensory/src/browser.ts"),
       "@nox-os/ui": source("./packages/ui/src/index.tsx")
     }
   },

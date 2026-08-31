@@ -29,6 +29,8 @@
       "@nox-os/shared": ["./packages/shared/src/index.ts"],
       "@nox-os/storage": ["./packages/storage/src/index.ts"],
       "@nox-os/tenancy": ["./packages/tenancy/src/index.ts"],
+      "@nox-os/trial-sensory": ["./packages/trial-sensory/src/index.ts"],
+      "@nox-os/trial-sensory/browser": ["./packages/trial-sensory/src/browser.ts"],
       "@nox-os/ui": ["./packages/ui/src/index.ts"]
     }
   },

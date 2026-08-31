@@ -265,3 +265,22 @@ export interface FormulaRevisionPort {
 export interface FormulaApprovalPort {
   approveFrozenVersion(evidence: FormulaApprovalEvidence): Promise<void>;
 }
+
+/** Dependency-neutral G4 read boundary implemented by the G5 bounded context. */
+export interface FormulaRevisionContextReader {
+  findRevisionContext(input: {
+    tenantId: string;
+    sourceTrialId: string;
+    sourceEvaluationId: string;
+  }): Promise<FormulaRevisionContext | undefined>;
+}
+
+/** Dependency-neutral G4 evidence boundary implemented by the G5 bounded context. */
+export interface FormulaApprovalEvidenceReader {
+  findApprovalEvidence(input: {
+    tenantId: string;
+    formulaVersionId: string;
+    sourceTrialId: string;
+    sourceEvaluationId: string;
+  }): Promise<FormulaApprovalEvidence | undefined>;
+}
