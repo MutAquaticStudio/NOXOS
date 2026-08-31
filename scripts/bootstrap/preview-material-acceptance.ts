@@ -123,7 +123,7 @@ try {
     await store.replaceOdorAssignments(aggregate.material.id, [
       {
         materialId: aggregate.material.id,
-        taxonomyVersion: "osmo_v1.2",
+        taxonomyVersion: "1.2",
         assignmentType: "DESCRIPTOR",
         taxonomyTerm: "Jasminy",
         intensity: 7
