@@ -38,6 +38,9 @@ import { DesignStudioProblem } from "./problem.js";
 const MODULE_ID = "design-studio";
 const ENTITLEMENT = "module.design-studio";
 const uuid = z.string().uuid();
+const fileReferenceId = z
+  .string()
+  .regex(/^file_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 const nonEmpty = z.string().trim().min(1).max(4000);
 const projectCreateSchema = z.object({
   name: z.string().trim().min(1).max(160),
@@ -57,7 +60,7 @@ const briefCreateSchema = z.object({
   assetReferences: z
     .array(
       z.object({
-        assetId: z.string().uuid(),
+        assetId: fileReferenceId,
         modality: z.enum(["IMAGE", "REFERENCE"]),
         sourceName: z.string().trim().min(1).max(240)
       })

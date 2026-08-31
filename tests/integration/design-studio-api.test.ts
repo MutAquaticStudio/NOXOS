@@ -119,7 +119,23 @@ function fixture() {
     application,
     authorization,
     definitions: moduleDefinitions,
-    featureFlags: new LocalFeatureFlagResolver(["module.design-studio"])
+    featureFlags: new LocalFeatureFlagResolver(["module.design-studio"]),
+    fileStore: {
+      async put(reference) {
+        return {
+          ...reference,
+          id: "file_65000000-0000-4000-8000-000000000001",
+          storagePath: `tenant/${reference.tenantId}/file_65000000-0000-4000-8000-000000000001`
+        };
+      },
+      async stat(reference) {
+        return reference;
+      },
+      async delete() {},
+      async createDownloadGrant() {
+        return "https://example.invalid/private";
+      }
+    }
   });
   const router = new InternalApiRouter();
   api.registerRoutes(router);
@@ -194,6 +210,46 @@ async function prepareConfirmedBrief(request: ReturnType<typeof fixture>["reques
 }
 
 describe("G4 Design Studio authenticated API", () => {
+  it("round-trips FileStore opaque IDs into Brief asset provenance", async () => {
+    const { request } = fixture();
+    const asset = await request({
+      path: "/design-studio/assets",
+      method: "POST",
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      body: {
+        sourceName: "reference.txt",
+        modality: "REFERENCE",
+        mimeType: "text/plain",
+        contentsBase64: Buffer.from("private reference").toString("base64")
+      }
+    });
+    expect(asset.status).toBe(201);
+    const assetReference = (asset.body as { asset: Record<string, unknown> }).asset;
+    const project = await request({
+      path: "/design-studio/projects",
+      method: "POST",
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      body: { name: "Asset provenance" }
+    });
+    const projectId = (project.body as { project: { id: string } }).project.id;
+    const brief = await request({
+      path: `/design-studio/projects/${projectId}/briefs`,
+      method: "POST",
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      body: {
+        workflowMode: "FORMULA_GENERATION",
+        rawBrief: "A source-backed fine-fragrance direction.",
+        applicationKey: "fine-fragrance",
+        targetDosagePct: 20,
+        assetReferences: [assetReference]
+      }
+    });
+    expect(brief.status).toBe(201);
+  });
+
   it("preserves the Platform Core authentication error envelope", async () => {
     const { request } = fixture();
     const denied = await request({
