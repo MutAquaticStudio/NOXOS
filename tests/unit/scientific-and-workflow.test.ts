@@ -4,7 +4,11 @@ import {
   launchWorkflowProbe,
   UnavailableWorkflowLauncher
 } from "@nox-os/platform";
-import { MockScientificAdapter, UnavailableScientificAdapter } from "@nox-os/scientific";
+import {
+  MockScientificAdapter,
+  NoxOeScientificAdapter,
+  UnavailableScientificAdapter
+} from "@nox-os/scientific";
 import {
   processFoundationWorkflowMessage,
   VercelQueueWorkflowLauncher
@@ -34,6 +38,19 @@ describe("provider-neutral resilience ports", () => {
         }
       )
     ).resolves.toEqual({ id: "workflow_1", state: "FAILED" });
+  });
+
+  it("keeps an unavailable NØX-OE sidecar off the core critical path", async () => {
+    const adapter = new NoxOeScientificAdapter({
+      endpoint: "https://nox-oe.internal.invalid",
+      internalToken: "test-only",
+      request: async () =>
+        new Response(JSON.stringify({ state: "UNAVAILABLE", code: "MODEL_UNAVAILABLE" }))
+    });
+    await expect(adapter.evaluate({ canonical_smiles: "CCO" })).resolves.toEqual({
+      state: "UNAVAILABLE",
+      reason: "MODEL_UNAVAILABLE"
+    });
   });
 
   it("accepts a durable provider enqueue without pretending asynchronous work is complete", async () => {

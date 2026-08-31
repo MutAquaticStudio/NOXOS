@@ -461,17 +461,56 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     id: "design-studio",
     displayName: "Design Studio",
     routeRoot: "/design-studio",
-    childRoutes: [],
+    childRoutes: ["/design-studio/formula", "/design-studio/accords"],
     apiNamespace: "design-studio",
     navigationGroup: "Creative",
-    lifecycle: "DISABLED",
-    dependencies: ["platform", "material-intelligence", "inventory"],
-    permissions: ["design-studio.read"],
-    entitlement: "future.design-studio",
+    lifecycle: "INTERNAL",
+    dependencies: ["platform", "material-intelligence"],
+    permissions: ["module.design-studio.studio.read"],
+    entitlement: "module.design-studio",
     featureFlag: "module.design-studio",
     uxProfile: moduleProfiles.designStudio,
-    owner: "Future R&D owner",
-    icon: "studio"
+    owner: "Design Studio owner",
+    icon: "studio",
+    authorization: {
+      permissions: [
+        "module.design-studio.studio.read",
+        "module.design-studio.project.create",
+        "module.design-studio.brief.manage",
+        "module.design-studio.intent.confirm",
+        "module.design-studio.formula.generate",
+        "module.design-studio.accord.plan",
+        "module.design-studio.accord.develop",
+        "module.design-studio.formula.freeze",
+        "module.design-studio.formula.approve",
+        "module.design-studio.scientific-artifact.read"
+      ],
+      defaultRoleGrants: {
+        TENANT_OWNER: [
+          "module.design-studio.studio.read",
+          "module.design-studio.project.create",
+          "module.design-studio.brief.manage",
+          "module.design-studio.intent.confirm",
+          "module.design-studio.formula.generate",
+          "module.design-studio.accord.plan",
+          "module.design-studio.accord.develop",
+          "module.design-studio.formula.freeze",
+          "module.design-studio.formula.approve",
+          "module.design-studio.scientific-artifact.read"
+        ],
+        TENANT_ADMIN: [
+          "module.design-studio.studio.read",
+          "module.design-studio.project.create",
+          "module.design-studio.brief.manage",
+          "module.design-studio.intent.confirm",
+          "module.design-studio.formula.generate",
+          "module.design-studio.accord.plan",
+          "module.design-studio.accord.develop",
+          "module.design-studio.scientific-artifact.read"
+        ],
+        TENANT_MEMBER: ["module.design-studio.studio.read"]
+      }
+    }
   })
 ];
 

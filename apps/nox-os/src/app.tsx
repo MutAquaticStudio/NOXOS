@@ -53,6 +53,11 @@ const LazyPlatformMaterialExperience = lazy(async () => {
   return { default: module.PlatformMaterialExperience };
 });
 
+const LazyDesignStudioExperience = lazy(async () => {
+  const module = await import("./design-studio");
+  return { default: module.DesignStudioExperience };
+});
+
 const publicIdentity = publicEnvironment({
   VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
   VITE_NOX_SOURCE_SHA: import.meta.env.VITE_NOX_SOURCE_SHA,
@@ -358,7 +363,11 @@ function AuthenticatedApplication({
   const routeEntries = useMemo(
     () =>
       enabledDefinitions
-        .filter((definition) => definition.descriptor.id !== "material-intelligence")
+        .filter(
+          (definition) =>
+            definition.descriptor.id !== "material-intelligence" &&
+            definition.descriptor.id !== "design-studio"
+        )
         .flatMap((definition) => [
           { path: definition.descriptor.routeRoot, definition },
           ...definition.descriptor.childRoutes.map((path) => ({ path, definition }))
@@ -370,7 +379,9 @@ function AuthenticatedApplication({
       ?.definition ??
     (location.pathname.startsWith("/materials")
       ? moduleDefinitions.find((definition) => definition.descriptor.id === "material-intelligence")
-      : undefined);
+      : location.pathname.startsWith("/design-studio")
+        ? moduleDefinitions.find((definition) => definition.descriptor.id === "design-studio")
+        : undefined);
   const density = activeDefinition ? toShellDensity(activeDefinition.uxProfile.density) : "DEFAULT";
   const isPlatformOwner = platformIdentity.identity?.platformRoleKey === "PLATFORM_OWNER";
   const hasNoWorkspace = tenantSelection.state === "ready" && tenantSelection.choices.length === 0;
@@ -491,6 +502,18 @@ function AuthenticatedApplication({
             element={
               <Suspense fallback={<p className="nox-ai-context">Loading Material Intelligence…</p>}>
                 <LazyMaterialExperience
+                  api={api}
+                  tenantId={activeTenant?.tenantId}
+                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/design-studio/*"
+            element={
+              <Suspense fallback={<p className="nox-ai-context">Loading Design Studio…</p>}>
+                <LazyDesignStudioExperience
                   api={api}
                   tenantId={activeTenant?.tenantId}
                   modulePermissions={tenantContext?.authorization.modulePermissions ?? []}

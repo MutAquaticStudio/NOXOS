@@ -1,0 +1,29 @@
+export type DesignStudioProblemCode =
+  | "HUMAN_CONFIRMATION_REQUIRED"
+  | "INVALID_TAXONOMY_TERM"
+  | "MATERIAL_INELIGIBLE"
+  | "FORMULATION_GUIDANCE_MISSING"
+  | "REQUIRED_INTENT_UNCOVERED"
+  | "FORMULA_CONSTRAINTS_INFEASIBLE"
+  | "TENANT_ACCESS_DENIED"
+  | "DILUTION_RESOLUTION_FAILED"
+  | "FORMULA_TOTAL_INVALID"
+  | "INVALID_FORMULA_CANDIDATE"
+  | "ACCORD_ACTION_NOT_CONFIRMED"
+  | "ACCORD_NOT_FOUND"
+  | "FORMULA_FROZEN_SNAPSHOT_SCHEMA_MISSING"
+  | "PROJECT_NOT_FOUND"
+  | "BRIEF_NOT_FOUND"
+  | "FORMULA_NOT_FOUND"
+  | "FORMULA_VERSION_NOT_FOUND"
+  | "INTERPRETER_UNAVAILABLE";
+
+export class DesignStudioProblem extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: DesignStudioProblemCode,
+    message: string
+  ) {
+    super(message);
+  }
+}

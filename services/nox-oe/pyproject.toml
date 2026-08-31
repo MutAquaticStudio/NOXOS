@@ -1,0 +1,28 @@
+[project]
+name = "nox-oe"
+version = "0.1.0"
+description = "Internal NØX olfactory-engineering scientific runtime sidecar"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "pydantic>=2.10,<3",
+  "psycopg[binary]>=3.2,<4",
+  "rdkit>=2024.9,<2027",
+  "torch>=2.5,<3",
+  "torch-geometric>=2.6,<3",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+test = ["httpx>=0.28,<1", "pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nox_oe"]

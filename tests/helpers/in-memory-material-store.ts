@@ -8,6 +8,7 @@ import type {
   MaterialConcentrateRecord,
   MaterialIdentifierRecord,
   MaterialHistoryEvent,
+  MaterialFormulationGuidanceRecord,
   MaterialOdorAssignmentRecord,
   MaterialPropertiesRecord,
   MaterialReadScope,
@@ -33,6 +34,7 @@ type State = {
   odors: Map<string, MaterialOdorAssignmentRecord[]>;
   concentrates: Map<string, MaterialConcentrateRecord>;
   components: Map<string, MaterialComponentRecord[]>;
+  formulationGuidance: Map<string, MaterialFormulationGuidanceRecord[]>;
   changes: Map<string, MaterialChangeRequestRecord>;
   tenantNames: Map<string, string>;
   userDisplayNames: Map<string, string>;
@@ -59,6 +61,7 @@ export class InMemoryMaterialStore implements MaterialStore {
     odors: new Map(),
     concentrates: new Map(),
     components: new Map(),
+    formulationGuidance: new Map(),
     changes: new Map(),
     tenantNames: new Map(),
     userDisplayNames: new Map(),
@@ -129,7 +132,8 @@ export class InMemoryMaterialStore implements MaterialStore {
         ? (structuredClone(this.state.concentrates.get(materialId)) ?? null)
         : null,
       components: structuredClone(this.state.components.get(materialId) ?? []),
-      chemicalEntity: chemical ? structuredClone(chemical) : null
+      chemicalEntity: chemical ? structuredClone(chemical) : null,
+      formulationGuidance: structuredClone(this.state.formulationGuidance.get(materialId) ?? [])
     };
   }
   async findMaterialsByIdentifier(
@@ -293,6 +297,12 @@ export class InMemoryMaterialStore implements MaterialStore {
     values: readonly MaterialComponentRecord[]
   ): Promise<void> {
     this.state.components.set(materialId, [...structuredClone(values)]);
+  }
+  async replaceFormulationGuidance(
+    materialId: string,
+    values: readonly MaterialFormulationGuidanceRecord[]
+  ): Promise<void> {
+    this.state.formulationGuidance.set(materialId, [...structuredClone(values)]);
   }
   async insertChangeRequest(
     input: Omit<MaterialChangeRequestRecord, "id" | "createdAt" | "updatedAt">
