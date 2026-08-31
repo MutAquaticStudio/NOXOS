@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   formatMassMg,
   type AccordArchitecturePlan,
@@ -558,6 +559,7 @@ export function DesignStudioExperience({
   }>({});
   const [frozen, setFrozen] = useState<FrozenFormula>();
   const [trialReady, setTrialReady] = useState(false);
+  const navigate = useNavigate();
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -934,14 +936,8 @@ export function DesignStudioExperience({
             <FrozenFormulaView
               value={frozen}
               onTrial={() => {
-                setWorking(true);
-                void api(
-                  `/design-studio/formula-versions/${frozen.formulaVersionId}/trial-context`,
-                  { method: "POST", tenantId }
-                )
-                  .then(() => setTrialReady(true))
-                  .catch((reason) => setError(message(reason)))
-                  .finally(() => setWorking(false));
+                setTrialReady(true);
+                navigate(`/trials?formulaVersionId=${frozen.formulaVersionId}`);
               }}
             />
           ) : candidates.length > 0 ? (

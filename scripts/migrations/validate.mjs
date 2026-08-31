@@ -90,4 +90,60 @@ for (const requiredBoundary of [
   }
 }
 
+const trialSensoryMigration = readFileSync(
+  resolve(migrationDirectory, "20260831190719_g5_trial_sensory.sql"),
+  "utf8"
+);
+const declaredTrialSensoryTables = [
+  ...trialSensoryMigration.matchAll(/create\s+table\s+trial_sensory\.([a-z_]+)/gi)
+].map((match) => match[1]);
+const canonicalTrialSensoryTables = [
+  "trials",
+  "trial_lines",
+  "sensory_evaluations",
+  "sensory_deltas"
+];
+
+if (
+  declaredTrialSensoryTables.length !== canonicalTrialSensoryTables.length ||
+  canonicalTrialSensoryTables.some((table) => !declaredTrialSensoryTables.includes(table))
+) {
+  throw new Error(
+    `Gate 5 must create exactly the four canonical Trial and Sensory tables; found ${declaredTrialSensoryTables.join(",")}`
+  );
+}
+
+for (const forbiddenTable of [
+  "sensory_panels",
+  "panel_members",
+  "material_sensory_scores",
+  "trial_sessions",
+  "sensory_predictions",
+  "revision_jobs",
+  "approval_records",
+  "formula_copies",
+  "trial_formula_versions",
+  "material_failures"
+]) {
+  if (
+    new RegExp(`create\\s+table\\s+trial_sensory\\.${forbiddenTable}\\b`, "i").test(
+      trialSensoryMigration
+    )
+  ) {
+    throw new Error(`Gate 5 forbidden persistence table: ${forbiddenTable}`);
+  }
+}
+
+for (const requiredBoundary of [
+  "force row level security",
+  "FORMULA_VERSION_NOT_FROZEN_OR_LINEAGE_MISMATCH",
+  "TRIAL_FORMULA_TOTAL_INVALID",
+  "FINAL_EVALUATION_IMMUTABLE",
+  "references design_studio.formula_lines"
+]) {
+  if (!trialSensoryMigration.includes(requiredBoundary)) {
+    throw new Error(`Gate 5 persistence boundary missing: ${requiredBoundary}`);
+  }
+}
+
 console.log("MIGRATION_STATIC_VALIDATION=PASS");

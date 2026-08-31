@@ -45,6 +45,7 @@ export type FrozenFormulaVersion = {
   sourceBriefId: string;
   name: string;
   versionNumber: number;
+  parentFormulaVersionId: string | null;
   compositionKind: CompositionKind;
   generationStrategy: string;
   engineVersion: string;
@@ -65,6 +66,9 @@ export type FreezeFormulaInput = {
   formulaName: string;
   candidate: FormulaCandidate;
   freshSnapshots: readonly MaterialIntelligenceSnapshot[];
+  parentFormulaVersionId?: string;
+  sourceTrialId?: string;
+  sourceEvaluationId?: string;
 };
 
 export interface DesignStudioStore {
@@ -111,6 +115,8 @@ export interface DesignStudioStore {
     actorUserId: string;
     requestId: string;
     correlationId: string;
+    sourceTrialId: string;
+    sourceEvaluationId: string;
   }): Promise<FrozenFormulaVersion | undefined>;
   recordAudit(input: {
     tenantId: string;

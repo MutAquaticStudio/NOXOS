@@ -17,6 +17,10 @@ export type DesignStudioProblemCode =
   | "BRIEF_NOT_FOUND"
   | "FORMULA_NOT_FOUND"
   | "FORMULA_VERSION_NOT_FOUND"
+  | "APPROVAL_EVIDENCE_REQUIRED"
+  | "APPROVAL_EVIDENCE_INVALID"
+  | "REVISION_NOT_ALLOWED"
+  | "REVISION_CONTEXT_INVALID"
   | "INTERPRETER_UNAVAILABLE";
 
 export class DesignStudioProblem extends Error {

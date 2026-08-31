@@ -20,12 +20,13 @@ const expectedModuleIds = [
   "community",
   "settings",
   "support",
-  "design-studio"
+  "design-studio",
+  "trial-sensory"
 ];
 
 describe("canonical Module Registry", () => {
-  it("preserves all twelve Gate 0 module declarations", () => {
-    expect(moduleDefinitions).toHaveLength(12);
+  it("preserves all twelve Gate 0 module declarations and appends the Gate 5 module", () => {
+    expect(moduleDefinitions).toHaveLength(13);
     expect(moduleDefinitions.map((definition) => definition.descriptor.id)).toEqual(
       expectedModuleIds
     );
@@ -55,7 +56,8 @@ describe("canonical Module Registry", () => {
       "material-intelligence",
       "settings",
       "support",
-      "design-studio"
+      "design-studio",
+      "trial-sensory"
     ]);
   });
 

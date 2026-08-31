@@ -33,6 +33,7 @@ const runtimeDatabaseUrl = required("NOX_RUNTIME_DATABASE_URL");
 const protectionBypass = required("VERCEL_AUTOMATION_BYPASS_SECRET");
 const expectedSourceSha = required("EXPECTED_SOURCE_SHA");
 const visualCaptureDirectory = process.env.G3_VISUAL_CAPTURE_DIR;
+const g5VisualCaptureDirectory = process.env.G5_VISUAL_CAPTURE_DIR;
 
 if (raw.NOX_EXPECTED_ENV !== "staging" || stagingProjectRef === productionProjectRef) {
   throw new Error("G3 fixture acceptance may target only the isolated Staging project.");
@@ -117,6 +118,17 @@ try {
       ),
       200,
       "Design Studio entitlement"
+    );
+  }
+  for (const tenantId of [tenantA, tenantB]) {
+    expectStatus(
+      await api(
+        platformOwnerToken,
+        `/platform/tenants/${tenantId}/entitlements/module.trial-sensory`,
+        { method: "PUT", body: { enabled: true } }
+      ),
+      200,
+      "Trial & Sensory entitlement"
     );
   }
   const materialContext = await api<{
@@ -912,26 +924,7 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
       unfreezeRejected = true;
     }
     if (!unfreezeRejected) throw new Error("Database allowed a FROZEN version to return to DRAFT.");
-    expectError(
-      await api(token("A"), `/design-studio/formula-versions/${frozen.formulaVersionId}/approve`, {
-        method: "POST",
-        tenantId: tenantA
-      }),
-      403,
-      "PERMISSION_DENIED",
-      "Unauthorized G4 Formula approval"
-    );
-    const approved = await api<{ formulaVersion: Frozen }>(
-      actor,
-      `/design-studio/formula-versions/${frozen.formulaVersionId}/approve`,
-      { method: "POST", tenantId: tenantA }
-    );
-    expectStatus(approved, 200, "G4 Formula approval evidence");
-    if (
-      approved.body.formulaVersion.approvalState !== "APPROVED" ||
-      approved.body.formulaVersion.bundleHash !== frozen.bundleHash
-    )
-      throw new Error("Formula approval modified the frozen composition identity.");
+    await runG5Acceptance(page, tenantA, tenantB, frozen);
     expectStatus(
       await api(actor, `/design-studio/formula-versions/${frozen.formulaVersionId}/trial-context`, {
         method: "POST",
@@ -1013,6 +1006,7 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
       200,
       "G4 Accord G5 TrialContext handoff"
     );
+    await runG5AccordAcceptance(page, tenantA, frozenAccord.body.formulaVersion);
     expectStatus(
       await api(actor, `/design-studio/briefs/${accordBriefId}/generate`, {
         method: "POST",
@@ -1069,6 +1063,534 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
   }
 }
 
+async function runG5AccordAcceptance(
+  page: Page,
+  tenantId: string,
+  frozen: { formulaVersionId: string; bundleHash: string; candidate: unknown }
+): Promise<void> {
+  const actor = token("B");
+  const created = await api<{
+    trial: { id: string; compositionKind: string; formulaBundleHash: string };
+  }>(actor, "/trials", {
+    method: "POST",
+    tenantId,
+    body: {
+      formulaVersionId: frozen.formulaVersionId,
+      preparationMode: "CONCENTRATE",
+      applicationKey: "fine-fragrance-accord",
+      dosagePct: 20,
+      carrierOrBaseReference: null,
+      targetMassMg: "20000"
+    }
+  });
+  expectStatus(created, 201, "G5 ACCORD_FORMULATION Trial creation");
+  if (
+    created.body.trial.compositionKind !== "ACCORD_FORMULATION" ||
+    created.body.trial.formulaBundleHash !== frozen.bundleHash
+  )
+    throw new Error("G5 Accord Trial did not preserve frozen Accord lineage.");
+  expectStatus(
+    await api(actor, `/trials/${created.body.trial.id}/prepare`, {
+      method: "POST",
+      tenantId
+    }),
+    200,
+    "G5 Accord exact preparation"
+  );
+  const evaluation = await api<{ evaluation: { id: string } }>(
+    actor,
+    `/trials/${created.body.trial.id}/evaluations`,
+    {
+      method: "POST",
+      tenantId,
+      body: {
+        evaluationMedium: "BLOTTER",
+        sampleAgeMinutes: 60,
+        temperatureC: 23,
+        humidityPct: 55,
+        evaluationText: "The accord is coherent and useful as a building block.",
+        diagnosticNote: null
+      }
+    }
+  );
+  expectStatus(evaluation, 201, "G5 Accord evaluation creation");
+  expectStatus(
+    await api(
+      actor,
+      `/trials/${created.body.trial.id}/evaluations/${evaluation.body.evaluation.id}/finalize`,
+      { method: "POST", tenantId, body: { decision: "READY_FOR_APPROVAL", deltas: [] } }
+    ),
+    200,
+    "G5 Accord FINAL evidence"
+  );
+  expectStatus(
+    await api(
+      actor,
+      `/trials/${created.body.trial.id}/evaluations/${evaluation.body.evaluation.id}/recommend-approval`,
+      { method: "POST", tenantId }
+    ),
+    200,
+    "G5 Accord approval recommendation"
+  );
+  expectStatus(
+    await api(actor, `/design-studio/formula-versions/${frozen.formulaVersionId}/approve`, {
+      method: "POST",
+      tenantId,
+      body: {
+        sourceTrialId: created.body.trial.id,
+        sourceEvaluationId: evaluation.body.evaluation.id
+      }
+    }),
+    200,
+    "G4 Accord approval with G5 evidence"
+  );
+  await signInInBrowser(page, fixture("B"));
+  await page.goto(new URL(`/trials/${created.body.trial.id}`, stagingUrl).toString(), {
+    waitUntil: "networkidle"
+  });
+  await page.getByText("WHOLE ACCORD").waitFor({ state: "visible" });
+  await captureG5(page, "accord-trial-desktop", `/trials/${created.body.trial.id}`);
+  await signOutInBrowser(page);
+  console.log("G5_STAGING_ACCORD_TRIAL=PASS");
+}
+
+async function runG5Acceptance(
+  page: Page,
+  tenantA: string,
+  tenantB: string,
+  frozen: {
+    formulaVersionId: string;
+    bundleHash: string;
+    approvalState: string;
+    candidate: { generationStrategy: string };
+  }
+): Promise<void> {
+  type TrialBody = {
+    trial: {
+      id: string;
+      formulaVersionId: string;
+      formulaBundleHash: string;
+      status: string;
+      lines: Array<{ scaledMassMg: string; materialSnapshotHash: string }>;
+    };
+  };
+  type EvaluationBody = { evaluation: { id: string; status: string; decision: string | null } };
+  const actor = token("B");
+  const createPreparedTrial = async (purpose: string) => {
+    const created = await api<TrialBody>(actor, "/trials", {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        formulaVersionId: frozen.formulaVersionId,
+        preparationMode: "CONCENTRATE",
+        applicationKey: `fine-fragrance-${purpose}`,
+        dosagePct: 20,
+        carrierOrBaseReference: null,
+        targetMassMg: "20000"
+      }
+    });
+    expectStatus(created, 201, `G5 ${purpose} Trial creation`);
+    if (
+      created.body.trial.formulaVersionId !== frozen.formulaVersionId ||
+      created.body.trial.formulaBundleHash !== frozen.bundleHash
+    )
+      throw new Error("G5 Trial did not preserve exact G4 frozen lineage.");
+    const prepared = await api<TrialBody>(actor, `/trials/${created.body.trial.id}/prepare`, {
+      method: "POST",
+      tenantId: tenantA
+    });
+    expectStatus(prepared, 200, `G5 ${purpose} exact preparation`);
+    const total = prepared.body.trial.lines.reduce(
+      (sum, line) => sum + BigInt(line.scaledMassMg),
+      0n
+    );
+    if (
+      total !== 20_000n ||
+      prepared.body.trial.lines.some(
+        (line) =>
+          BigInt(line.scaledMassMg) < 1n || !/^[a-f0-9]{64}$/i.test(line.materialSnapshotHash)
+      )
+    )
+      throw new Error("G5 exact scaling or snapshot lineage is invalid.");
+    return created.body.trial.id;
+  };
+  const createFinalEvaluation = async (
+    trialId: string,
+    decision: "REVISION_REQUIRED" | "READY_FOR_APPROVAL",
+    deltas: unknown[]
+  ) => {
+    const evaluationText =
+      decision === "REVISION_REQUIRED"
+        ? "The full composition needs a clearer jasminy mid-phase lift."
+        : "The full composition is balanced and ready for approval.";
+    const created = await api<EvaluationBody>(actor, `/trials/${trialId}/evaluations`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        evaluationMedium: "BLOTTER",
+        sampleAgeMinutes: 45,
+        temperatureC: 23,
+        humidityPct: 55,
+        evaluationText,
+        diagnosticNote: "Non-canonical diagnostic hypothesis"
+      }
+    });
+    expectStatus(created, 201, "G5 sensory evaluation creation");
+    const path = `/trials/${trialId}/evaluations/${created.body.evaluation.id}`;
+    expectStatus(
+      await api(actor, path, {
+        method: "PUT",
+        tenantId: tenantA,
+        body: {
+          evaluationMedium: "BLOTTER",
+          sampleAgeMinutes: 45,
+          temperatureC: 23,
+          humidityPct: 55,
+          evaluationText,
+          diagnosticNote: "Non-canonical diagnostic hypothesis",
+          deltas
+        }
+      }),
+      200,
+      "G5 raw evidence and manual mapping"
+    );
+    expectError(
+      await api(actor, `${path}/interpret`, { method: "POST", tenantId: tenantA }),
+      503,
+      "INTERPRETER_UNAVAILABLE",
+      "G5 unavailable interpreter fallback"
+    );
+    const finalized = await api<EvaluationBody>(actor, `${path}/finalize`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: { decision, deltas }
+    });
+    expectStatus(finalized, 200, "G5 FINAL evaluation");
+    if (
+      finalized.body.evaluation.status !== "FINAL" ||
+      finalized.body.evaluation.decision !== decision
+    )
+      throw new Error("G5 evaluation did not preserve the FINAL decision.");
+    expectError(
+      await api(actor, path, {
+        method: "PUT",
+        tenantId: tenantA,
+        body: {
+          evaluationMedium: "BLOTTER",
+          sampleAgeMinutes: 46,
+          evaluationText: "Mutation must fail.",
+          diagnosticNote: null,
+          deltas
+        }
+      }),
+      409,
+      "EVALUATION_ALREADY_FINAL",
+      "G5 FINAL evidence immutability"
+    );
+    return created.body.evaluation.id;
+  };
+
+  expectError(
+    await api(token("E"), "/trials", {
+      method: "POST",
+      tenantId: tenantB,
+      body: {
+        formulaVersionId: frozen.formulaVersionId,
+        preparationMode: "CONCENTRATE",
+        applicationKey: "cross-tenant-probe",
+        dosagePct: 20,
+        targetMassMg: "20000"
+      }
+    }),
+    409,
+    "FORMULA_VERSION_NOT_FROZEN",
+    "G5 cross-tenant Formula lineage"
+  );
+
+  const revisionTrialId = await createPreparedTrial("revision");
+  let preparedContextMutationRejected = false;
+  try {
+    await maintenance`
+      update trial_sensory.trials set target_mass_mg = target_mass_mg + 1
+      where tenant_id = ${tenantA} and id = ${revisionTrialId}
+    `;
+  } catch {
+    preparedContextMutationRejected = true;
+  }
+  if (!preparedContextMutationRejected)
+    throw new Error("G5 database allowed PREPARED Trial context mutation.");
+  expectError(
+    await api(token("E"), `/trials/${revisionTrialId}`, { tenantId: tenantB }),
+    404,
+    "TRIAL_NOT_FOUND",
+    "G5 cross-tenant Trial read"
+  );
+  const revisionDeltas = [
+    {
+      phase: "MID",
+      assignmentType: "DESCRIPTOR",
+      taxonomyTerm: "Jasminy",
+      proposedDelta: null,
+      confirmedDelta: 2,
+      proposalConfidence: null,
+      interpreterVersion: null
+    }
+  ];
+  const revisionEvaluationId = await createFinalEvaluation(
+    revisionTrialId,
+    "REVISION_REQUIRED",
+    revisionDeltas
+  );
+  expectError(
+    await api(token("E"), `/trials/${revisionTrialId}/evaluations/${revisionEvaluationId}`, {
+      tenantId: tenantB
+    }),
+    404,
+    "EVALUATION_NOT_FOUND",
+    "G5 cross-tenant Evaluation read"
+  );
+  expectError(
+    await api(token("E"), `/trials/${revisionTrialId}/evaluations/${revisionEvaluationId}`, {
+      method: "PUT",
+      tenantId: tenantB,
+      body: {
+        evaluationMedium: "BLOTTER",
+        sampleAgeMinutes: 45,
+        evaluationText: "Cross-tenant mutation",
+        diagnosticNote: null,
+        deltas: revisionDeltas
+      }
+    }),
+    404,
+    "EVALUATION_NOT_FOUND",
+    "G5 cross-tenant Evaluation mutation"
+  );
+  let finalDeltaMutationRejected = false;
+  try {
+    await maintenance`
+      update trial_sensory.sensory_deltas set confirmed_delta = confirmed_delta + 1
+      where tenant_id = ${tenantA} and evaluation_id = ${revisionEvaluationId}
+    `;
+  } catch {
+    finalDeltaMutationRejected = true;
+  }
+  if (!finalDeltaMutationRejected)
+    throw new Error("G5 database allowed FINAL sensory delta mutation.");
+  const revision = await api<{ candidates: Array<{ generationStrategy: string }> }>(
+    actor,
+    `/trials/${revisionTrialId}/evaluations/${revisionEvaluationId}/create-revision`,
+    { method: "POST", tenantId: tenantA }
+  );
+  expectStatus(revision, 200, "G5-to-G4 revision candidate handoff");
+  const revised = await api<{
+    formulaVersion: { formulaVersionId: string; parentFormulaVersionId: string | null };
+  }>(actor, `/design-studio/formula-versions/${frozen.formulaVersionId}/revisions/freeze`, {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      sourceTrialId: revisionTrialId,
+      sourceEvaluationId: revisionEvaluationId,
+      strategy: revision.body.candidates[0]?.generationStrategy,
+      formulaName: `G5 sensory revision ${suffix.slice(0, 8)}`
+    }
+  });
+  expectStatus(revised, 201, "G4 revision freeze from G5 evidence");
+  if (revised.body.formulaVersion.parentFormulaVersionId !== frozen.formulaVersionId)
+    throw new Error("G4 revision did not preserve parent FormulaVersion lineage.");
+
+  const approvalTrialId = await createPreparedTrial("approval");
+  const approvalEvaluationId = await createFinalEvaluation(
+    approvalTrialId,
+    "READY_FOR_APPROVAL",
+    []
+  );
+  expectStatus(
+    await api(
+      actor,
+      `/trials/${approvalTrialId}/evaluations/${approvalEvaluationId}/recommend-approval`,
+      { method: "POST", tenantId: tenantA }
+    ),
+    200,
+    "G5 approval recommendation"
+  );
+  expectError(
+    await api(token("A"), `/design-studio/formula-versions/${frozen.formulaVersionId}/approve`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: { sourceTrialId: approvalTrialId, sourceEvaluationId: approvalEvaluationId }
+    }),
+    403,
+    "PERMISSION_DENIED",
+    "Unauthorized G4 Formula approval"
+  );
+  const approved = await api<{
+    formulaVersion: { approvalState: string; bundleHash: string };
+  }>(actor, `/design-studio/formula-versions/${frozen.formulaVersionId}/approve`, {
+    method: "POST",
+    tenantId: tenantA,
+    body: { sourceTrialId: approvalTrialId, sourceEvaluationId: approvalEvaluationId }
+  });
+  expectStatus(approved, 200, "G4 Formula approval with G5 evidence");
+  if (
+    approved.body.formulaVersion.approvalState !== "APPROVED" ||
+    approved.body.formulaVersion.bundleHash !== frozen.bundleHash
+  )
+    throw new Error("Formula approval modified the frozen composition identity.");
+
+  const foreignLineTrial = await api<{ trial: { id: string } }>(actor, "/trials", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      formulaVersionId: frozen.formulaVersionId,
+      preparationMode: "CONCENTRATE",
+      applicationKey: "foreign-line-probe",
+      dosagePct: 20,
+      targetMassMg: "20000"
+    }
+  });
+  expectStatus(foreignLineTrial, 201, "G5 foreign Formula line probe Trial");
+  let foreignFormulaLineRejected = false;
+  try {
+    await maintenance`
+      insert into trial_sensory.trial_lines (
+        tenant_id, trial_id, formula_version_id, material_id, line_order,
+        scaled_mass_mg, material_snapshot_hash
+      ) values (
+        ${tenantA}, ${foreignLineTrial.body.trial.id}, ${frozen.formulaVersionId},
+        ${randomUUID()}, 1, 20000, ${"0".repeat(64)}
+      )
+    `;
+  } catch {
+    foreignFormulaLineRejected = true;
+  }
+  if (!foreignFormulaLineRejected)
+    throw new Error("G5 Trial line accepted Material outside the frozen Formula snapshot.");
+  expectStatus(
+    await api(actor, `/trials/${foreignLineTrial.body.trial.id}/cancel`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G5 foreign Formula line probe cleanup"
+  );
+
+  const cancelledTrialId = await createPreparedTrial("cancelled-evidence-lock");
+  const cancelledEvaluation = await api<{ evaluation: { id: string } }>(
+    actor,
+    `/trials/${cancelledTrialId}/evaluations`,
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        evaluationMedium: "BLOTTER",
+        sampleAgeMinutes: 15,
+        temperatureC: 23,
+        humidityPct: 55,
+        evaluationText: "Draft evidence before cancellation.",
+        diagnosticNote: null
+      }
+    }
+  );
+  expectStatus(cancelledEvaluation, 201, "G5 cancellable draft evaluation");
+  expectStatus(
+    await api(actor, `/trials/${cancelledTrialId}/cancel`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G5 prepared Trial cancellation"
+  );
+  expectError(
+    await api(
+      actor,
+      `/trials/${cancelledTrialId}/evaluations/${cancelledEvaluation.body.evaluation.id}`,
+      {
+        method: "PUT",
+        tenantId: tenantA,
+        body: {
+          evaluationMedium: "BLOTTER",
+          sampleAgeMinutes: 20,
+          temperatureC: 25,
+          humidityPct: 60,
+          evaluationText: "Mutation after cancellation must fail.",
+          diagnosticNote: null,
+          deltas: []
+        }
+      }
+    ),
+    409,
+    "TRIAL_CANCELLED",
+    "G5 cancelled Trial API evidence lock"
+  );
+  let cancelledEvidenceMutationRejected = false;
+  try {
+    await maintenance`
+      update trial_sensory.sensory_evaluations
+      set evaluation_text = 'Direct mutation after cancellation must fail.'
+      where tenant_id = ${tenantA}
+        and id = ${cancelledEvaluation.body.evaluation.id}
+    `;
+  } catch {
+    cancelledEvidenceMutationRejected = true;
+  }
+  if (!cancelledEvidenceMutationRejected)
+    throw new Error("G5 database allowed sensory evidence mutation after Trial cancellation.");
+
+  await signInInBrowser(page, fixture("B"));
+  await page.goto(new URL("/trials", stagingUrl).toString(), { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "Trial Registry" }).waitFor({ state: "visible" });
+  await captureG5(page, "trial-registry-desktop", "/trials");
+  await page.goto(new URL(`/trials/${revisionTrialId}`, stagingUrl).toString(), {
+    waitUntil: "networkidle"
+  });
+  await page.getByText("FINAL · REVISION REQUIRED").waitFor({ state: "visible" });
+  await captureG5(page, "trial-evaluation-desktop", `/trials/${revisionTrialId}`);
+  await signOutInBrowser(page);
+
+  const g5Actions = await maintenance<{ action: string }[]>`
+    select action from platform.audit_events
+    where tenant_id = ${tenantA}
+      and action in (
+        'trial.created', 'trial.prepared', 'evaluation.created', 'evaluation.updated',
+        'evaluation.finalized', 'revision.requested', 'approval.recommended'
+      )
+  `;
+  const observed = new Set(g5Actions.map((event) => event.action));
+  for (const action of [
+    "trial.created",
+    "trial.prepared",
+    "evaluation.created",
+    "evaluation.updated",
+    "evaluation.finalized",
+    "revision.requested",
+    "approval.recommended"
+  ])
+    if (!observed.has(action)) throw new Error(`G5 AuditEvent ${action} is missing.`);
+
+  console.log("G5_STAGING_TRIAL_SENSORY_ACCEPTANCE=PASS");
+  console.log("G5_STAGING_REVISION_PATH=PASS");
+  console.log("G5_STAGING_APPROVAL_PATH=PASS");
+  console.log("G5_CANCELLED_TRIAL_EVIDENCE_LOCK=PASS");
+}
+
+async function captureG5(page: Page, name: string, route: string): Promise<void> {
+  if (!g5VisualCaptureDirectory) return;
+  await mkdir(g5VisualCaptureDirectory, { recursive: true });
+  await page.screenshot({
+    path: resolve(g5VisualCaptureDirectory, `${name}.png`),
+    fullPage: true
+  });
+  await writeFile(
+    resolve(g5VisualCaptureDirectory, `${name}.json`),
+    JSON.stringify(
+      { route, viewport: page.viewportSize(), sha: expectedSourceSha, environment: "staging" },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
+}
+
 async function cleanupFixtures(): Promise<void> {
   const userIds = [...fixtures.values()].map((user) => user.id);
   try {
@@ -1077,6 +1599,14 @@ async function cleanupFixtures(): Promise<void> {
       // composition triggers for the explicitly enumerated disposable acceptance identities.
       await transaction`set local session_replication_role = replica`;
       for (const tenantId of tenantIds) {
+        await transaction`
+          delete from trial_sensory.sensory_deltas where tenant_id = ${tenantId}
+        `;
+        await transaction`
+          delete from trial_sensory.sensory_evaluations where tenant_id = ${tenantId}
+        `;
+        await transaction`delete from trial_sensory.trial_lines where tenant_id = ${tenantId}`;
+        await transaction`delete from trial_sensory.trials where tenant_id = ${tenantId}`;
         await transaction`
           delete from design_studio.formula_frozen_snapshots where tenant_id = ${tenantId}
         `;

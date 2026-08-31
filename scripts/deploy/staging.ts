@@ -103,7 +103,7 @@ const submittedUrl = deployVercel([
   "--env",
   "NOX_FOUNDATION_DIAGNOSTICS_ENABLED=true",
   "--env",
-  "NOX_FEATURE_FLAGS=module.material-intelligence,module.design-studio",
+  "NOX_FEATURE_FLAGS=module.material-intelligence,module.design-studio,module.trial-sensory",
   "--meta",
   "githubDeployment=1",
   "--meta",

@@ -1,0 +1,10 @@
+{
+  "masterPrompt": {
+    "sha256": "a5affa7196f9b1b8ea3eaf07f76ac837180a31dd4458ffe1e91ab7a1203cbc5c",
+    "version": "1.2-COMPLETE",
+    "beginMarker": "G5_MASTER_PROMPT_BEGIN",
+    "endMarker": "G5_MASTER_PROMPT_END",
+    "endOfFile": true
+  },
+  "g4AcceptedBaselineSha": "0ee63471a47653bb77d419b224219f7ee393208f"
+}
