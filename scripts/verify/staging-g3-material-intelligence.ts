@@ -512,7 +512,9 @@ async function api<T = unknown>(
 
 function expectStatus(result: ApiResult, expected: number, label: string): void {
   if (result.status !== expected)
-    throw new Error(`${label} returned ${result.status}, expected ${expected}.`);
+    throw new Error(
+      `${label} returned ${result.status}, expected ${expected}: ${JSON.stringify(result.body)}`
+    );
 }
 
 function expectError(
@@ -573,7 +575,7 @@ async function seedPlatformReferenceMaterial(): Promise<MaterialSummary> {
   await maintenance`
     insert into material_intelligence.material_odor_assignments (
       material_id, taxonomy_version, assignment_type, taxonomy_term, intensity
-    ) values (${id}, 'osmo_v1.2', 'DESCRIPTOR', 'Jasminy', 7)
+    ) values (${id}, '1.2', 'DESCRIPTOR', 'Jasminy', 7)
   `;
   await maintenance`
     insert into material_intelligence.material_formulation_guidance (
