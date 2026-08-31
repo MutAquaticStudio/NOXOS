@@ -15,7 +15,8 @@ describe("Preview Auth user rotation workflow", () => {
     expect(workflow).not.toContain("push:");
     expect(workflow).toContain("environment: Preview");
     expect(workflow).toContain("github.ref == 'refs/heads/chore/preview-auth-rotation'");
-    expect(workflow).toContain("SUPABASE_PREVIEW_SERVICE_ROLE_KEY");
+    expect(workflow).toContain("SUPABASE_PREVIEW_ACCESS_TOKEN");
+    expect(workflow).toContain("/api-keys?reveal=true");
     expect(workflow).toContain("NOX_PREVIEW_MATERIAL_USER_ID");
     expect(workflow).toContain("NOX_PREVIEW_MATERIAL_USER_EMAIL");
     expect(workflow).toContain("NOX_PREVIEW_MATERIAL_USER_PASSWORD");
