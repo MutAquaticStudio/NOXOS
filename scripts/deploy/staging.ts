@@ -40,6 +40,8 @@ for (const key of [
   "SUPABASE_PUBLISHABLE_KEY",
   "NOX_RUNTIME_DATABASE_URL",
   "NOX_WORKFLOW_DATABASE_URL",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "SUPABASE_STORAGE_BUCKET",
   "NOX_DIAGNOSTIC_PROBE_TOKEN"
 ]) {
   required(key);
@@ -93,11 +95,15 @@ const submittedUrl = deployVercel([
   "--env",
   "NOX_WORKFLOW_DATABASE_URL=" + required("NOX_WORKFLOW_DATABASE_URL"),
   "--env",
+  "SUPABASE_SERVICE_ROLE_KEY=" + required("SUPABASE_SERVICE_ROLE_KEY"),
+  "--env",
+  "SUPABASE_STORAGE_BUCKET=" + required("SUPABASE_STORAGE_BUCKET"),
+  "--env",
   "NOX_DIAGNOSTIC_PROBE_TOKEN=" + required("NOX_DIAGNOSTIC_PROBE_TOKEN"),
   "--env",
   "NOX_FOUNDATION_DIAGNOSTICS_ENABLED=true",
   "--env",
-  "NOX_FEATURE_FLAGS=module.material-intelligence",
+  "NOX_FEATURE_FLAGS=module.material-intelligence,module.design-studio",
   "--meta",
   "githubDeployment=1",
   "--meta",

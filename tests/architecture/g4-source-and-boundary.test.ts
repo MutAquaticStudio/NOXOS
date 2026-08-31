@@ -11,6 +11,13 @@ const sources = JSON.parse(readFileSync("contracts/g4-sources.json", "utf8")) as
     endMarker: string;
     endOfFile: boolean;
   };
+  closurePrompt: {
+    sha256: string;
+    version: string;
+    beginMarker: string;
+    endMarker: string;
+    endOfFile: boolean;
+  };
 };
 const ui = readFileSync("apps/nox-os/src/design-studio.tsx", "utf8");
 const migrations = readdirSync("supabase/migrations")
@@ -33,6 +40,13 @@ describe("complete Gate 4 source and architecture boundary", () => {
     expect(sources.masterPrompt.sha256).toBe(
       "a1679b5d7ea291df2b529c10577c25ce9a686f7db83e566a4587ca494a034013"
     );
+    expect(sources.closurePrompt).toMatchObject({
+      version: "2.3-COMPLETE",
+      sha256: "8c47afef52f2bec629a1d7ae382362766c491f8a34d0c84dbc204c49d50fec26",
+      beginMarker: "G4_CANONICAL_CLOSURE_PROMPT_BEGIN",
+      endMarker: "G4_CANONICAL_CLOSURE_PROMPT_END",
+      endOfFile: true
+    });
   });
 
   it("introduces no forbidden speculative G4 persistence tables", () => {

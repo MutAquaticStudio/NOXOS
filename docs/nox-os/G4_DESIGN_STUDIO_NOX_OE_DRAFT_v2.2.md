@@ -1,8 +1,12 @@
-# NØX-OS Gate 4 — Design Studio + NØX-OE (Draft)
+# NØX-OS Gate 4 — Design Studio + NØX-OE
 
-Status: `DRAFT — CANONICAL BLOCKERS REMAIN`
+Document version: `2.3-COMPLETE CANDIDATE`
 
-This document records the implementation contract for the complete Gate 4 v2.2 prompt. It does not freeze Gate 4 and does not supersede G0–G3.
+Gate status: `CANDIDATE — SHA-BOUND CLOUD ACCEPTANCE REQUIRED`
+
+This is the canonical Gate 4 architecture record. Its acceptance state is not
+mutated after deployment: the annotated Gate tag and SHA-bound GitHub Actions
+evidence artifact are authoritative for the final `FROZEN` decision.
 
 ## Source binding
 
@@ -10,45 +14,102 @@ This document records the implementation contract for the complete Gate 4 v2.2 p
 | --------------------------------------------- | --------------------- | ------------------------------------------------------------------ |
 | `nox_master_blueprint.md`                     | `2.0-FINAL CANONICAL` | `be765579803248e90b495e7d84e3d9c4f8b049fe44b5371a1fdb68123bfb3bae` |
 | `G4_MASTER_EXECUTION_PROMPT_v2.2_COMPLETE.md` | `2.2-COMPLETE`        | `a1679b5d7ea291df2b529c10577c25ce9a686f7db83e566a4587ca494a034013` |
+| Gate 4 canonical closure amendment            | `2.3-COMPLETE`        | `8c47afef52f2bec629a1d7ae382362766c491f8a34d0c84dbc204c49d50fec26` |
 
-The prompt begin marker, end marker and `END_OF_FILE=TRUE` were verified before implementation. The machine-readable source binding lives in `contracts/g4-sources.json`.
+Every begin marker, end marker and end-of-file marker was verified before
+implementation. `contracts/g4-sources.json` is the deterministic source lock.
 
-## User-approved canonical amendments
+## Canonical boundaries
 
-1. Design Studio exposes exactly two primary modes: `FORMULA_GENERATION` and `ACCORD_ARCHITECTURE`.
-2. Executable composition is stored and transported as positive integer milligram strings. The reference Formula is exactly `1,000,000 mg`.
-3. Formula Generation produces `FAITHFUL`, `EXPRESSIVE` and one contextual direction. A constrained budget without a trusted CostResolver produces `MINIMALIST`, never a fabricated budget-efficient claim.
-4. `TrialContext.targetMassMg` replaces decimal gram input at the G5 handoff contract.
+- G3 remains the sole owner of Material truth and `ChemicalEntity` internals.
+- G4 owns Project, Brief, Formula, FormulaVersion, FormulaLine and immutable
+  Formula frozen snapshots—exactly six `design_studio` tables.
+- Formula composition uses positive integer milligrams. The reference Formula
+  is exactly `1,000,000 mg`.
+- Formula Freeze and approval are separate transitions. Frozen composition,
+  intent, scientific context, validation and Material snapshots are immutable.
+- G5 receives typed Trial, revision-return and approval-evidence contracts; G4
+  creates no Trial, sensory or production data.
+- G6 owns release readiness. Gate 4 always reports `NOT_ASSESSED`.
 
-## Implemented boundaries
+## G3 amendment consumed by G4
 
-- P0–P4 intent arbitration with explicit human confirmation.
-- Canonical `osmo_v1.2` validation and unresolved-concept handling.
-- Material-free Accord Architecture planning and explicit Accord development boundary.
-- Approved/accessible Material evidence, structured dilution resolution and component checks.
-- Deterministic integer-mg Formula synthesis, largest-remainder scaling and mass formatting.
-- Versioned Formula perception scoring, preliminary known-limit states and `NOT_ASSESSED` release readiness.
-- Deterministic Formula Bundle Hash and a persistence port for the future canonical Freeze transaction.
-- Design Studio Module Registry authority, permissions and an accessible shell-native UI foundation.
-- NØX-OE Python 3.11/FastAPI sidecar, RDKit boundary, 72/12 graph schema, five-layer AttentiveFP architecture, 256D embedding contract, 138 Descriptor-only head, checkpoint/label integrity validation and isolated `scientific_artifacts` writer.
-- Server-only NØX-OE gateway with graceful core degradation.
+The namespace-safe G3 migration adds structured measurement projections,
+application-specific formulation guidance and private derived scientific
+artifacts. Formulation guidance changes use the existing governed G3 change
+request and approval transaction. `MaterialIntelligenceSnapshot` carries both
+normalized projections and guidance in its deterministic hash while tenant DTOs
+continue to exclude `ChemicalEntity` fields.
 
-## Fail-closed canonical blockers
+## Formula baseline
 
-### G4 persistence schema
+The engine is `g4-bounded-formulation-v1`. It deterministically retrieves only
+server-authorized, approved and application-guided Materials; rejects recursive
+or inaccessible composition graphs; excludes zero-fit Materials; enforces
+min/recommended/max guidance; covers required intent; and resolves an exact
+one-kilogram composition.
 
-No approved migrations or tables exist for Projects, Briefs, Formulas, Formula Versions, Formula Lines or `formula_frozen_snapshots`. The implementation therefore does not invent DDL. Formula Freeze and persisted G5 handoff remain blocked by `FORMULA_FROZEN_SNAPSHOT_SCHEMA_MISSING`.
+The three comparison directions are `FAITHFUL`, `EXPRESSIVE` and a contextual
+third direction (`LAYERED_ACCORD` or `MINIMALIST`). Without a trusted cost
+resolver, cost is explicitly not assessed. Mixture interaction is explicitly
+not modeled. The engine is a bounded design baseline requiring physical G5
+validation—not a scientifically validated performance model.
 
-No approved typed JSON Brief/document field exists for Accord Architecture. Accord plans remain non-canonical runtime results and report `ACCORD_PLAN_PERSISTENCE_UNSPECIFIED`.
+## Accord Architecture
 
-### Blueprint migration namespace conflict
+Accord plans are versioned JSON documents inside `design_briefs`, not separate
+business tables. The default plan is Material-free, groups confirmed taxonomy
+targets into bounded functional roles and phases, and supports edit, add,
+remove, save and reload. “Develop This Accord” produces
+`ACCORD_FORMULATION`; “Build Complete Formula” performs one global formulation
+over confirmed accord targets.
 
-The required migration is preserved verbatim at `supabase/migrations/20260831150000_g3_g4_enhancements.sql`. It references unqualified `material_properties` and `materials`, while the frozen repository contract owns these tables under the private `material_intelligence` schema. Silently schema-qualifying or redesigning the source migration is forbidden. The migration must not be applied to Staging until the canonical authority approves a namespace-safe resolution.
+## Experience and authority
 
-### Scientific deployment
+The existing NØX shell and design tokens remain authoritative. The module uses
+dynamic OSMO taxonomy, editable Human Intent Review, private source-asset
+provenance with manual fallback, server-side candidate retrieval, candidate
+comparison, read-only Material Peek, explicit Freeze confirmation and G5
+handoff. Actor, tenant, entitlement and permissions come only from the G2
+authenticated RequestContext. Browser-supplied identities, permissions and
+Material candidate IDs have no authority.
 
-No approved NØX-OE deployment target or valid model checkpoint/138-label manifest exists. `NOX_OE_DEPLOYMENT=NOT_CONFIGURED`, `NOX_OE_MODEL_CHECKPOINT=UNAVAILABLE`, and random-weight inference is forbidden. Curated G3 taxonomy evidence remains operational.
+Required G2 audit actions are:
 
-## Production boundary
+- `project.created`
+- `brief.updated`
+- `intent.confirmed`
+- `accord.plan.saved`
+- `formula.generated`
+- `formula.frozen`
+- `formula.approved`
 
-No Production deployment, migration or data mutation is authorized for Gate 4.
+## NØX-OE degraded boundary
+
+NØX-OE is optional. A valid checkpoint checksum alone cannot produce `READY`;
+readiness also requires a schema-bound smoke-verified inference adapter. Random
+weights and padded pseudo-feature inference are forbidden. When deployment or a
+validated model is unavailable, Design Studio remains operational as
+`CURATED_ONLY` and reports the scientific limitation without fabricating output.
+Derived artifacts live only in `scientific_runtime.scientific_artifacts`.
+
+## Acceptance and freeze
+
+Final freeze requires one immutable source state with:
+
+- repository validation and migration replay passing;
+- Python scientific contract tests passing in CI;
+- authenticated exact-SHA Preview Formula and Accord workflows passing;
+- exact-SHA Staging migrations and acceptance passing under repository policy;
+- all Gate 4 DoD 21.1–21.10 items passing;
+- Production promotion, migration and data mutation all remaining `NO`.
+
+Only the SHA-bound acceptance artifact may assert:
+
+```text
+GATE_4_STATUS=FROZEN
+GATE_4_DOD=PASS
+NEXT_GATE=G5 — TRIAL & SENSORY
+```
+
+No Production deployment, migration or data mutation is authorized by Gate 4.

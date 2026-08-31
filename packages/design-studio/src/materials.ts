@@ -23,10 +23,30 @@ export const materialCandidateEvidenceSchema = z.object({
     matchedTerms: z.array(taxonomyTargetSchema),
     conflictingTerms: z.array(taxonomyTargetSchema)
   }),
+  contributions: z.array(
+    z.object({
+      target: taxonomyTargetSchema,
+      taxonomyMatch: score,
+      intensityNormalization: score,
+      phaseCompatibility: score,
+      guidanceConfidence: score,
+      evidenceQuality: score,
+      molecularBonus: score,
+      weightedScore: score
+    })
+  ),
   evidence: z.object({
     identityConfidence: score.optional(),
     physicalDataCoverage: score.optional(),
     compositionCoveragePct: z.number().finite().min(0).max(100).optional()
+  }),
+  guidance: z.object({
+    applicationKey: z.string().trim().min(1),
+    minFormulaPct: z.number().finite().min(0).max(100),
+    recommendedFormulaPct: z.number().finite().min(0).max(100).optional(),
+    maxFormulaPct: z.number().finite().min(0).max(100),
+    impactClass: z.enum(["TRACE", "LOW", "MEDIUM", "HIGH", "VERY_HIGH"]),
+    confidence: z.enum(["CURATED", "SOURCE_DERIVED", "ESTIMATED"])
   }),
   molecular: z
     .object({
@@ -84,6 +104,16 @@ function structuralEligibility(snapshot: MaterialIntelligenceSnapshot): {
   return { dilutionValid, compositionValid };
 }
 
+function guidanceConfidence(value: "CURATED" | "SOURCE_DERIVED" | "ESTIMATED"): number {
+  return value === "CURATED" ? 1 : value === "SOURCE_DERIVED" ? 0.85 : 0.65;
+}
+
+function expectedPhase(term: string): "TOP" | "MID" | "BASE" | undefined {
+  if (/citrus|green|fresh|ozonic|aldehydic|mint/i.test(term)) return "TOP";
+  if (/woody|balsamic|musky|resin|amber|leather|powder/i.test(term)) return "BASE";
+  return undefined;
+}
+
 export function createMaterialCandidateEvidence(input: {
   snapshot: MaterialIntelligenceSnapshot;
   tenantAccessible: boolean;
@@ -105,6 +135,23 @@ export function createMaterialCandidateEvidence(input: {
     );
   }
   const desired = [...input.intent.required, ...input.intent.preferred, ...input.intent.inferred];
+  const guidance = input.snapshot.formulationGuidance.find(
+    (item) => item.applicationKey === input.intent.applicationProfile.applicationKey
+  );
+  if (!guidance) {
+    throw new DesignStudioProblem(
+      409,
+      "FORMULATION_GUIDANCE_MISSING",
+      "Material has no approved formulation guidance for the target application."
+    );
+  }
+  if (guidance.maxFormulaPct <= 0) {
+    throw new DesignStudioProblem(
+      409,
+      "MATERIAL_INELIGIBLE",
+      "Material guidance does not permit a positive formula contribution."
+    );
+  }
   const odorKeys = new Set(
     input.snapshot.odorAssignments.map((assignment) =>
       taxonomyTargetKey({
@@ -127,6 +174,43 @@ export function createMaterialCandidateEvidence(input: {
   const physicalValues = Object.values(input.snapshot.properties ?? {}).filter(
     (value) => value !== null && value !== undefined
   );
+  const physicalDataCoverage = Math.min(1, physicalValues.length / 8);
+  const confidence = guidanceConfidence(guidance.confidence);
+  const contributions = desired.map((target) => {
+    const assignment = input.snapshot.odorAssignments.find(
+      (value) =>
+        value.assignmentType === target.assignmentType && value.taxonomyTerm === target.taxonomyTerm
+    );
+    const taxonomyMatch = assignment ? 1 : 0;
+    const intensityNormalization = assignment
+      ? assignment.intensity === null
+        ? 0.5
+        : assignment.intensity / 10
+      : 0;
+    const targetPhase = expectedPhase(target.taxonomyTerm);
+    const note = input.snapshot.material.noteClassification;
+    const phaseCompatibility =
+      target.assignmentType === "TEXTURE" || target.assignmentType === "SENSATION"
+        ? 1
+        : !targetPhase || !note
+          ? 0.75
+          : targetPhase === note
+            ? 1
+            : 0.5;
+    const evidenceQuality = 0.5 + physicalDataCoverage * 0.5;
+    const molecularBonus = 0;
+    return {
+      target,
+      taxonomyMatch,
+      intensityNormalization,
+      phaseCompatibility,
+      guidanceConfidence: confidence,
+      evidenceQuality,
+      molecularBonus,
+      weightedScore:
+        taxonomyMatch * intensityNormalization * phaseCompatibility * confidence * evidenceQuality
+    };
+  });
   const evidence = materialCandidateEvidenceSchema.parse({
     materialId: input.snapshot.material.id,
     eligibility: {
@@ -137,12 +221,17 @@ export function createMaterialCandidateEvidence(input: {
       compositionValid
     },
     semantic: {
-      curatedTaxonomyFit: desired.length === 0 ? 0 : matchedTerms.length / desired.length,
+      curatedTaxonomyFit:
+        contributions.length === 0
+          ? 0
+          : contributions.reduce((sum, value) => sum + value.weightedScore, 0) /
+            contributions.length,
       matchedTerms,
       conflictingTerms
     },
+    contributions,
     evidence: {
-      physicalDataCoverage: Math.min(1, physicalValues.length / 8),
+      physicalDataCoverage,
       compositionCoveragePct:
         input.snapshot.components.length === 0
           ? undefined
@@ -154,6 +243,16 @@ export function createMaterialCandidateEvidence(input: {
               )
             )
     },
+    guidance: {
+      applicationKey: guidance.applicationKey,
+      minFormulaPct: guidance.minFormulaPct,
+      ...(guidance.recommendedFormulaPct === undefined
+        ? {}
+        : { recommendedFormulaPct: guidance.recommendedFormulaPct }),
+      maxFormulaPct: guidance.maxFormulaPct,
+      impactClass: guidance.impactClass,
+      confidence: guidance.confidence
+    },
     molecular: {
       applicability:
         input.snapshot.material.materialType === "SINGLE_MOLECULE"
@@ -162,7 +261,7 @@ export function createMaterialCandidateEvidence(input: {
             ? "KNOWN_COMPOSITION"
             : "CURATED_ONLY"
     },
-    warnings: []
+    warnings: guidance.confidence === "ESTIMATED" ? ["ESTIMATED_FORMULATION_GUIDANCE"] : []
   });
   return { ...evidence, snapshot: input.snapshot };
 }

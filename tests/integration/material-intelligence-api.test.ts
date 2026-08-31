@@ -320,6 +320,79 @@ describe("G3-A Material API", () => {
     });
   });
 
+  it("governs application formulation guidance through review and includes it in the deterministic snapshot", async () => {
+    const { request, service } = fixture();
+    const created = await createTenantMaterial(request, "Guided Bergamot");
+    await request({
+      method: "POST",
+      path: `/material-change-requests/${created.changeRequestId}/approve`,
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      body: {}
+    });
+    const invalid = await request({
+      method: "POST",
+      path: `/materials/${created.material.id}/change-requests`,
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      body: {
+        requestType: "FORMULATION_GUIDANCE",
+        guidance: [
+          {
+            applicationKey: "fine-fragrance",
+            minFormulaPct: 10,
+            recommendedFormulaPct: 9,
+            maxFormulaPct: 20,
+            impactClass: "MEDIUM",
+            confidence: "CURATED"
+          }
+        ]
+      }
+    });
+    expect(invalid.status).toBe(400);
+    const submitted = await request({
+      method: "POST",
+      path: `/materials/${created.material.id}/change-requests`,
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      body: {
+        requestType: "FORMULATION_GUIDANCE",
+        guidance: [
+          {
+            applicationKey: "fine-fragrance",
+            minFormulaPct: 1,
+            recommendedFormulaPct: 12,
+            maxFormulaPct: 20,
+            impactClass: "MEDIUM",
+            confidence: "CURATED",
+            sourceReference: "TGSC curated reference"
+          }
+        ]
+      }
+    });
+    expect(submitted.status).toBe(201);
+    const change = submitted.body as { changeRequest: { id: string } };
+    await request({
+      method: "POST",
+      path: `/material-change-requests/${change.changeRequest.id}/approve`,
+      actor: "owner-a",
+      tenantId: IDS.tenantA,
+      body: {}
+    });
+    const snapshot = await service.buildSnapshot(created.material.id, {
+      includeScientificInternal: false
+    });
+    expect(snapshot.formulationGuidance).toEqual([
+      expect.objectContaining({
+        applicationKey: "fine-fragrance",
+        minFormulaPct: 1,
+        recommendedFormulaPct: 12,
+        maxFormulaPct: 20,
+        confidence: "CURATED"
+      })
+    ]);
+  });
+
   it("uses PostgreSQL-backed text and taxonomy filters without widening tenant visibility", async () => {
     const { request } = fixture();
     const created = await createTenantMaterial(request, "Filtered Vanillin");

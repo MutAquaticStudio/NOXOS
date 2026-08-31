@@ -1,5 +1,10 @@
 import type { MaterialIntelligenceSnapshot } from "@nox-os/material-intelligence";
-import type { BudgetContext, FormulaCandidate } from "./contracts.js";
+import type {
+  BudgetContext,
+  CompositionKind,
+  FormulaCandidate,
+  NormalizedOlfactoryIntent
+} from "./contracts.js";
 import type { AccordArchitecturePlan } from "./accords.js";
 import type { ConfirmedIntent } from "./intent.js";
 import { buildAccordArchitecture } from "./accords.js";
@@ -13,12 +18,15 @@ import { DesignStudioProblem } from "./problem.js";
 
 export const designStudioPermissions = {
   read: "module.design-studio.studio.read",
+  createProject: "module.design-studio.project.create",
   manageBrief: "module.design-studio.brief.manage",
   confirmIntent: "module.design-studio.intent.confirm",
   generateFormula: "module.design-studio.formula.generate",
   planAccord: "module.design-studio.accord.plan",
   developAccord: "module.design-studio.accord.develop",
-  freezeFormula: "module.design-studio.formula.freeze"
+  freezeFormula: "module.design-studio.formula.freeze",
+  approveFormula: "module.design-studio.formula.approve",
+  readScientificArtifact: "module.design-studio.scientific-artifact.read"
 } as const;
 export type DesignStudioPermission =
   (typeof designStudioPermissions)[keyof typeof designStudioPermissions];
@@ -48,10 +56,13 @@ export type TenantMaterialSnapshot = {
 };
 
 export interface TenantMaterialSnapshotSource {
-  loadApprovedForTenant(
-    tenantId: string,
-    materialIds: readonly string[]
-  ): Promise<readonly TenantMaterialSnapshot[]>;
+  retrieveApprovedForTenant(input: {
+    tenantId: string;
+    intent: NormalizedOlfactoryIntent;
+    applicationKey: string;
+    compositionKind: CompositionKind;
+    accordPlan?: AccordArchitecturePlan;
+  }): Promise<readonly TenantMaterialSnapshot[]>;
 }
 
 /** Application boundary: tenant ID and current permissions are mandatory on every operation. */
@@ -72,14 +83,21 @@ export class DesignStudioApplication {
       projectId: string;
       sourceBriefId: string;
       confirmedIntent: ConfirmedIntent;
-      materialIds: readonly string[];
+      compositionKind?: CompositionKind;
+      accordPlan?: AccordArchitecturePlan;
       budget: BudgetContext;
       scorer: FormulaPerceptionScorer;
       costResolver?: CostResolver;
     }
   ): Promise<FormulaCandidate[]> {
     requireDesignStudioPermission(context, designStudioPermissions.generateFormula);
-    const records = await this.snapshots.loadApprovedForTenant(context.tenantId, input.materialIds);
+    const records = await this.snapshots.retrieveApprovedForTenant({
+      tenantId: context.tenantId,
+      intent: input.confirmedIntent.intent,
+      applicationKey: input.confirmedIntent.intent.applicationProfile.applicationKey,
+      compositionKind: input.compositionKind ?? "FULL_FORMULA",
+      accordPlan: input.accordPlan
+    });
     const evidence = records.map((record) =>
       createMaterialCandidateEvidence({
         snapshot: record.snapshot,
@@ -87,15 +105,13 @@ export class DesignStudioApplication {
         intent: input.confirmedIntent.intent
       })
     );
-    return generateFormulaCandidates({ ...input, evidence });
+    return generateFormulaCandidates({ ...input, evidence }).map((candidate) => ({
+      ...candidate,
+      compositionKind: input.compositionKind ?? "FULL_FORMULA"
+    }));
   }
 
-  freezeFormula(context: DesignStudioTenantContext): never {
+  freezeFormula(context: DesignStudioTenantContext): void {
     requireDesignStudioPermission(context, designStudioPermissions.freezeFormula);
-    throw new DesignStudioProblem(
-      503,
-      "FORMULA_FROZEN_SNAPSHOT_SCHEMA_MISSING",
-      "Formula Freeze persistence is blocked until the canonical schema is supplied."
-    );
   }
 }

@@ -45,7 +45,8 @@ export const changeRequestTypeSchema = z.enum([
   "OLFACTIVE",
   "DILUTION",
   "COMPONENTS",
-  "GENERAL"
+  "GENERAL",
+  "FORMULATION_GUIDANCE"
 ]);
 export type ChangeRequestType = z.infer<typeof changeRequestTypeSchema>;
 export const changeRequestStatusSchema = z.enum(["PENDING_REVIEW", "APPROVED", "REJECTED"]);
@@ -122,6 +123,24 @@ export type MaterialPropertiesRecord = {
   ifraCat4MaxPct: number | null;
   ifraAmendment: string | null;
   ifraSourceReference: string | null;
+  odorThreshold?: JsonObject | null;
+  ifraRestricted?: boolean;
+  ifraLimits?: JsonObject;
+  euAllergens?: readonly (string | number | boolean | null | JsonObject)[];
+  createdAt: Date;
+  updatedAt: Date;
+};
+export type FormulationGuidanceImpact = "TRACE" | "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";
+export type FormulationGuidanceConfidence = "CURATED" | "SOURCE_DERIVED" | "ESTIMATED";
+export type MaterialFormulationGuidanceRecord = {
+  materialId: string;
+  applicationKey: string;
+  minFormulaPct: number;
+  recommendedFormulaPct: number | null;
+  maxFormulaPct: number;
+  impactClass: FormulationGuidanceImpact;
+  confidence: FormulationGuidanceConfidence;
+  sourceReference: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -167,6 +186,7 @@ export type MaterialAggregate = {
   concentrate: MaterialConcentrateRecord | null;
   components: readonly MaterialComponentRecord[];
   chemicalEntity: ChemicalEntityRecord | null;
+  formulationGuidance?: readonly MaterialFormulationGuidanceRecord[];
 };
 export type MaterialSearchInput = {
   query?: string;
@@ -255,6 +275,10 @@ export type MaterialStore = {
   replaceComponents(
     materialId: string,
     components: readonly MaterialComponentRecord[]
+  ): Promise<void>;
+  replaceFormulationGuidance(
+    materialId: string,
+    guidance: readonly MaterialFormulationGuidanceRecord[]
   ): Promise<void>;
   insertChangeRequest(
     input: Omit<MaterialChangeRequestRecord, "id" | "createdAt" | "updatedAt">
@@ -353,6 +377,40 @@ const propertiesInputSchema = z.object({
   ifraAmendment: nullableText,
   ifraSourceReference: nullableText
 });
+const formulationGuidanceInputSchema = z
+  .object({
+    applicationKey: z
+      .string()
+      .trim()
+      .min(1)
+      .max(80)
+      .regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/),
+    minFormulaPct: z.number().min(0).max(100),
+    recommendedFormulaPct: z.number().min(0).max(100).nullable().optional(),
+    maxFormulaPct: z.number().min(0).max(100),
+    impactClass: z.enum(["TRACE", "LOW", "MEDIUM", "HIGH", "VERY_HIGH"]),
+    confidence: z.enum(["CURATED", "SOURCE_DERIVED", "ESTIMATED"]),
+    sourceReference: nullableText
+  })
+  .superRefine((value, context) => {
+    if (value.minFormulaPct > value.maxFormulaPct)
+      context.addIssue({
+        code: "custom",
+        path: ["minFormulaPct"],
+        message: "Minimum formula percentage cannot exceed maximum."
+      });
+    if (
+      value.recommendedFormulaPct !== null &&
+      value.recommendedFormulaPct !== undefined &&
+      (value.recommendedFormulaPct < value.minFormulaPct ||
+        value.recommendedFormulaPct > value.maxFormulaPct)
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["recommendedFormulaPct"],
+        message: "Recommended formula percentage must be within the guidance range."
+      });
+  });
 const materialSubmissionSchema = z.object({
   displayName: nonEmptyText,
   materialType: materialTypeSchema,
@@ -387,6 +445,10 @@ const changeProposalSchema = z.discriminatedUnion("requestType", [
   z.object({
     requestType: z.literal("COMPONENTS"),
     components: z.array(componentInputSchema).max(200)
+  }),
+  z.object({
+    requestType: z.literal("FORMULATION_GUIDANCE"),
+    guidance: z.array(formulationGuidanceInputSchema).max(80)
   }),
   z
     .object({
@@ -529,7 +591,11 @@ function termsFor(taxonomy: TaxonomyData, type: OdorAssignmentType): ReadonlySet
 }
 
 export function validateMaterialAggregate(
-  aggregate: Pick<MaterialAggregate, "material" | "odorAssignments" | "concentrate" | "components">,
+  aggregate: Pick<
+    MaterialAggregate,
+    "material" | "odorAssignments" | "concentrate" | "components"
+  > &
+    Partial<Pick<MaterialAggregate, "formulationGuidance">>,
   taxonomy: OsmoTaxonomyRegistry
 ): void {
   const { material, concentrate, components } = aggregate;
@@ -569,6 +635,16 @@ export function validateMaterialAggregate(
     material.approvalStatus !== "APPROVED"
   )
     throw invalid("Only approved tenant Materials may be shared.");
+  for (const item of aggregate.formulationGuidance ?? []) {
+    if (item.minFormulaPct > item.maxFormulaPct)
+      throw invalid("Formulation guidance minimum cannot exceed maximum.");
+    if (
+      item.recommendedFormulaPct !== null &&
+      (item.recommendedFormulaPct < item.minFormulaPct ||
+        item.recommendedFormulaPct > item.maxFormulaPct)
+    )
+      throw invalid("Formulation guidance recommendation must be within its range.");
+  }
   taxonomy.validate(aggregate.odorAssignments);
 }
 function invalid(message: string): MaterialProblem {
@@ -675,6 +751,24 @@ export type MaterialIntelligenceSnapshot = {
   >;
   identifiers: Record<IdentifierType, readonly string[]>;
   properties: MaterialTenantDetail["properties"];
+  normalizedProperties: {
+    normalizationVersion: "g3-measurements-v1";
+    vaporPressureMmhg?: number;
+    boilingPointC?: number;
+    flashPointC?: number;
+    logP?: number;
+    odorThresholdPpb?: number;
+    warnings: string[];
+  };
+  formulationGuidance: Array<{
+    applicationKey: string;
+    minFormulaPct: number;
+    recommendedFormulaPct?: number;
+    maxFormulaPct: number;
+    impactClass: FormulationGuidanceImpact;
+    confidence: FormulationGuidanceConfidence;
+    sourceReference?: string;
+  }>;
   odorAssignments: readonly Omit<MaterialOdorAssignmentRecord, "materialId">[];
   concentrate: Omit<MaterialConcentrateRecord, "materialId"> | null;
   components: readonly Omit<MaterialComponentRecord, "materialId">[];
@@ -682,6 +776,73 @@ export type MaterialIntelligenceSnapshot = {
     chemicalEntity: Omit<ChemicalEntityRecord, "id" | "canonicalName" | "createdAt" | "updatedAt">;
   };
 };
+
+function normalizedMeasurement(
+  raw: JsonObject | null | undefined,
+  kind: "PRESSURE" | "TEMPERATURE" | "LOGP" | "ODOR_THRESHOLD",
+  warning: string,
+  warnings: string[]
+): number | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  const value = typeof raw.value === "number" ? raw.value : undefined;
+  const unit = typeof raw.unit === "string" ? raw.unit.trim().toLowerCase() : "";
+  if (value === undefined || !Number.isFinite(value)) {
+    warnings.push(warning);
+    return undefined;
+  }
+  if (kind === "LOGP") return value;
+  if (kind === "PRESSURE") {
+    if (["mmhg", "torr"].includes(unit)) return value;
+    if (unit === "kpa") return value * 7.50061683;
+    if (unit === "pa") return value * 0.00750061683;
+  }
+  if (kind === "TEMPERATURE") {
+    if (["c", "°c", "celsius"].includes(unit)) return value;
+    if (["f", "°f", "fahrenheit"].includes(unit)) return ((value - 32) * 5) / 9;
+  }
+  if (kind === "ODOR_THRESHOLD") {
+    if (unit === "ppb") return value;
+    if (unit === "ppm") return value * 1000;
+  }
+  warnings.push(warning);
+  return undefined;
+}
+
+function deriveNormalizedProperties(properties: MaterialPropertiesRecord | null) {
+  const warnings: string[] = [];
+  const normalized = {
+    normalizationVersion: "g3-measurements-v1" as const,
+    vaporPressureMmhg: normalizedMeasurement(
+      properties?.vaporPressure,
+      "PRESSURE",
+      "VAPOR_PRESSURE_UNIT_UNRECOGNIZED",
+      warnings
+    ),
+    boilingPointC: normalizedMeasurement(
+      properties?.boilingPoint,
+      "TEMPERATURE",
+      "BOILING_POINT_UNIT_UNRECOGNIZED",
+      warnings
+    ),
+    flashPointC: normalizedMeasurement(
+      properties?.flashPoint,
+      "TEMPERATURE",
+      "FLASH_POINT_UNIT_UNRECOGNIZED",
+      warnings
+    ),
+    logP: normalizedMeasurement(properties?.logpOw, "LOGP", "LOGP_VALUE_UNRECOGNIZED", warnings),
+    odorThresholdPpb: normalizedMeasurement(
+      properties?.odorThreshold,
+      "ODOR_THRESHOLD",
+      "ODOR_THRESHOLD_UNIT_UNRECOGNIZED",
+      warnings
+    ),
+    warnings
+  };
+  return Object.fromEntries(
+    Object.entries(normalized).filter(([, value]) => value !== undefined)
+  ) as MaterialIntelligenceSnapshot["normalizedProperties"];
+}
 export function buildMaterialSnapshot(
   aggregate: MaterialAggregate,
   includeScientificInternal: boolean
@@ -713,6 +874,20 @@ export function buildMaterialSnapshot(
     },
     identifiers,
     properties: aggregate.properties ? stripProperties(aggregate.properties) : null,
+    normalizedProperties: deriveNormalizedProperties(aggregate.properties),
+    formulationGuidance: (aggregate.formulationGuidance ?? [])
+      .map((item) => ({
+        applicationKey: item.applicationKey,
+        minFormulaPct: item.minFormulaPct,
+        ...(item.recommendedFormulaPct === null
+          ? {}
+          : { recommendedFormulaPct: item.recommendedFormulaPct }),
+        maxFormulaPct: item.maxFormulaPct,
+        impactClass: item.impactClass,
+        confidence: item.confidence,
+        ...(item.sourceReference === null ? {} : { sourceReference: item.sourceReference })
+      }))
+      .sort(stableCompare),
     odorAssignments: aggregate.odorAssignments
       .map(({ materialId: _materialId, ...item }) => item)
       .sort(stableCompare),
@@ -1534,6 +1709,23 @@ function inputComponents(
     role: item.role
   }));
 }
+function inputFormulationGuidance(
+  materialId: string,
+  values: readonly z.infer<typeof formulationGuidanceInputSchema>[]
+): MaterialFormulationGuidanceRecord[] {
+  return values.map((item) => ({
+    materialId,
+    applicationKey: item.applicationKey,
+    minFormulaPct: item.minFormulaPct,
+    recommendedFormulaPct: item.recommendedFormulaPct ?? null,
+    maxFormulaPct: item.maxFormulaPct,
+    impactClass: item.impactClass,
+    confidence: item.confidence,
+    sourceReference: item.sourceReference ?? null,
+    createdAt: new Date(0),
+    updatedAt: new Date(0)
+  }));
+}
 function inputProperties(
   materialId: string,
   input: z.infer<typeof propertiesInputSchema>
@@ -1619,6 +1811,11 @@ function applyProposal(
     aggregate.concentrate = inputConcentrate(aggregate.material.id, proposal.concentrate);
   if (proposal.requestType === "COMPONENTS")
     aggregate.components = inputComponents(aggregate.material.id, proposal.components);
+  if (proposal.requestType === "FORMULATION_GUIDANCE")
+    aggregate.formulationGuidance = inputFormulationGuidance(
+      aggregate.material.id,
+      proposal.guidance
+    );
   if (proposal.requestType === "GENERAL") {
     if (proposal.displayName) {
       aggregate.material.displayName = proposal.displayName;
@@ -1654,6 +1851,8 @@ async function persistApprovedProposal(
     await store.replaceConcentrate(material.id, aggregate.concentrate);
   if (proposal.requestType === "COMPONENTS")
     await store.replaceComponents(material.id, aggregate.components);
+  if (proposal.requestType === "FORMULATION_GUIDANCE")
+    await store.replaceFormulationGuidance(material.id, aggregate.formulationGuidance ?? []);
   await store.touchMaterial(material.id);
 }
 export function createMaterialIntelligenceApi(

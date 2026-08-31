@@ -13,17 +13,25 @@ class ScientificRuntime:
         self._manifest_path = manifest_path
         self.checkpoint: ValidatedCheckpoint | None = None
         self.problem = "MODEL_UNAVAILABLE"
+        self._smoke_verified = False
 
     def load(self) -> None:
         try:
             self.checkpoint = validate_checkpoint(self._checkpoint_path, self._manifest_path)
-            self.problem = ""
+            # A checksum-valid checkpoint is necessary but not sufficient. The
+            # deployed graph/model adapter must complete its schema-bound smoke
+            # inference before this runtime may advertise readiness.
+            self.problem = "SCIENTIFIC_RUNTIME_UNAVAILABLE"
         except CheckpointProblem as error:
             self.checkpoint = None
             self.problem = str(error)
 
     @property
     def ready(self) -> bool:
+        return self.checkpoint is not None and self._smoke_verified
+
+    @property
+    def checkpoint_validated(self) -> bool:
         return self.checkpoint is not None
 
     def infer(self, *_args, **_kwargs):

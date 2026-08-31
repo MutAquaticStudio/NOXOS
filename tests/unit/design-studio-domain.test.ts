@@ -23,6 +23,7 @@ function snapshot(input: {
   status?: MaterialIntelligenceSnapshot["material"]["approvalStatus"];
   term?: string;
   limit?: number | null;
+  guidanceConfidence?: "CURATED" | "SOURCE_DERIVED" | "ESTIMATED";
 }): MaterialIntelligenceSnapshot {
   return {
     schemaVersion: 1,
@@ -61,6 +62,17 @@ function snapshot(input: {
             ifraAmendment: null,
             ifraSourceReference: null
           },
+    normalizedProperties: { normalizationVersion: "g3-measurements-v1", warnings: [] },
+    formulationGuidance: [
+      {
+        applicationKey: "fine-fragrance",
+        minFormulaPct: 0,
+        recommendedFormulaPct: 25,
+        maxFormulaPct: 100,
+        impactClass: "MEDIUM",
+        confidence: input.guidanceConfidence ?? "CURATED"
+      }
+    ],
     odorAssignments: input.term
       ? [
           {
@@ -229,7 +241,7 @@ describe("Material evidence and deterministic Formula synthesis", () => {
         1_000_000n
       );
       expect(candidate.validation.releaseReadiness).toBe("NOT_ASSESSED");
-      expect(candidate.scientificContext.structureStandardizerVersion).toBe("MODEL_UNAVAILABLE");
+      expect(candidate.scientificContext.capability).toBe("CURATED_ONLY");
     }
   });
 
@@ -251,7 +263,42 @@ describe("Material evidence and deterministic Formula synthesis", () => {
       scorer: new RuleBasedFormulaPerceptionScorer()
     });
     expect(candidates[2].generationStrategy).toBe("MINIMALIST");
-    expect(candidates[2].validation.warnings).toContain("COST_RESOLVER_UNAVAILABLE");
+    expect(candidates[2].validation.warnings).toContain("COST_NOT_ASSESSED");
+  });
+
+  it("derives coverage and preserves transparent contribution evidence and guidance warnings", () => {
+    const intent = confirmedIntent();
+    intent.intent.unresolvedConcepts = ["unmapped atmospheric idea"];
+    const evidence = [
+      createMaterialCandidateEvidence({
+        snapshot: snapshot({
+          id: ids[0],
+          term: "Bergamotty",
+          guidanceConfidence: "ESTIMATED"
+        }),
+        tenantAccessible: true,
+        intent: intent.intent
+      })
+    ];
+    const [candidate] = generateFormulaCandidates({
+      projectId: ids[0],
+      sourceBriefId: ids[1],
+      confirmedIntent: intent,
+      evidence,
+      budget: { mode: "OPEN" },
+      scorer: new RuleBasedFormulaPerceptionScorer()
+    });
+    expect(candidate.resolvedComposition).toMatchObject({
+      compositionCoveragePct: 50,
+      unresolvedFractionPct: 50
+    });
+    expect(candidate.validation.warnings).toContain("ESTIMATED_FORMULATION_GUIDANCE");
+    expect(candidate.lines[0].contributionEvidence[0]).toMatchObject({
+      taxonomyMatch: 1,
+      molecularBonus: 0,
+      target: { assignmentType: "DESCRIPTOR", taxonomyTerm: "Bergamotty" }
+    });
+    expect(candidate.lines[0].contributionEvidence[0].weightedScore).toBeGreaterThan(0);
   });
 });
 
@@ -282,7 +329,7 @@ describe("server-side tenant and RBAC boundary", () => {
   it("rejects unauthorized planning, generation and Freeze before side effects", async () => {
     let reads = 0;
     const application = new DesignStudioApplication({
-      async loadApprovedForTenant() {
+      async retrieveApprovedForTenant() {
         reads += 1;
         return [];
       }
@@ -300,7 +347,6 @@ describe("server-side tenant and RBAC boundary", () => {
         projectId: ids[0],
         sourceBriefId: ids[1],
         confirmedIntent: confirmedIntent(),
-        materialIds: [ids[2]],
         budget: { mode: "OPEN" },
         scorer: new RuleBasedFormulaPerceptionScorer()
       })
@@ -313,8 +359,8 @@ describe("server-side tenant and RBAC boundary", () => {
     const tenantIds: string[] = [];
     const material = snapshot({ id: ids[2], term: "Bergamotty", limit: 100 });
     const application = new DesignStudioApplication({
-      async loadApprovedForTenant(tenantId) {
-        tenantIds.push(tenantId);
+      async retrieveApprovedForTenant(input) {
+        tenantIds.push(input.tenantId);
         return [{ snapshot: material, tenantAccessible: true }];
       }
     });
@@ -328,7 +374,6 @@ describe("server-side tenant and RBAC boundary", () => {
         projectId: ids[0],
         sourceBriefId: ids[1],
         confirmedIntent: confirmedIntent(),
-        materialIds: [ids[2]],
         budget: { mode: "OPEN" },
         scorer: new RuleBasedFormulaPerceptionScorer()
       }

@@ -11,5 +11,13 @@
     "beginMarker": "G4_MASTER_PROMPT_BEGIN",
     "endMarker": "G4_MASTER_PROMPT_END",
     "endOfFile": true
+  },
+  "closurePrompt": {
+    "fileName": "G4_CANONICAL_CLOSURE_PROMPT_v2.3_COMPLETE.txt",
+    "version": "2.3-COMPLETE",
+    "sha256": "8c47afef52f2bec629a1d7ae382362766c491f8a34d0c84dbc204c49d50fec26",
+    "beginMarker": "G4_CANONICAL_CLOSURE_PROMPT_BEGIN",
+    "endMarker": "G4_CANONICAL_CLOSURE_PROMPT_END",
+    "endOfFile": true
   }
 }

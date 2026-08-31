@@ -475,30 +475,38 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     authorization: {
       permissions: [
         "module.design-studio.studio.read",
+        "module.design-studio.project.create",
         "module.design-studio.brief.manage",
         "module.design-studio.intent.confirm",
         "module.design-studio.formula.generate",
         "module.design-studio.accord.plan",
         "module.design-studio.accord.develop",
-        "module.design-studio.formula.freeze"
+        "module.design-studio.formula.freeze",
+        "module.design-studio.formula.approve",
+        "module.design-studio.scientific-artifact.read"
       ],
       defaultRoleGrants: {
         TENANT_OWNER: [
           "module.design-studio.studio.read",
+          "module.design-studio.project.create",
           "module.design-studio.brief.manage",
           "module.design-studio.intent.confirm",
           "module.design-studio.formula.generate",
           "module.design-studio.accord.plan",
           "module.design-studio.accord.develop",
-          "module.design-studio.formula.freeze"
+          "module.design-studio.formula.freeze",
+          "module.design-studio.formula.approve",
+          "module.design-studio.scientific-artifact.read"
         ],
         TENANT_ADMIN: [
           "module.design-studio.studio.read",
+          "module.design-studio.project.create",
           "module.design-studio.brief.manage",
           "module.design-studio.intent.confirm",
           "module.design-studio.formula.generate",
           "module.design-studio.accord.plan",
-          "module.design-studio.accord.develop"
+          "module.design-studio.accord.develop",
+          "module.design-studio.scientific-artifact.read"
         ],
         TENANT_MEMBER: ["module.design-studio.studio.read"]
       }

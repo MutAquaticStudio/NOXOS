@@ -47,6 +47,7 @@ export function resolveMaterialLineMass(
       normalizedMassMg,
       activeAromaticMassMg: normalizedMassMg,
       carrierSolventMassMg: "0",
+      contributionEvidence: [],
       materialSnapshot: snapshot
     };
   }
@@ -72,6 +73,7 @@ export function resolveMaterialLineMass(
     activeAromaticMassMg: active.toString(),
     carrierSolventMassMg: carrier.toString(),
     solventType: concentrate.solventCustomName ?? concentrate.solventMaterialId ?? undefined,
+    contributionEvidence: [],
     materialSnapshot: snapshot
   };
 }

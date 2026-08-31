@@ -11,6 +11,7 @@ import type {
   MaterialConcentrateRecord,
   MaterialIdentifierRecord,
   MaterialHistoryEvent,
+  MaterialFormulationGuidanceRecord,
   MaterialOdorAssignmentRecord,
   MaterialPropertiesRecord,
   MaterialReadScope,
@@ -76,6 +77,22 @@ type PropertiesRow = {
   ifra_cat4_max_pct: number | null;
   ifra_amendment: string | null;
   ifra_source_reference: string | null;
+  odor_threshold: MaterialPropertiesRecord["odorThreshold"];
+  ifra_restricted: boolean;
+  ifra_limits: MaterialPropertiesRecord["ifraLimits"];
+  eu_allergens: NonNullable<MaterialPropertiesRecord["euAllergens"]>;
+  created_at: Date;
+  updated_at: Date;
+};
+type FormulationGuidanceRow = {
+  material_id: string;
+  application_key: string;
+  min_formula_pct: number;
+  recommended_formula_pct: number | null;
+  max_formula_pct: number;
+  impact_class: MaterialFormulationGuidanceRecord["impactClass"];
+  confidence: MaterialFormulationGuidanceRecord["confidence"];
+  source_reference: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -184,6 +201,25 @@ function properties(row: PropertiesRow): MaterialPropertiesRecord {
     ifraCat4MaxPct: row.ifra_cat4_max_pct,
     ifraAmendment: row.ifra_amendment,
     ifraSourceReference: row.ifra_source_reference,
+    odorThreshold: row.odor_threshold,
+    ifraRestricted: row.ifra_restricted,
+    ifraLimits: row.ifra_limits,
+    euAllergens: row.eu_allergens,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+function formulationGuidance(row: FormulationGuidanceRow): MaterialFormulationGuidanceRecord {
+  return {
+    materialId: row.material_id,
+    applicationKey: row.application_key,
+    minFormulaPct: Number(row.min_formula_pct),
+    recommendedFormulaPct:
+      row.recommended_formula_pct === null ? null : Number(row.recommended_formula_pct),
+    maxFormulaPct: Number(row.max_formula_pct),
+    impactClass: row.impact_class,
+    confidence: row.confidence,
+    sourceReference: row.source_reference,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -246,7 +282,7 @@ const materialColumns =
 const chemicalColumns =
   "id, canonical_name, canonical_smiles, isomeric_smiles, inchikey, molecular_formula, molecular_weight, structure_status, structure_source_reference, created_at, updated_at";
 const propertiesColumns =
-  "material_id, appearance, assay, fcc_listed, specific_gravity, pounds_per_gallon, refractive_index, boiling_point, acid_value, vapor_pressure, flash_point, logp_ow, shelf_life, storage, source_reference, ifra_cat4_max_pct, ifra_amendment, ifra_source_reference, created_at, updated_at";
+  "material_id, appearance, assay, fcc_listed, specific_gravity, pounds_per_gallon, refractive_index, boiling_point, acid_value, vapor_pressure, flash_point, logp_ow, shelf_life, storage, source_reference, ifra_cat4_max_pct, ifra_amendment, ifra_source_reference, odor_threshold, ifra_restricted, ifra_limits, eu_allergens, created_at, updated_at";
 const changeColumns =
   "id, material_id, tenant_id, requested_by_user_id, request_type, proposed_patch, status, reviewed_by_user_id, reviewed_by_authority, decision_note, created_at, updated_at";
 
@@ -279,29 +315,43 @@ class PostgresMaterialStore implements MaterialStore {
   ): Promise<MaterialAggregate | undefined> {
     const root = await this.findMaterialById(materialId);
     if (!root) return undefined;
-    const [identifierRows, propertyRows, odorRows, concentrateRows, componentRows, chemicalRows] =
-      await Promise.all([
-        this.sql<
-          IdentifierRow[]
-        >`select material_id, identifier_type, value, normalized_value from material_intelligence.material_identifiers where material_id = ${materialId} order by identifier_type, normalized_value`,
-        this.sql<
-          PropertiesRow[]
-        >`select material_id, appearance, assay, fcc_listed, specific_gravity, pounds_per_gallon, refractive_index, boiling_point, acid_value, vapor_pressure, flash_point, logp_ow, shelf_life, storage, source_reference, ifra_cat4_max_pct, ifra_amendment, ifra_source_reference, created_at, updated_at from material_intelligence.material_properties where material_id = ${materialId}`,
-        this.sql<
-          OdorRow[]
-        >`select material_id, taxonomy_version, assignment_type, taxonomy_term, intensity from material_intelligence.material_odor_assignments where material_id = ${materialId} order by taxonomy_version, assignment_type, taxonomy_term`,
-        this.sql<
-          ConcentrateRow[]
-        >`select material_id, source_material_id, concentration_pct, solvent_material_id, solvent_custom_name from material_intelligence.material_concentrates where material_id = ${materialId}`,
-        this.sql<
-          ComponentRow[]
-        >`select material_id, component_material_id, percentage, role from material_intelligence.material_components where material_id = ${materialId} order by component_material_id`,
-        includeChemicalEntity && root.chemicalEntityId
-          ? this.sql<
-              ChemicalRow[]
-            >`select id, canonical_name, canonical_smiles, isomeric_smiles, inchikey, molecular_formula, molecular_weight, structure_status, structure_source_reference, created_at, updated_at from material_intelligence.chemical_entities where id = ${root.chemicalEntityId}`
-          : Promise.resolve([] as ChemicalRow[])
-      ]);
+    const [
+      identifierRows,
+      propertyRows,
+      odorRows,
+      concentrateRows,
+      componentRows,
+      chemicalRows,
+      guidanceRows
+    ] = await Promise.all([
+      this.sql<
+        IdentifierRow[]
+      >`select material_id, identifier_type, value, normalized_value from material_intelligence.material_identifiers where material_id = ${materialId} order by identifier_type, normalized_value`,
+      this.sql<
+        PropertiesRow[]
+      >`select material_id, appearance, assay, fcc_listed, specific_gravity, pounds_per_gallon, refractive_index, boiling_point, acid_value, vapor_pressure, flash_point, logp_ow, shelf_life, storage, source_reference, ifra_cat4_max_pct, ifra_amendment, ifra_source_reference, odor_threshold, ifra_restricted, ifra_limits, eu_allergens, created_at, updated_at from material_intelligence.material_properties where material_id = ${materialId}`,
+      this.sql<
+        OdorRow[]
+      >`select material_id, taxonomy_version, assignment_type, taxonomy_term, intensity from material_intelligence.material_odor_assignments where material_id = ${materialId} order by taxonomy_version, assignment_type, taxonomy_term`,
+      this.sql<
+        ConcentrateRow[]
+      >`select material_id, source_material_id, concentration_pct, solvent_material_id, solvent_custom_name from material_intelligence.material_concentrates where material_id = ${materialId}`,
+      this.sql<
+        ComponentRow[]
+      >`select material_id, component_material_id, percentage, role from material_intelligence.material_components where material_id = ${materialId} order by component_material_id`,
+      includeChemicalEntity && root.chemicalEntityId
+        ? this.sql<
+            ChemicalRow[]
+          >`select id, canonical_name, canonical_smiles, isomeric_smiles, inchikey, molecular_formula, molecular_weight, structure_status, structure_source_reference, created_at, updated_at from material_intelligence.chemical_entities where id = ${root.chemicalEntityId}`
+        : Promise.resolve([] as ChemicalRow[]),
+      this.sql<FormulationGuidanceRow[]>`
+          select material_id, application_key, min_formula_pct, recommended_formula_pct,
+                 max_formula_pct, impact_class, confidence, source_reference, created_at, updated_at
+          from material_intelligence.material_formulation_guidance
+          where material_id = ${materialId}
+          order by application_key
+        `
+    ]);
     return {
       material: root,
       identifiers: identifierRows.map(identifier),
@@ -309,7 +359,8 @@ class PostgresMaterialStore implements MaterialStore {
       odorAssignments: odorRows.map(odor),
       concentrate: concentrateRows[0] ? concentrate(concentrateRows[0]) : null,
       components: componentRows.map(component),
-      chemicalEntity: chemicalRows[0] ? chemical(chemicalRows[0]) : null
+      chemicalEntity: chemicalRows[0] ? chemical(chemicalRows[0]) : null,
+      formulationGuidance: guidanceRows.map(formulationGuidance)
     };
   }
   async findMaterialsByIdentifier(
@@ -458,6 +509,27 @@ class PostgresMaterialStore implements MaterialStore {
     for (const value of values)
       await this
         .sql`insert into material_intelligence.material_components (material_id, component_material_id, percentage, role) values (${materialId}, ${value.componentMaterialId}, ${value.percentage}, ${value.role})`;
+  }
+  async replaceFormulationGuidance(
+    materialId: string,
+    values: readonly MaterialFormulationGuidanceRecord[]
+  ): Promise<void> {
+    await this.sql`
+      delete from material_intelligence.material_formulation_guidance
+      where material_id = ${materialId}
+    `;
+    for (const value of values) {
+      await this.sql`
+        insert into material_intelligence.material_formulation_guidance (
+          material_id, application_key, min_formula_pct, recommended_formula_pct,
+          max_formula_pct, impact_class, confidence, source_reference
+        ) values (
+          ${materialId}, ${value.applicationKey}, ${value.minFormulaPct},
+          ${value.recommendedFormulaPct}, ${value.maxFormulaPct}, ${value.impactClass},
+          ${value.confidence}, ${value.sourceReference}
+        )
+      `;
+    }
   }
   async insertChangeRequest(
     input: Omit<MaterialChangeRequestRecord, "id" | "createdAt" | "updatedAt">

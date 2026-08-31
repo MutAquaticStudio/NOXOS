@@ -11,6 +11,8 @@ import {
 import type { ConfirmedIntent } from "./intent.js";
 import { resolveMaterialLineMass } from "./mass.js";
 import type { MaterialCandidate } from "./materials.js";
+import { DesignStudioProblem } from "./problem.js";
+import { taxonomyTargetKey } from "./taxonomy.js";
 
 export type FormulaPerceptionScore = {
   score: number;
@@ -82,9 +84,40 @@ function chooseContextStrategy(
 function evidenceForStrategy(
   evidence: readonly MaterialCandidate[],
   strategy: GenerationStrategy,
+  intent: NormalizedOlfactoryIntent,
   costResolver?: CostResolver
 ): MaterialCandidate[] {
-  const sorted = [...evidence].sort((left, right) => {
+  const eligible = evidence.filter((item) => item.semantic.curatedTaxonomyFit > 0);
+  const requiredKeys = new Set(intent.required.map(taxonomyTargetKey));
+  const uncovered = new Set(requiredKeys);
+  const selected: MaterialCandidate[] = [];
+  while (uncovered.size > 0) {
+    const next = [...eligible]
+      .filter((item) => !selected.includes(item))
+      .map((item) => ({
+        item,
+        covers: item.semantic.matchedTerms.filter((term) => uncovered.has(taxonomyTargetKey(term)))
+          .length
+      }))
+      .filter((item) => item.covers > 0)
+      .sort(
+        (left, right) =>
+          right.covers - left.covers ||
+          right.item.semantic.curatedTaxonomyFit - left.item.semantic.curatedTaxonomyFit ||
+          left.item.materialId.localeCompare(right.item.materialId)
+      )[0]?.item;
+    if (!next) {
+      throw new DesignStudioProblem(
+        409,
+        "REQUIRED_INTENT_UNCOVERED",
+        "No eligible Material set covers every required taxonomy target."
+      );
+    }
+    selected.push(next);
+    for (const term of next.semantic.matchedTerms) uncovered.delete(taxonomyTargetKey(term));
+  }
+
+  const sorted = [...eligible].sort((left, right) => {
     if (strategy === "BUDGET_EFFICIENT" && costResolver) {
       const leftCost = costResolver.costPerKg(left.materialId) ?? Number.POSITIVE_INFINITY;
       const rightCost = costResolver.costPerKg(right.materialId) ?? Number.POSITIVE_INFINITY;
@@ -95,55 +128,182 @@ function evidenceForStrategy(
     }
     return left.materialId.localeCompare(right.materialId);
   });
-  if (strategy === "MINIMALIST") return sorted.slice(0, Math.max(1, Math.ceil(sorted.length / 2)));
-  return sorted;
+  if (requiredKeys.size === 0 && sorted[0]) selected.push(sorted[0]);
+  if (strategy === "MINIMALIST") return selected;
+  const maximum = strategy === "EXPRESSIVE" ? 8 : 12;
+  for (const item of sorted) {
+    if (selected.length >= maximum) break;
+    if (!selected.includes(item)) selected.push(item);
+  }
+  return selected;
 }
 
-function normalizedMasses(
-  evidence: readonly MaterialCandidate[],
-  strategy: GenerationStrategy
-): Map<string, bigint> {
-  const weights = evidence.map((item, index) => {
-    const fit = Math.max(1, Math.round(item.semantic.curatedTaxonomyFit * 1000));
-    const strategyBonus =
-      strategy === "EXPRESSIVE"
-        ? index % 2 === 0
-          ? 211
-          : 31
-        : strategy === "LAYERED_ACCORD"
-          ? 101
-          : 1;
-    return { materialId: item.materialId, weight: BigInt(fit + strategyBonus) };
-  });
-  const totalWeight = weights.reduce((sum, item) => sum + item.weight, 0n);
-  const allocations = weights.map((item) => {
-    const numerator = item.weight * BigInt(REFERENCE_FORMULA_MASS_MG);
-    return {
-      ...item,
-      mass: numerator / totalWeight,
-      remainder: numerator % totalWeight
-    };
-  });
-  let residual =
-    BigInt(REFERENCE_FORMULA_MASS_MG) - allocations.reduce((sum, item) => sum + item.mass, 0n);
-  for (const item of [...allocations].sort((left, right) =>
-    left.remainder === right.remainder
-      ? left.materialId.localeCompare(right.materialId)
-      : left.remainder > right.remainder
-        ? -1
-        : 1
-  )) {
+function confidenceWeight(value: MaterialCandidate["guidance"]["confidence"]): number {
+  return value === "CURATED" ? 1 : value === "SOURCE_DERIVED" ? 0.85 : 0.65;
+}
+
+function contributionWeight(item: MaterialCandidate): bigint {
+  return BigInt(
+    Math.max(
+      1,
+      Math.round(
+        item.contributions.reduce((sum, value) => sum + value.weightedScore, 0) *
+          confidenceWeight(item.guidance.confidence) *
+          1_000_000
+      )
+    )
+  );
+}
+
+function coverage(
+  selected: readonly MaterialCandidate[],
+  intent: NormalizedOlfactoryIntent
+): { compositionCoveragePct: number; unresolvedFractionPct: number } {
+  const targets = new Map(
+    [...intent.required, ...intent.preferred, ...intent.inferred].map((target) => [
+      taxonomyTargetKey(target),
+      target
+    ])
+  );
+  const covered = new Set(
+    selected.flatMap((item) => item.semantic.matchedTerms.map(taxonomyTargetKey))
+  );
+  const denominator = targets.size + intent.unresolvedConcepts.length;
+  if (denominator === 0) return { compositionCoveragePct: 100, unresolvedFractionPct: 0 };
+  const coveredCount = [...targets.keys()].filter((key) => covered.has(key)).length;
+  const compositionCoveragePct = (coveredCount / denominator) * 100;
+  return {
+    compositionCoveragePct,
+    unresolvedFractionPct: 100 - compositionCoveragePct
+  };
+}
+
+function pctToMass(value: number): bigint {
+  return BigInt(Math.round(value * 10_000));
+}
+
+function allocateTowardCaps(
+  allocations: Array<{ item: MaterialCandidate; mass: bigint }>,
+  caps: Map<string, bigint>,
+  residual: bigint
+): bigint {
+  while (residual > 0n) {
+    const active = allocations
+      .map((allocation) => ({
+        allocation,
+        capacity: (caps.get(allocation.item.materialId) ?? allocation.mass) - allocation.mass,
+        weight: contributionWeight(allocation.item)
+      }))
+      .filter((entry) => entry.capacity > 0n)
+      .sort((left, right) =>
+        left.allocation.item.materialId.localeCompare(right.allocation.item.materialId)
+      );
+    if (active.length === 0) break;
+    const totalWeight = active.reduce((sum, entry) => sum + entry.weight, 0n);
+    let distributed = 0n;
+    const shares = active.map((entry) => {
+      const numerator = residual * entry.weight;
+      const floor = numerator / totalWeight;
+      const amount = floor > entry.capacity ? entry.capacity : floor;
+      return { ...entry, amount, remainder: numerator % totalWeight };
+    });
+    for (const share of shares) {
+      share.allocation.mass += share.amount;
+      distributed += share.amount;
+    }
+    residual -= distributed;
     if (residual === 0n) break;
-    item.mass += 1n;
-    residual -= 1n;
+    const remainderOrder = shares
+      .filter((share) => share.allocation.mass < (caps.get(share.allocation.item.materialId) ?? 0n))
+      .sort((left, right) =>
+        left.remainder === right.remainder
+          ? left.allocation.item.materialId.localeCompare(right.allocation.item.materialId)
+          : left.remainder > right.remainder
+            ? -1
+            : 1
+      );
+    if (remainderOrder.length === 0) break;
+    for (const share of remainderOrder) {
+      if (residual === 0n) break;
+      share.allocation.mass += 1n;
+      residual -= 1n;
+    }
   }
-  return new Map(allocations.map((item) => [item.materialId, item.mass]));
+  return residual;
+}
+
+function boundedMasses(
+  evidence: readonly MaterialCandidate[],
+  budget: BudgetContext,
+  costResolver?: CostResolver
+): Map<string, bigint> {
+  const totalMass = BigInt(REFERENCE_FORMULA_MASS_MG);
+  const allocations = evidence.map((item) => ({
+    item,
+    mass: [pctToMass(item.guidance.minFormulaPct), 1n].reduce((a, b) => (a > b ? a : b))
+  }));
+  if (
+    allocations.some(
+      (allocation) => allocation.mass > pctToMass(allocation.item.guidance.maxFormulaPct)
+    )
+  ) {
+    throw new DesignStudioProblem(
+      409,
+      "FORMULA_CONSTRAINTS_INFEASIBLE",
+      "A selected Material cannot satisfy its use bounds."
+    );
+  }
+  let residual = totalMass - allocations.reduce((sum, item) => sum + item.mass, 0n);
+  const recommended = new Map(
+    evidence.map((item) => [
+      item.materialId,
+      pctToMass(item.guidance.recommendedFormulaPct ?? item.guidance.minFormulaPct)
+    ])
+  );
+  const maximum = new Map(
+    evidence.map((item) => [item.materialId, pctToMass(item.guidance.maxFormulaPct)])
+  );
+  if (residual < 0n) {
+    throw new DesignStudioProblem(
+      409,
+      "FORMULA_CONSTRAINTS_INFEASIBLE",
+      "Minimum use bounds exceed one kilogram."
+    );
+  }
+  residual = allocateTowardCaps(allocations, recommended, residual);
+  residual = allocateTowardCaps(allocations, maximum, residual);
+  if (residual !== 0n) {
+    throw new DesignStudioProblem(
+      409,
+      "FORMULA_CONSTRAINTS_INFEASIBLE",
+      "Material use bounds cannot form exactly one kilogram."
+    );
+  }
+  if (costResolver && budget.maxFormulaCostPerKg !== undefined) {
+    const cost = allocations.reduce(
+      (sum, item) =>
+        sum +
+        (Number(item.mass) / Number(totalMass)) *
+          (costResolver.costPerKg(item.item.materialId) ?? Number.POSITIVE_INFINITY),
+      0
+    );
+    if (cost > budget.maxFormulaCostPerKg) {
+      throw new DesignStudioProblem(
+        409,
+        "FORMULA_CONSTRAINTS_INFEASIBLE",
+        "The trusted cost ceiling cannot be met."
+      );
+    }
+  }
+  return new Map(allocations.map((item) => [item.item.materialId, item.mass]));
 }
 
 function knownLimitState(
   lines: FormulaCandidate["lines"],
-  dosagePct: number
+  dosagePct: number,
+  applicationKey: string
 ): FormulaCandidate["validation"]["knownLimitScreening"] {
+  if (applicationKey !== "fine-fragrance") return "NOT_ASSESSED";
   let missing = false;
   for (const line of lines) {
     const limit = line.materialSnapshot.properties?.ifraCat4MaxPct;
@@ -180,12 +340,18 @@ export function generateFormulaCandidates(input: {
   const contextStrategy = chooseContextStrategy(budget, input.costResolver);
   const strategies: GenerationStrategy[] = ["FAITHFUL", "EXPRESSIVE", contextStrategy];
   return strategies.map((strategy) => {
-    const selected = evidenceForStrategy(input.evidence, strategy, input.costResolver);
-    const masses = normalizedMasses(selected, strategy);
+    const selected = evidenceForStrategy(
+      input.evidence,
+      strategy,
+      input.confirmedIntent.intent,
+      input.costResolver
+    );
+    const masses = boundedMasses(selected, budget, input.costResolver);
     const lines = selected
-      .map((item) =>
-        resolveMaterialLineMass(item.snapshot, masses.get(item.materialId)!.toString())
-      )
+      .map((item) => ({
+        ...resolveMaterialLineMass(item.snapshot, masses.get(item.materialId)!.toString()),
+        contributionEvidence: item.contributions.filter((value) => value.taxonomyMatch > 0)
+      }))
       .sort((left, right) => left.materialId.localeCompare(right.materialId));
     const active = lines.reduce((sum, line) => sum + BigInt(line.activeAromaticMassMg), 0n);
     const carrier = lines.reduce((sum, line) => sum + BigInt(line.carrierSolventMassMg), 0n);
@@ -193,9 +359,13 @@ export function generateFormulaCandidates(input: {
       intent: input.confirmedIntent.intent,
       evidence: selected
     });
-    const warnings = [...perception.warnings];
-    if (budget.mode === "CONSTRAINED" && !input.costResolver)
-      warnings.push("COST_RESOLVER_UNAVAILABLE");
+    const warnings = [
+      ...perception.warnings,
+      ...new Set(selected.flatMap((item) => item.warnings))
+    ];
+    if (budget.mode === "CONSTRAINED" && !input.costResolver) warnings.push("COST_NOT_ASSESSED");
+    warnings.push("MIXTURE_INTERACTION_NOT_MODELED");
+    const derivedCoverage = coverage(selected, input.confirmedIntent.intent);
     const candidate = {
       candidateId: deterministicUuid(
         input.projectId,
@@ -208,7 +378,7 @@ export function generateFormulaCandidates(input: {
       compositionKind: "FULL_FORMULA" as const,
       referenceFormulaMassMg: REFERENCE_FORMULA_MASS_MG,
       generationStrategy: strategy,
-      engineVersion: "g4-deterministic-v1",
+      engineVersion: "g4-bounded-formulation-v1",
       taxonomySource: "OSMO" as const,
       taxonomyVersion: "osmo_v1.2" as const,
       intentSnapshot: input.confirmedIntent.intent,
@@ -216,22 +386,22 @@ export function generateFormulaCandidates(input: {
       resolvedComposition: {
         totalActiveAromaticPct: Number((active * 10000n) / 1_000_000n) / 100,
         totalCarrierSolventPct: Number((carrier * 10000n) / 1_000_000n) / 100,
-        compositionCoveragePct: 100,
-        unresolvedFractionPct: 0
+        ...derivedCoverage
       },
       validation: {
         structuralValidation: "PASS" as const,
         materialEligibility: "PASS" as const,
         knownLimitScreening: knownLimitState(
           lines,
-          input.confirmedIntent.intent.applicationProfile.targetDosagePct
+          input.confirmedIntent.intent.applicationProfile.targetDosagePct,
+          input.confirmedIntent.intent.applicationProfile.applicationKey
         ),
         unresolvedConstraints: [...input.confirmedIntent.intent.unresolvedConcepts],
         warnings,
         releaseReadiness: "NOT_ASSESSED" as const
       },
       scientificContext: {
-        structureStandardizerVersion: "MODEL_UNAVAILABLE",
+        capability: "CURATED_ONLY" as const,
         rankingPolicyVersion: "curated-evidence-v1",
         formulaScorerVersion: input.scorer.version
       }

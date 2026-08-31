@@ -36,6 +36,7 @@ export type AccordSuggestion = z.infer<typeof accordSuggestionSchema>;
 
 export const accordArchitecturePlanSchema = z.object({
   schemaVersion: z.literal(1),
+  plannerVersion: z.literal("accord-architecture-v1"),
   projectId: z.string().uuid(),
   sourceBriefId: z.string().uuid(),
   taxonomySource: z.literal("OSMO"),
@@ -57,9 +58,11 @@ function slug(value: string): string {
 }
 
 function phaseFor(target: AccordTaxonomyTarget): AccordSuggestion["phase"] {
-  return target.assignmentType === "TEXTURE" || target.assignmentType === "SENSATION"
-    ? "CROSS_PHASE"
-    : "MID";
+  if (target.assignmentType === "TEXTURE" || target.assignmentType === "SENSATION")
+    return "CROSS_PHASE";
+  if (/citrus|green|fresh|ozonic|aldehydic|mint/i.test(target.taxonomyTerm)) return "TOP";
+  if (/woody|balsamic|musky|resin|amber|leather|powder/i.test(target.taxonomyTerm)) return "BASE";
+  return "MID";
 }
 
 function roleFor(target: AccordTaxonomyTarget, index: number): AccordSuggestion["functionalRole"] {
@@ -85,29 +88,83 @@ export function buildAccordArchitecture(input: {
       "At least one confirmed canonical taxonomy target is required."
     );
   }
-  const accords = targets.map(({ target, required }, index): AccordSuggestion => ({
-    accordKey: `${slug(target.taxonomyTerm)}-${index + 1}`,
-    label: `${target.taxonomyTerm} Accord`,
-    phase: phaseFor(target),
-    functionalRole: roleFor(target, index),
-    purpose: required
-      ? `Carry the required ${target.taxonomyTerm} intent.`
-      : `Support the confirmed ${target.taxonomyTerm} direction.`,
-    taxonomyTargets: [target],
-    required,
-    supportsAccordKeys: index > 0 ? [`${slug(targets[0].target.taxonomyTerm)}-1`] : [],
-    contrastsAccordKeys: [],
-    excludedConflicts: input.confirmedIntent.intent.excluded.filter(
-      (excluded) => excluded.assignmentType === target.assignmentType
-    ),
-    provenance: input.confirmedIntent.provenance.filter(
-      (signal) =>
-        signal.suggestedAssignmentType === target.assignmentType &&
-        signal.suggestedTaxonomyTerm === target.taxonomyTerm
-    )
-  }));
+  const semantic = targets.filter(
+    ({ target }) => target.assignmentType !== "TEXTURE" && target.assignmentType !== "SENSATION"
+  );
+  const atmospheric = targets.filter(
+    ({ target }) => target.assignmentType === "TEXTURE" || target.assignmentType === "SENSATION"
+  );
+  const clusters: Array<typeof targets> = [];
+  const requiredSemantic = semantic.filter((item) => item.required);
+  const supportingSemantic = semantic.filter((item) => !item.required);
+  if (requiredSemantic.length > 0) clusters.push(requiredSemantic);
+  if (supportingSemantic.length > 0) clusters.push(supportingSemantic);
+  if (atmospheric.length > 0) clusters.push(atmospheric);
+  if (clusters.length === 0) clusters.push(targets);
+  while (clusters.length < 3 && clusters.some((cluster) => cluster.length > 1)) {
+    const index = clusters.findIndex((cluster) => cluster.length > 1);
+    const cluster = clusters[index];
+    clusters.splice(
+      index,
+      1,
+      cluster.slice(0, Math.ceil(cluster.length / 2)),
+      cluster.slice(Math.ceil(cluster.length / 2))
+    );
+  }
+  const boundedClusters = clusters.slice(0, 7);
+  const accords = boundedClusters.map((cluster, index): AccordSuggestion => {
+    const taxonomyTargets = cluster.map((item) => item.target);
+    const required = cluster.some((item) => item.required);
+    const role = roleFor(taxonomyTargets[0], index);
+    const labelStem = taxonomyTargets
+      .slice(0, 2)
+      .map((target) => target.taxonomyTerm)
+      .join(" · ");
+    const key = `${slug(labelStem)}-${index + 1}`;
+    const coreKey = index === 0 ? key : undefined;
+    return {
+      accordKey: key,
+      label: `${labelStem} ${role === "BRIDGE" ? "Bridge" : role === "CORE" ? "Core" : "Accord"}`,
+      phase: taxonomyTargets.some(
+        (target) => target.assignmentType === "TEXTURE" || target.assignmentType === "SENSATION"
+      )
+        ? "CROSS_PHASE"
+        : phaseFor(taxonomyTargets[0]),
+      functionalRole: role,
+      purpose: required
+        ? `Carry the required ${taxonomyTargets.map((target) => target.taxonomyTerm).join(", ")} intent.`
+        : `Support the confirmed ${taxonomyTargets.map((target) => target.taxonomyTerm).join(", ")} direction.`,
+      taxonomyTargets,
+      required,
+      supportsAccordKeys:
+        index > 0
+          ? [
+              boundedClusters[0]
+                ? `${slug(
+                    boundedClusters[0]
+                      .slice(0, 2)
+                      .map((item) => item.target.taxonomyTerm)
+                      .join(" · ")
+                  )}-1`
+                : coreKey!
+            ]
+          : [],
+      contrastsAccordKeys: [],
+      excludedConflicts: input.confirmedIntent.intent.excluded.filter((excluded) =>
+        taxonomyTargets.some((target) => excluded.assignmentType === target.assignmentType)
+      ),
+      provenance: input.confirmedIntent.provenance.filter((signal) =>
+        taxonomyTargets.some(
+          (target) =>
+            signal.suggestedAssignmentType === target.assignmentType &&
+            signal.suggestedTaxonomyTerm === target.taxonomyTerm
+        )
+      )
+    };
+  });
   const plan = accordArchitecturePlanSchema.parse({
     schemaVersion: 1,
+    plannerVersion: "accord-architecture-v1",
     projectId: input.projectId,
     sourceBriefId: input.sourceBriefId,
     taxonomySource: "OSMO",
@@ -126,6 +183,7 @@ export function validateAccordArchitecture(plan: AccordArchitecturePlan): string
   if (!parsed.success) return parsed.error.issues.map((issue) => issue.message);
   const keys = new Set(plan.accords.map((accord) => accord.accordKey));
   const issues: string[] = [];
+  if (keys.size !== plan.accords.length) issues.push("DUPLICATE_ACCORD_KEY");
   for (const accord of plan.accords) {
     for (const target of [...accord.taxonomyTargets, ...accord.excludedConflicts]) {
       if (!isCanonicalTaxonomyTarget(target))

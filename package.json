@@ -44,6 +44,7 @@
     "verify:staging:g2-platform-core": "pnpm tsx scripts/verify/staging-g2-platform-core.ts",
     "verify:staging:g3-material-intelligence": "pnpm tsx scripts/verify/staging-g3-material-intelligence.ts",
     "verify:preview:g3-material-intelligence": "pnpm tsx scripts/verify/preview-g3-material-intelligence.ts",
+    "verify:preview:g4-design-studio": "pnpm tsx scripts/verify/preview-g4-design-studio.ts",
     "secrets:scan": "node scripts/security/scan.mjs",
     "build:packages": "node scripts/build/runtime-packages.mjs",
     "verify:runtime-packages": "node apps/nox-os/scripts/verify-runtime-packages.mjs",

@@ -24,6 +24,7 @@ const raw = process.env;
 const stagingUrl = required("NOX_STAGING_URL");
 const supabaseUrl = required("SUPABASE_URL");
 const serviceRoleKey = required("SUPABASE_SERVICE_ROLE_KEY");
+const storageBucket = required("SUPABASE_STORAGE_BUCKET");
 const stagingProjectRef = required("SUPABASE_STAGING_PROJECT_REF");
 const productionProjectRef = required("SUPABASE_PRODUCTION_PROJECT_REF");
 const databasePassword = required("SUPABASE_DB_PASSWORD");
@@ -106,6 +107,15 @@ try {
       "Material Intelligence entitlement"
     );
   }
+  expectStatus(
+    await api(
+      platformOwnerToken,
+      `/platform/tenants/${tenantA}/entitlements/module.design-studio`,
+      { method: "PUT", body: { enabled: true } }
+    ),
+    200,
+    "Design Studio entitlement"
+  );
   const materialContext = await api<{
     moduleAvailability: Array<{ moduleId: string; state: string }>;
   }>(token("A"), "/context", { tenantId: tenantA });
@@ -405,6 +415,7 @@ try {
     } finally {
       await mobileContext.close();
     }
+    await runG4Acceptance(page, tenantA, tenantB);
   } finally {
     await browser.close();
   }
@@ -559,6 +570,20 @@ async function seedPlatformReferenceMaterial(): Promise<MaterialSummary> {
       'NATURAL', 'APPROVED', 'MID', null, ${fixture("D").id}, ${fixture("D").id}, 'PLATFORM'
     )
   `;
+  await maintenance`
+    insert into material_intelligence.material_odor_assignments (
+      material_id, taxonomy_version, assignment_type, taxonomy_term, intensity
+    ) values (${id}, 'osmo_v1.2', 'DESCRIPTOR', 'Jasminy', 7)
+  `;
+  await maintenance`
+    insert into material_intelligence.material_formulation_guidance (
+      material_id, application_key, min_formula_pct, recommended_formula_pct,
+      max_formula_pct, impact_class, confidence, source_reference
+    ) values (
+      ${id}, 'fine-fragrance', 0.01, 100, 100, 'MEDIUM', 'CURATED',
+      'nox-g4-staging-acceptance'
+    )
+  `;
   return { id, displayName, approvalStatus: "APPROVED" };
 }
 
@@ -655,10 +680,409 @@ async function capture(page: Page, name: string, route: string): Promise<void> {
   );
 }
 
+async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Promise<void> {
+  type Candidate = {
+    generationStrategy: string;
+    compositionKind: string;
+    referenceFormulaMassMg: string;
+    lines: Array<{
+      normalizedMassMg: string;
+      materialSnapshot: Record<string, unknown>;
+    }>;
+    validation: { warnings: string[]; releaseReadiness: string };
+    scientificContext: { capability: string };
+  };
+  type Frozen = {
+    formulaVersionId: string;
+    bundleHash: string;
+    approvalState: string;
+    candidate: Candidate;
+  };
+
+  const actor = token("B");
+  const asset = await api<{ asset: { assetId: string; sourceName: string; modality: string } }>(
+    actor,
+    "/design-studio/assets",
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        sourceName: "g4-staging-reference.txt",
+        modality: "REFERENCE",
+        mimeType: "text/plain",
+        contentsBase64: Buffer.from("G4 private acceptance reference").toString("base64")
+      }
+    }
+  );
+  expectStatus(asset, 201, "G4 private source attachment");
+  const storagePath = `tenant/${tenantA}/${asset.body.asset.assetId}`;
+
+  const createBrief = async (workflowMode: "FORMULA_GENERATION" | "ACCORD_ARCHITECTURE") => {
+    const project = await api<{ project: { id: string; tenantId: string } }>(
+      actor,
+      "/design-studio/projects",
+      {
+        method: "POST",
+        tenantId: tenantA,
+        body: { name: `G4 ${workflowMode} ${suffix.slice(0, 8)}`, description: null }
+      }
+    );
+    expectStatus(project, 201, "G4 Project creation");
+    if (project.body.project.tenantId !== tenantA)
+      throw new Error("G4 Project did not use trusted tenant context.");
+    if (workflowMode === "FORMULA_GENERATION") {
+      let crossTenantForeignKeyRejected = false;
+      try {
+        await maintenance`
+          insert into design_studio.design_briefs (
+            tenant_id, project_id, workflow_mode, raw_brief, created_by_user_id
+          ) values (
+            ${tenantB}, ${project.body.project.id}, 'FORMULA_GENERATION',
+            'Cross-tenant composite FK probe', ${fixture("C").id}
+          )
+        `;
+      } catch {
+        crossTenantForeignKeyRejected = true;
+      }
+      if (!crossTenantForeignKeyRejected)
+        throw new Error("Design Studio composite tenant foreign key accepted cross-tenant data.");
+    }
+    const brief = await api<{
+      brief: { id: string };
+      intentDraft: { intent: unknown };
+    }>(actor, `/design-studio/projects/${project.body.project.id}/briefs`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        workflowMode,
+        rawBrief: "A transparent jasminy fine-fragrance direction.",
+        applicationKey: "fine-fragrance",
+        targetDosagePct: 20,
+        explicitTags: [
+          { assignmentType: "DESCRIPTOR", taxonomyTerm: "Jasminy", targetStrength: 1 }
+        ],
+        explicitExclusions: [],
+        signals: [],
+        assetReferences: [asset.body.asset]
+      }
+    });
+    expectStatus(brief, 201, "G4 Brief creation");
+    expectStatus(
+      await api(actor, `/design-studio/briefs/${brief.body.brief.id}/confirm`, {
+        method: "POST",
+        tenantId: tenantA,
+        body: { intent: brief.body.intentDraft.intent }
+      }),
+      200,
+      "G4 human Intent confirmation"
+    );
+    return brief.body.brief.id;
+  };
+
+  try {
+    const formulaBriefId = await createBrief("FORMULA_GENERATION");
+    const generated = await api<{ candidates: Candidate[] }>(
+      actor,
+      `/design-studio/briefs/${formulaBriefId}/generate`,
+      { method: "POST", tenantId: tenantA, body: { budget: { mode: "STANDARD" } } }
+    );
+    expectStatus(generated, 200, "G4 deterministic Formula generation");
+    if (generated.body.candidates.length !== 3)
+      throw new Error("G4 Formula acceptance requires exactly three strategy candidates.");
+    for (const candidate of generated.body.candidates) {
+      const total = candidate.lines.reduce((sum, line) => sum + BigInt(line.normalizedMassMg), 0n);
+      if (
+        candidate.referenceFormulaMassMg !== "1000000" ||
+        total !== 1_000_000n ||
+        candidate.validation.releaseReadiness !== "NOT_ASSESSED" ||
+        candidate.scientificContext.capability !== "CURATED_ONLY" ||
+        !candidate.validation.warnings.includes("MIXTURE_INTERACTION_NOT_MODELED")
+      )
+        throw new Error("G4 candidate mass, warning, readiness, or fallback evidence is invalid.");
+    }
+    expectError(
+      await api(token("A"), `/design-studio/briefs/${formulaBriefId}/generate`, {
+        method: "POST",
+        tenantId: tenantA,
+        body: { budget: { mode: "STANDARD" } }
+      }),
+      403,
+      "PERMISSION_DENIED",
+      "Unauthorized G4 generation"
+    );
+    const chosen = generated.body.candidates[0];
+    expectError(
+      await api(token("A"), `/design-studio/briefs/${formulaBriefId}/freeze`, {
+        method: "POST",
+        tenantId: tenantA,
+        body: {
+          budget: { mode: "STANDARD" },
+          strategy: chosen.generationStrategy,
+          formulaName: "Unauthorized"
+        }
+      }),
+      403,
+      "PERMISSION_DENIED",
+      "Unauthorized G4 Formula Freeze"
+    );
+    const frozenResponse = await api<{ formulaVersion: Frozen }>(
+      actor,
+      `/design-studio/briefs/${formulaBriefId}/freeze`,
+      {
+        method: "POST",
+        tenantId: tenantA,
+        body: {
+          budget: { mode: "STANDARD" },
+          strategy: chosen.generationStrategy,
+          formulaName: `G4 Staging Formula ${suffix.slice(0, 8)}`
+        }
+      }
+    );
+    expectStatus(frozenResponse, 201, "G4 Formula Freeze");
+    const frozen = frozenResponse.body.formulaVersion;
+    if (!/^[a-f0-9]{64}$/i.test(frozen.bundleHash))
+      throw new Error("G4 frozen Formula did not return a deterministic bundle hash.");
+    if (/scientificInternal|canonical_smiles|chemical_entity_id/i.test(JSON.stringify(frozen)))
+      throw new Error("G4 tenant Formula DTO leaked internal scientific Material data.");
+    expectError(
+      await api(token("C"), `/design-studio/formula-versions/${frozen.formulaVersionId}`, {
+        tenantId: tenantB
+      }),
+      404,
+      "FORMULA_VERSION_NOT_FOUND",
+      "Cross-tenant frozen Formula read"
+    );
+    expectError(
+      await api(token("C"), `/design-studio/briefs/${formulaBriefId}/generate`, {
+        method: "POST",
+        tenantId: tenantB,
+        body: { budget: { mode: "STANDARD" } }
+      }),
+      404,
+      "BRIEF_NOT_FOUND",
+      "Cross-tenant Formula generation"
+    );
+    const reloaded = await api<{ formulaVersion: Frozen }>(
+      actor,
+      `/design-studio/formula-versions/${frozen.formulaVersionId}`,
+      { tenantId: tenantA }
+    );
+    expectStatus(reloaded, 200, "G4 frozen Formula reload");
+    if (
+      reloaded.body.formulaVersion.bundleHash !== frozen.bundleHash ||
+      JSON.stringify(reloaded.body.formulaVersion.candidate) !== JSON.stringify(frozen.candidate)
+    )
+      throw new Error("FROZEN FormulaVersion did not reload unchanged.");
+    let immutabilityRejected = false;
+    try {
+      await maintenance`
+        update design_studio.formula_lines
+        set normalized_mass_mg = normalized_mass_mg + 1
+        where formula_version_id = ${frozen.formulaVersionId}
+      `;
+    } catch {
+      immutabilityRejected = true;
+    }
+    if (!immutabilityRejected) throw new Error("Database did not reject FROZEN line mutation.");
+    let snapshotMutationRejected = false;
+    try {
+      await maintenance`
+        update design_studio.formula_frozen_snapshots
+        set captured_at = captured_at + interval '1 second'
+        where formula_version_id = ${frozen.formulaVersionId}
+      `;
+    } catch {
+      snapshotMutationRejected = true;
+    }
+    if (!snapshotMutationRejected)
+      throw new Error("Database did not reject FROZEN snapshot mutation.");
+    let unfreezeRejected = false;
+    try {
+      await maintenance`
+        update design_studio.formula_versions
+        set status = 'DRAFT'
+        where id = ${frozen.formulaVersionId}
+      `;
+    } catch {
+      unfreezeRejected = true;
+    }
+    if (!unfreezeRejected) throw new Error("Database allowed a FROZEN version to return to DRAFT.");
+    expectError(
+      await api(token("A"), `/design-studio/formula-versions/${frozen.formulaVersionId}/approve`, {
+        method: "POST",
+        tenantId: tenantA
+      }),
+      403,
+      "PERMISSION_DENIED",
+      "Unauthorized G4 Formula approval"
+    );
+    const approved = await api<{ formulaVersion: Frozen }>(
+      actor,
+      `/design-studio/formula-versions/${frozen.formulaVersionId}/approve`,
+      { method: "POST", tenantId: tenantA }
+    );
+    expectStatus(approved, 200, "G4 Formula approval evidence");
+    if (
+      approved.body.formulaVersion.approvalState !== "APPROVED" ||
+      approved.body.formulaVersion.bundleHash !== frozen.bundleHash
+    )
+      throw new Error("Formula approval modified the frozen composition identity.");
+    expectStatus(
+      await api(actor, `/design-studio/formula-versions/${frozen.formulaVersionId}/trial-context`, {
+        method: "POST",
+        tenantId: tenantA
+      }),
+      200,
+      "G5 TrialContext handoff"
+    );
+
+    const accordBriefId = await createBrief("ACCORD_ARCHITECTURE");
+    const planned = await api<{
+      plan: { accords: Array<{ accordKey: string }>; [key: string]: unknown };
+    }>(actor, `/design-studio/briefs/${accordBriefId}/accord-plan`, {
+      method: "POST",
+      tenantId: tenantA
+    });
+    expectStatus(planned, 200, "G4 Accord planning");
+    if (!planned.body.plan.accords[0]) throw new Error("Accord plan was empty.");
+    const saved = await api<{ plan: unknown }>(
+      actor,
+      `/design-studio/briefs/${accordBriefId}/accord-plan`,
+      { method: "PUT", tenantId: tenantA, body: { plan: planned.body.plan } }
+    );
+    expectStatus(saved, 200, "G4 Accord plan save");
+    const briefReload = await api<{ brief: { accordArchitecturePlan?: unknown } }>(
+      actor,
+      `/design-studio/briefs/${accordBriefId}`,
+      { tenantId: tenantA }
+    );
+    expectStatus(briefReload, 200, "G4 Accord plan reload");
+    if (
+      JSON.stringify(briefReload.body.brief.accordArchitecturePlan) !==
+      JSON.stringify(planned.body.plan)
+    )
+      throw new Error("Accord plan did not reload unchanged.");
+    const developed = await api<{ candidates: Candidate[] }>(
+      actor,
+      `/design-studio/briefs/${accordBriefId}/generate`,
+      {
+        method: "POST",
+        tenantId: tenantA,
+        body: {
+          budget: { mode: "STANDARD" },
+          accordKey: planned.body.plan.accords[0].accordKey
+        }
+      }
+    );
+    expectStatus(developed, 200, "Develop This Accord");
+    if (
+      developed.body.candidates.some(
+        (candidate) => candidate.compositionKind !== "ACCORD_FORMULATION"
+      )
+    )
+      throw new Error("Develop This Accord did not return ACCORD_FORMULATION candidates.");
+    const accordCandidate = developed.body.candidates[0];
+    const frozenAccord = await api<{ formulaVersion: Frozen }>(
+      actor,
+      `/design-studio/briefs/${accordBriefId}/freeze`,
+      {
+        method: "POST",
+        tenantId: tenantA,
+        body: {
+          budget: { mode: "STANDARD" },
+          accordKey: planned.body.plan.accords[0].accordKey,
+          strategy: accordCandidate.generationStrategy,
+          formulaName: `G4 Staging Accord ${suffix.slice(0, 8)}`
+        }
+      }
+    );
+    expectStatus(frozenAccord, 201, "G4 Accord Formulation Freeze");
+    if (frozenAccord.body.formulaVersion.candidate.compositionKind !== "ACCORD_FORMULATION")
+      throw new Error("Frozen Accord did not preserve ACCORD_FORMULATION identity.");
+    expectStatus(
+      await api(
+        actor,
+        `/design-studio/formula-versions/${frozenAccord.body.formulaVersion.formulaVersionId}/trial-context`,
+        { method: "POST", tenantId: tenantA }
+      ),
+      200,
+      "G4 Accord G5 TrialContext handoff"
+    );
+    expectStatus(
+      await api(actor, `/design-studio/briefs/${accordBriefId}/generate`, {
+        method: "POST",
+        tenantId: tenantA,
+        body: { budget: { mode: "STANDARD" }, buildCompleteFromAccords: true }
+      }),
+      200,
+      "Build Complete Formula from Accord Architecture"
+    );
+
+    await signInInBrowser(page, fixture("B"));
+    await page.goto(new URL("/design-studio", stagingUrl).toString(), {
+      waitUntil: "networkidle"
+    });
+    await page
+      .getByRole("heading", { name: "What do you want to create?" })
+      .waitFor({ state: "visible" });
+    await capture(page, "design-studio-entry-desktop", "/design-studio");
+    await page.getByRole("button", { name: /Complete Formula/i }).click();
+    await page.getByRole("heading", { name: "Brief Composer" }).waitFor({ state: "visible" });
+    await capture(page, "design-studio-formula-desktop", "/design-studio");
+    await signOutInBrowser(page);
+
+    const actions = await maintenance<{ action: string }[]>`
+      select action from platform.audit_events
+      where tenant_id = ${tenantA}
+        and action in (
+          'project.created', 'brief.updated', 'intent.confirmed', 'accord.plan.saved',
+          'formula.generated', 'formula.frozen', 'formula.approved'
+        )
+    `;
+    const observed = new Set(actions.map((event) => event.action));
+    for (const action of [
+      "project.created",
+      "brief.updated",
+      "intent.confirmed",
+      "accord.plan.saved",
+      "formula.generated",
+      "formula.frozen",
+      "formula.approved"
+    ])
+      if (!observed.has(action)) throw new Error(`G4 AuditEvent ${action} is missing.`);
+
+    console.log("G4_STAGING_DESIGN_STUDIO_ACCEPTANCE=PASS");
+    console.log("G4_STAGING_FORMULA_WORKFLOW=PASS");
+    console.log("G4_STAGING_ACCORD_WORKFLOW=PASS");
+  } finally {
+    const response = await fetch(
+      new URL(`/storage/v1/object/${storageBucket}/${storagePath}`, supabaseUrl),
+      { method: "DELETE", headers: adminHeaders() }
+    );
+    if (!response.ok && response.status !== 404)
+      throw new Error("G4 private source attachment cleanup failed.");
+  }
+}
+
 async function cleanupFixtures(): Promise<void> {
   const userIds = [...fixtures.values()].map((user) => user.id);
   try {
     await maintenance.begin(async (transaction) => {
+      // Fixture cleanup is a Staging-admin concern. Replica mode bypasses only the immutable
+      // composition triggers for the explicitly enumerated disposable acceptance identities.
+      await transaction`set local session_replication_role = replica`;
+      for (const tenantId of tenantIds) {
+        await transaction`
+          delete from design_studio.formula_frozen_snapshots where tenant_id = ${tenantId}
+        `;
+        await transaction`delete from design_studio.formula_lines where tenant_id = ${tenantId}`;
+        await transaction`
+          delete from design_studio.formula_versions where tenant_id = ${tenantId}
+        `;
+        await transaction`delete from design_studio.formulas where tenant_id = ${tenantId}`;
+        await transaction`delete from design_studio.design_briefs where tenant_id = ${tenantId}`;
+        await transaction`delete from design_studio.projects where tenant_id = ${tenantId}`;
+      }
       for (const materialId of materialIds) {
         await transaction`delete from material_intelligence.material_change_requests where material_id = ${materialId}`;
         await transaction`delete from material_intelligence.material_odor_assignments where material_id = ${materialId}`;

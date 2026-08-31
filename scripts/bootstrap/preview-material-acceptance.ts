@@ -77,6 +77,11 @@ try {
       key: "module.material-intelligence",
       enabled: true
     });
+    await store.upsertTenantEntitlement({
+      tenantId: tenant.id,
+      key: "module.design-studio",
+      enabled: true
+    });
     return tenant;
   });
 
@@ -84,8 +89,9 @@ try {
     { query: materialName, limit: 20, offset: 0, view: "MY_TENANT" },
     { tenantId: tenant.id, platformAuthority: false }
   );
-  if (!existing.some((item) => item.material.displayName === materialName)) {
-    await materials.transaction(async (store) => {
+  await materials.transaction(async (store) => {
+    let aggregate = existing.find((item) => item.material.displayName === materialName);
+    if (!aggregate) {
       const material = await store.insertMaterial({
         tenantId: tenant.id,
         scope: "TENANT",
@@ -100,6 +106,7 @@ try {
         approvedByUserId: userId,
         approvedByAuthority: "TENANT"
       });
+      aggregate = await store.findMaterialAggregate(material.id);
       await store.insertAuditEvent({
         tenantId: tenant.id,
         actorUserId: userId,
@@ -110,10 +117,36 @@ try {
         correlationId: requestId,
         metadata: { environment: "preview", fixture: true }
       });
-    });
-  }
+    }
+    if (!aggregate) throw new Error("Preview Material fixture could not be reconciled.");
+    const now = new Date();
+    await store.replaceOdorAssignments(aggregate.material.id, [
+      {
+        materialId: aggregate.material.id,
+        taxonomyVersion: "osmo_v1.2",
+        assignmentType: "DESCRIPTOR",
+        taxonomyTerm: "Jasminy",
+        intensity: 7
+      }
+    ]);
+    await store.replaceFormulationGuidance(aggregate.material.id, [
+      {
+        materialId: aggregate.material.id,
+        applicationKey: "fine-fragrance",
+        minFormulaPct: 0.01,
+        recommendedFormulaPct: 100,
+        maxFormulaPct: 100,
+        impactClass: "MEDIUM",
+        confidence: "CURATED",
+        sourceReference: "nox-preview-g4-acceptance",
+        createdAt: now,
+        updatedAt: now
+      }
+    ]);
+    await store.touchMaterial(aggregate.material.id);
+  });
 
-  console.log("PREVIEW_MATERIAL_ACCEPTANCE_FIXTURE=READY");
+  console.log("PREVIEW_G3_G4_ACCEPTANCE_FIXTURE=READY");
   console.log("PREVIEW_MATERIAL_ACCEPTANCE_TENANT=" + tenant.id);
 } finally {
   await database.end({ timeout: 5 });

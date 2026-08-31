@@ -113,6 +113,8 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_STAGING_PUBLISHABLE_KEY }}
           NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
           NOX_WORKFLOW_DATABASE_URL: ${{ secrets.NOX_WORKFLOW_DATABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_STORAGE_BUCKET: ${{ vars.SUPABASE_STAGING_STORAGE_BUCKET }}
           NOX_DIAGNOSTIC_PROBE_TOKEN: ${{ secrets.NOX_DIAGNOSTIC_PROBE_TOKEN }}
       - id: staging-http
         run: pnpm verify:staging
@@ -154,6 +156,7 @@ jobs:
           SUPABASE_STAGING_PROJECT_REF: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
           SUPABASE_PRODUCTION_PROJECT_REF: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_STORAGE_BUCKET: ${{ vars.SUPABASE_STAGING_STORAGE_BUCKET }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
@@ -177,6 +180,20 @@ jobs:
         with:
           name: g3-staging-visual-${{ github.sha }}
           path: ${{ runner.temp }}/g3-visual
+          if-no-files-found: error
+          retention-days: 365
+      - id: g4-evidence
+        run: |
+          artifact_path="$RUNNER_TEMP/g4-evidence/G4_STAGING_${GITHUB_SHA}.env"
+          node scripts/evidence/write-g4-staging-evidence.mjs "$artifact_path"
+          echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
+        env:
+          NOX_STAGING_URL: ${{ steps.deploy.outputs.staging_url }}
+      - name: Upload G4 exact-SHA Staging evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g4-staging-evidence-${{ github.sha }}
+          path: ${{ steps.g4-evidence.outputs.artifact_path }}
           if-no-files-found: error
           retention-days: 365
       - name: Record exact accepted Staging identity

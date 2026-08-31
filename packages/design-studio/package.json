@@ -18,6 +18,7 @@
   "dependencies": {
     "@nox-os/contracts": "workspace:*",
     "@nox-os/material-intelligence": "workspace:*",
+    "@nox-os/module-registry": "workspace:*",
     "zod": "4.4.3"
   }
 }

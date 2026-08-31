@@ -18,12 +18,15 @@ describe("Design Studio module authority", () => {
     });
     expect(definition?.authorization.permissions).toEqual(
       expect.arrayContaining([
+        "module.design-studio.project.create",
         "module.design-studio.brief.manage",
         "module.design-studio.intent.confirm",
         "module.design-studio.formula.generate",
         "module.design-studio.accord.plan",
         "module.design-studio.accord.develop",
-        "module.design-studio.formula.freeze"
+        "module.design-studio.formula.freeze",
+        "module.design-studio.formula.approve",
+        "module.design-studio.scientific-artifact.read"
       ])
     );
     expect(() => validateModuleDefinitions(moduleDefinitions)).not.toThrow();

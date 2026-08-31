@@ -5,12 +5,16 @@ import { LocalFeatureFlagResolver } from "@nox-os/module-registry";
 import {
   createPostgresPlatformStore,
   createPostgresMaterialStore,
+  createPostgresDesignStudioStore,
+  createPostgresMaterialCandidateRetriever,
   createRuntimeDatabase,
   probeDatabase
 } from "@nox-os/database";
 import { createMaterialIntelligenceApi } from "@nox-os/material-intelligence";
+import { createDesignStudioApi, DesignStudioApplication } from "@nox-os/design-studio";
 import { createPlatformCoreApi, createRequestContext, createFoundationApi } from "@nox-os/platform";
 import { NoxOeScientificAdapter, UnavailableScientificAdapter } from "@nox-os/scientific";
+import { SupabasePrivateFileStore } from "@nox-os/storage";
 import { moduleDefinitions } from "../../src/modules/definitions.js";
 import { foundationTestModuleDefinition } from "../../src/modules/foundation-test-manifest.js";
 import { VercelQueueWorkflowLauncher } from "../../workflows/vercel-queue.js";
@@ -60,6 +64,27 @@ const materialIntelligence =
         featureFlags
       })
     : undefined;
+const privateFileStore =
+  supabaseUrl && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_STORAGE_BUCKET
+    ? new SupabasePrivateFileStore({
+        url: supabaseUrl,
+        serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+        bucket: process.env.SUPABASE_STORAGE_BUCKET
+      })
+    : undefined;
+const designStudio =
+  runtimeDatabase && platformCore
+    ? createDesignStudioApi({
+        store: createPostgresDesignStudioStore(runtimeDatabase),
+        application: new DesignStudioApplication(
+          createPostgresMaterialCandidateRetriever(runtimeDatabase)
+        ),
+        authorization: platformCore,
+        definitions: [...moduleDefinitions, ...acceptanceModules],
+        featureFlags,
+        fileStore: privateFileStore
+      })
+    : undefined;
 const scientificGateway =
   process.env.NOX_OE_URL && process.env.NOX_OE_INTERNAL_TOKEN
     ? new NoxOeScientificAdapter({
@@ -77,7 +102,10 @@ const foundationApi = createFoundationApi({
   workflowLauncher,
   diagnosticProbeToken,
   platformCore,
-  additionalRouteRegistrars: materialIntelligence ? [materialIntelligence] : []
+  additionalRouteRegistrars: [
+    ...(materialIntelligence ? [materialIntelligence] : []),
+    ...(designStudio ? [designStudio] : [])
+  ]
 });
 
 export default async function handler(

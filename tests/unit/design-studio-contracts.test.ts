@@ -38,6 +38,8 @@ function snapshot(
     },
     identifiers: { CAS: [], FEMA: [], INCI: [] },
     properties: null,
+    normalizedProperties: { normalizationVersion: "g3-measurements-v1", warnings: [] },
+    formulationGuidance: [],
     odorAssignments: [],
     concentrate,
     components: []

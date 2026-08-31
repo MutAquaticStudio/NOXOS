@@ -514,6 +514,7 @@ function AuthenticatedApplication({
             element={
               <Suspense fallback={<p className="nox-ai-context">Loading Design Studio…</p>}>
                 <LazyDesignStudioExperience
+                  api={api}
                   tenantId={activeTenant?.tenantId}
                   modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
                 />

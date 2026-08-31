@@ -225,6 +225,14 @@ jobs:
           NOX_PREVIEW_MATERIAL_USER_PASSWORD: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_PASSWORD }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           G3_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g3-preview-visual
+      - name: Verify authenticated Design Studio Preview
+        run: pnpm verify:preview:g4-design-studio
+        env:
+          NOX_PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
+          NOX_PREVIEW_MATERIAL_USER_EMAIL: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_EMAIL }}
+          NOX_PREVIEW_MATERIAL_USER_PASSWORD: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_PASSWORD }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          G4_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g4-preview-visual
       - id: g3-preview-evidence
         run: |
           artifact_path="$RUNNER_TEMP/g3-preview-evidence/G3_PREVIEW_${EXPECTED_SOURCE_SHA}.env"
@@ -244,5 +252,26 @@ jobs:
         with:
           name: g3-preview-visual-${{ github.event.pull_request.head.sha }}
           path: ${{ runner.temp }}/g3-preview-visual
+          if-no-files-found: error
+          retention-days: 365
+      - id: g4-preview-evidence
+        run: |
+          artifact_path="$RUNNER_TEMP/g4-preview-evidence/G4_PREVIEW_${EXPECTED_SOURCE_SHA}.env"
+          node scripts/evidence/write-g4-preview-evidence.mjs "$artifact_path"
+          echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
+        env:
+          NOX_PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
+      - name: Upload G4 exact-SHA Preview evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g4-preview-evidence-${{ github.event.pull_request.head.sha }}
+          path: ${{ steps.g4-preview-evidence.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 365
+      - name: Upload G4 Preview visual acceptance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g4-preview-visual-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/g4-preview-visual
           if-no-files-found: error
           retention-days: 365

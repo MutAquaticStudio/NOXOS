@@ -76,24 +76,15 @@ export const generationStrategySchema = z.string().trim().min(1).max(80);
 export type GenerationStrategy =
   "FAITHFUL" | "EXPRESSIVE" | "MINIMALIST" | "BUDGET_EFFICIENT" | "LAYERED_ACCORD" | (string & {});
 
-export const budgetContextSchema = z
-  .object({
-    mode: z.enum(["CONSTRAINED", "STANDARD", "OPEN"]),
-    maxFormulaCostPerKg: z.number().finite().nonnegative().optional(),
-    currency: z
-      .string()
-      .trim()
-      .regex(/^[A-Z]{3}$/)
-      .optional()
-  })
-  .superRefine((value, context) => {
-    if (value.mode === "CONSTRAINED" && value.maxFormulaCostPerKg === undefined) {
-      context.addIssue({
-        code: "custom",
-        message: "A constrained budget requires a maximum cost per kilogram."
-      });
-    }
-  });
+export const budgetContextSchema = z.object({
+  mode: z.enum(["CONSTRAINED", "STANDARD", "OPEN"]),
+  maxFormulaCostPerKg: z.number().finite().nonnegative().optional(),
+  currency: z
+    .string()
+    .trim()
+    .regex(/^[A-Z]{3}$/)
+    .optional()
+});
 export type BudgetContext = z.infer<typeof budgetContextSchema>;
 
 const materialSnapshotSchema = z.custom<MaterialIntelligenceSnapshot>(
@@ -119,6 +110,18 @@ export const resolvedFormulaLineSchema = z
     activeAromaticMassMg: massMgSchema,
     carrierSolventMassMg: massMgSchema,
     solventType: z.string().trim().min(1).max(240).optional(),
+    contributionEvidence: z.array(
+      z.object({
+        target: taxonomyTargetSchema,
+        taxonomyMatch: z.number().min(0).max(1),
+        intensityNormalization: z.number().min(0).max(1),
+        phaseCompatibility: z.number().min(0).max(1),
+        guidanceConfidence: z.number().min(0).max(1),
+        evidenceQuality: z.number().min(0).max(1),
+        molecularBonus: z.number().min(0).max(1),
+        weightedScore: z.number().min(0).max(1)
+      })
+    ),
     materialSnapshot: materialSnapshotSchema
   })
   .superRefine((line, context) => {
@@ -164,11 +167,31 @@ export const formulaCandidateSchema = z
       warnings: z.array(z.string()),
       releaseReadiness: releaseReadinessSchema
     }),
-    scientificContext: z.object({
-      structureStandardizerVersion: z.string().trim().min(1),
-      rankingPolicyVersion: z.string().trim().min(1),
-      formulaScorerVersion: z.string().trim().min(1)
-    })
+    scientificContext: z
+      .object({
+        capability: z.enum(["CURATED_ONLY", "MOLECULAR_AUGMENTED"]),
+        structureStandardizerVersion: z.string().trim().min(1).optional(),
+        molecularModelVersion: z.string().trim().min(1).optional(),
+        rankingPolicyVersion: z.string().trim().min(1),
+        formulaScorerVersion: z.string().trim().min(1),
+        featureSchemaHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional()
+      })
+      .superRefine((value, context) => {
+        if (
+          value.capability === "MOLECULAR_AUGMENTED" &&
+          (!value.structureStandardizerVersion ||
+            !value.molecularModelVersion ||
+            !value.featureSchemaHash)
+        ) {
+          context.addIssue({
+            code: "custom",
+            message: "Molecular capability requires verified model and feature-schema identity."
+          });
+        }
+      })
   })
   .superRefine((candidate, context) => {
     const materialIds = new Set<string>();
@@ -206,3 +229,39 @@ export const trialContextSchema = z.object({
     .optional()
 });
 export type TrialContext = z.infer<typeof trialContextSchema>;
+
+export type SensoryPhase = "TOP" | "MID" | "BASE" | "CROSS_PHASE";
+export interface ConfirmedSensoryDelta {
+  phase: SensoryPhase;
+  assignmentType: OsmoTaxonomyAssignmentType;
+  taxonomyTerm: string;
+  delta: number;
+}
+export interface FormulaRevisionContext {
+  parentFormulaVersionId: string;
+  sourceTrialId: string;
+  sourceEvaluationId: string;
+  compositionKind: CompositionKind;
+  taxonomySource: "OSMO";
+  taxonomyVersion: "osmo_v1.2";
+  trialContext: TrialContext;
+  evaluationText: string;
+  confirmedDeltas: ConfirmedSensoryDelta[];
+}
+export interface FormulaApprovalEvidence {
+  formulaVersionId: string;
+  sourceTrialId: string;
+  sourceEvaluationId: string;
+  compositionKind: CompositionKind;
+  decision: "READY_FOR_APPROVAL";
+  finalizedAt: string;
+  taxonomySource: "OSMO";
+  taxonomyVersion: "osmo_v1.2";
+}
+
+export interface FormulaRevisionPort {
+  createRevisionCandidate(context: FormulaRevisionContext): Promise<FormulaCandidate[]>;
+}
+export interface FormulaApprovalPort {
+  approveFrozenVersion(evidence: FormulaApprovalEvidence): Promise<void>;
+}
