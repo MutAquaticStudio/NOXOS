@@ -1,6 +1,7 @@
 import type { Sql, TransactionSql } from "postgres";
 import {
   DesignStudioProblem,
+  computeFormulaCandidateId,
   computeFormulaBundleHash,
   formulaCandidateSchema,
   taxonomyTargetKey,
@@ -375,8 +376,22 @@ class PostgresDesignStudioStore implements DesignStudioStore {
       where l.tenant_id = ${tenantId} and l.formula_version_id = ${formulaVersionId}
       order by l.line_order
     `;
+    const candidateLines = lines.map((line) => ({
+      materialId: line.material_id,
+      normalizedMassMg: String(line.normalized_mass_mg),
+      activeAromaticMassMg: String(line.active_aromatic_mass_mg),
+      carrierSolventMassMg: String(line.carrier_solvent_mass_mg),
+      ...(line.solvent_type ? { solventType: line.solvent_type } : {}),
+      contributionEvidence: line.contribution_evidence,
+      materialSnapshot: line.snapshot_payload
+    }));
     const candidate = formulaCandidateSchema.parse({
-      candidateId: formulaVersionId,
+      candidateId: computeFormulaCandidateId({
+        projectId: row.project_id,
+        sourceBriefId: row.source_brief_id,
+        generationStrategy: row.generation_strategy,
+        lines: candidateLines
+      }),
       projectId: row.project_id,
       sourceBriefId: row.source_brief_id,
       compositionKind: row.composition_kind,
@@ -386,15 +401,7 @@ class PostgresDesignStudioStore implements DesignStudioStore {
       taxonomySource: "OSMO",
       taxonomyVersion: "osmo_v1.2",
       intentSnapshot: row.intent_snapshot,
-      lines: lines.map((line) => ({
-        materialId: line.material_id,
-        normalizedMassMg: String(line.normalized_mass_mg),
-        activeAromaticMassMg: String(line.active_aromatic_mass_mg),
-        carrierSolventMassMg: String(line.carrier_solvent_mass_mg),
-        ...(line.solvent_type ? { solventType: line.solvent_type } : {}),
-        contributionEvidence: line.contribution_evidence,
-        materialSnapshot: line.snapshot_payload
-      })),
+      lines: candidateLines,
       resolvedComposition: row.resolved_composition,
       validation: row.validation,
       scientificContext: row.scientific_context

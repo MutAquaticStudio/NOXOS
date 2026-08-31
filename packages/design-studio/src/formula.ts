@@ -73,6 +73,20 @@ function deterministicUuid(...parts: string[]): string {
   return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
 }
 
+export function computeFormulaCandidateId(input: {
+  projectId: string;
+  sourceBriefId: string;
+  generationStrategy: string;
+  lines: readonly Pick<FormulaCandidate["lines"][number], "materialId" | "normalizedMassMg">[];
+}): string {
+  return deterministicUuid(
+    input.projectId,
+    input.sourceBriefId,
+    input.generationStrategy,
+    ...input.lines.map((line) => `${line.materialId}:${line.normalizedMassMg}`)
+  );
+}
+
 function chooseContextStrategy(
   budget: BudgetContext,
   costResolver?: CostResolver
@@ -367,12 +381,12 @@ export function generateFormulaCandidates(input: {
     warnings.push("MIXTURE_INTERACTION_NOT_MODELED");
     const derivedCoverage = coverage(selected, input.confirmedIntent.intent);
     const candidate = {
-      candidateId: deterministicUuid(
-        input.projectId,
-        input.sourceBriefId,
-        strategy,
-        ...lines.map((line) => `${line.materialId}:${line.normalizedMassMg}`)
-      ),
+      candidateId: computeFormulaCandidateId({
+        projectId: input.projectId,
+        sourceBriefId: input.sourceBriefId,
+        generationStrategy: strategy,
+        lines
+      }),
       projectId: input.projectId,
       sourceBriefId: input.sourceBriefId,
       compositionKind: "FULL_FORMULA" as const,

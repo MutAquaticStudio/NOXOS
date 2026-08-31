@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { chromium, type Page } from "@playwright/test";
 import {
   createPostgresPlatformStore,
@@ -874,7 +875,7 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
     expectStatus(reloaded, 200, "G4 frozen Formula reload");
     if (
       reloaded.body.formulaVersion.bundleHash !== frozen.bundleHash ||
-      JSON.stringify(reloaded.body.formulaVersion.candidate) !== JSON.stringify(frozen.candidate)
+      !isDeepStrictEqual(reloaded.body.formulaVersion.candidate, frozen.candidate)
     )
       throw new Error("FROZEN FormulaVersion did not reload unchanged.");
     let immutabilityRejected = false;
