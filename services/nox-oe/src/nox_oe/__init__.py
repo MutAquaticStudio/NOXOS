@@ -1,0 +1,5 @@
+"""NØX-OE internal scientific runtime."""
+
+from .contracts import EDGE_FEATURE_COUNT, EMBEDDING_DIMENSION, NODE_FEATURE_COUNT
+
+__all__ = ["EDGE_FEATURE_COUNT", "EMBEDDING_DIMENSION", "NODE_FEATURE_COUNT"]

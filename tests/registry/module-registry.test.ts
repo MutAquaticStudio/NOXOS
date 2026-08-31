@@ -54,7 +54,8 @@ describe("canonical Module Registry", () => {
       "platform",
       "material-intelligence",
       "settings",
-      "support"
+      "support",
+      "design-studio"
     ]);
   });
 

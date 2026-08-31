@@ -10,7 +10,7 @@ import {
 } from "@nox-os/database";
 import { createMaterialIntelligenceApi } from "@nox-os/material-intelligence";
 import { createPlatformCoreApi, createRequestContext, createFoundationApi } from "@nox-os/platform";
-import { UnavailableScientificAdapter } from "@nox-os/scientific";
+import { NoxOeScientificAdapter, UnavailableScientificAdapter } from "@nox-os/scientific";
 import { moduleDefinitions } from "../../src/modules/definitions.js";
 import { foundationTestModuleDefinition } from "../../src/modules/foundation-test-manifest.js";
 import { VercelQueueWorkflowLauncher } from "../../workflows/vercel-queue.js";
@@ -60,10 +60,17 @@ const materialIntelligence =
         featureFlags
       })
     : undefined;
+const scientificGateway =
+  process.env.NOX_OE_URL && process.env.NOX_OE_INTERNAL_TOKEN
+    ? new NoxOeScientificAdapter({
+        endpoint: process.env.NOX_OE_URL,
+        internalToken: process.env.NOX_OE_INTERNAL_TOKEN
+      })
+    : new UnavailableScientificAdapter();
 
 const foundationApi = createFoundationApi({
   modules: moduleDefinitions,
-  scientificGateway: new UnavailableScientificAdapter(),
+  scientificGateway,
   databaseProbe: runtimeDatabase
     ? () => probeDatabase(runtimeDatabase, "nox_app_runtime")
     : undefined,

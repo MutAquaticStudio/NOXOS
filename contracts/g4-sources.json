@@ -1,0 +1,15 @@
+{
+  "masterBlueprint": {
+    "fileName": "nox_master_blueprint.md",
+    "version": "2.0-FINAL CANONICAL",
+    "sha256": "be765579803248e90b495e7d84e3d9c4f8b049fe44b5371a1fdb68123bfb3bae"
+  },
+  "masterPrompt": {
+    "fileName": "G4_MASTER_EXECUTION_PROMPT_v2.2_COMPLETE.md",
+    "version": "2.2-COMPLETE",
+    "sha256": "a1679b5d7ea291df2b529c10577c25ce9a686f7db83e566a4587ca494a034013",
+    "beginMarker": "G4_MASTER_PROMPT_BEGIN",
+    "endMarker": "G4_MASTER_PROMPT_END",
+    "endOfFile": true
+  }
+}

@@ -73,6 +73,9 @@ importers:
       "@nox-os/database":
         specifier: workspace:*
         version: link:../../packages/database
+      "@nox-os/design-studio":
+        specifier: workspace:*
+        version: link:../../packages/design-studio
       "@nox-os/material-intelligence":
         specifier: workspace:*
         version: link:../../packages/material-intelligence
@@ -146,6 +149,18 @@ importers:
       postgres:
         specifier: 3.4.9
         version: 3.4.9
+
+  packages/design-studio:
+    dependencies:
+      "@nox-os/contracts":
+        specifier: workspace:*
+        version: link:../contracts
+      "@nox-os/material-intelligence":
+        specifier: workspace:*
+        version: link:../material-intelligence
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   packages/material-intelligence:
     dependencies:

@@ -889,6 +889,227 @@ kbd {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.nox-design-studio,
+.nox-design-entry {
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.nox-design-entry > p:not(.nox-ai-context),
+.nox-design-header p,
+.nox-design-muted {
+  color: var(--text-secondary);
+}
+
+.nox-design-workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5);
+  margin-top: var(--space-8);
+}
+
+.nox-design-workflow-grid button {
+  min-height: 180px;
+  padding: var(--space-7);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-02);
+  text-align: left;
+}
+
+.nox-design-workflow-grid strong,
+.nox-design-workflow-grid span {
+  display: block;
+}
+
+.nox-design-workflow-grid strong {
+  margin-bottom: var(--space-3);
+  font-size: 1.25rem;
+}
+
+.nox-design-workflow-grid span {
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.nox-design-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-6);
+  margin-bottom: var(--space-6);
+}
+
+.nox-design-header h1,
+.nox-design-header p {
+  margin: 0;
+}
+
+.nox-design-back {
+  margin-bottom: var(--space-5);
+  border: 0;
+  background: transparent;
+}
+
+.nox-design-reference-mass {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 180px;
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-02);
+  text-align: right;
+}
+
+.nox-design-reference-mass span {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.nox-design-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.4fr);
+  gap: var(--space-6);
+}
+
+.nox-design-panel,
+.nox-design-empty,
+.nox-design-plan {
+  padding: var(--space-6);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-02);
+}
+
+.nox-design-panel {
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+}
+
+.nox-design-panel > label,
+.nox-design-inline label {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.nox-design-panel textarea,
+.nox-design-panel input,
+.nox-design-panel select {
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-01);
+  color: var(--text-primary);
+}
+
+.nox-design-panel textarea {
+  min-height: 140px;
+  resize: vertical;
+}
+
+.nox-design-panel fieldset {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+}
+
+.nox-design-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.nox-design-check input {
+  width: auto;
+}
+
+.nox-design-inline {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: var(--space-4);
+}
+
+.nox-design-intent-list,
+.nox-design-accord-grid article dl {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.nox-design-intent-list div,
+.nox-design-accord-grid article dl div {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: var(--space-3);
+}
+
+.nox-design-intent-list dt,
+.nox-design-accord-grid dt {
+  color: var(--text-secondary);
+}
+
+.nox-design-intent-list dd,
+.nox-design-accord-grid dd {
+  margin: 0;
+}
+
+.nox-design-accord-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.nox-design-accord-grid article {
+  padding: var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-panel);
+  background: var(--surface-01);
+}
+
+.nox-design-accord-grid article:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.nox-design-accord-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.nox-design-accord-heading h3 {
+  margin: 0;
+}
+
+.nox-design-accord-heading span {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.nox-design-warning {
+  padding: var(--space-3);
+  border-left: 2px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+.nox-design-status {
+  margin-top: var(--space-5);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
 @media (max-width: 1439px) {
   .nox-shell-grid {
     grid-template-columns: 52px minmax(0, 1fr) minmax(240px, 320px);
@@ -934,6 +1155,10 @@ kbd {
 
   .nox-system-actions > :not(:first-child) {
     display: none;
+  }
+
+  .nox-design-layout {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1002,6 +1227,19 @@ kbd {
 
   .nox-material-tabs {
     margin-right: calc(var(--space-6) * -1);
+  }
+
+  .nox-design-header,
+  .nox-design-workflow-grid,
+  .nox-design-accord-grid,
+  .nox-design-inline {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .nox-design-reference-mass {
+    width: 100%;
+    text-align: left;
   }
 }
 
