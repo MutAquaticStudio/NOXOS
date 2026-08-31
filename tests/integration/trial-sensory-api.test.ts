@@ -30,16 +30,23 @@ function context(tenantId: string, modulePermissions: readonly string[]): Tenant
   };
 }
 
-function fixture(options: { readOnly?: boolean; g5Flag?: boolean } = {}) {
+function fixture(
+  options: { readOnly?: boolean; g5Flag?: boolean; g5RevisionPermission?: boolean } = {}
+) {
   const trialStore = new InMemoryTrialSensoryStore();
   const designStore = new InMemoryDesignStudioStore();
   const formula = g5FrozenFormula();
   designStore.formulaVersions.set(formula.formulaVersionId, formula);
   const application = new TrialSensoryApplication(trialStore, designStore);
-  const allPermissions = [
+  let allPermissions = [
     ...Object.values(trialSensoryPermissions),
     ...Object.values(designStudioPermissions)
   ];
+  if (options.g5RevisionPermission === false) {
+    allPermissions = allPermissions.filter(
+      (permission) => permission !== trialSensoryPermissions.requestRevision
+    );
+  }
   const authorization = {
     async tenantContext(request: ApiRequest) {
       const token = request.headers.authorization;
@@ -174,6 +181,20 @@ describe("Trial and Sensory API", () => {
         applicationKey: "fine-fragrance",
         dosagePct: 20,
         targetMassMg: "10000"
+      }
+    });
+    expect(denied).toMatchObject({ status: 403, body: { error: { code: "PERMISSION_DENIED" } } });
+  });
+
+  it("cannot freeze a sensory revision through G4 without the G5 revision permission", async () => {
+    const denied = await fixture({ g5RevisionPermission: false }).request({
+      path: `/design-studio/formula-versions/${G5_IDS.version}/revisions/freeze`,
+      method: "POST",
+      body: {
+        sourceTrialId: G5_IDS.project,
+        sourceEvaluationId: G5_IDS.brief,
+        strategy: "FAITHFUL",
+        formulaName: "Unauthorized revision"
       }
     });
     expect(denied).toMatchObject({ status: 403, body: { error: { code: "PERMISSION_DENIED" } } });

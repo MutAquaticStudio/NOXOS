@@ -156,8 +156,11 @@ export class InMemoryTrialSensoryStore implements TrialSensoryStore {
     input: Parameters<TrialSensoryStore["updateDraftEvaluation"]>[0]
   ): Promise<SensoryEvaluation | undefined> {
     const value = this.evaluations.get(input.evaluationId);
+    const trial = this.trials.get(input.trialId);
     if (
       !value ||
+      !trial ||
+      trial.status !== "PREPARED" ||
       value.tenantId !== input.tenantId ||
       value.trialId !== input.trialId ||
       value.status !== "DRAFT"

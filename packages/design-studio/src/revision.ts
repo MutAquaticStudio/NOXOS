@@ -19,26 +19,37 @@ function applyConfirmedDeltas(
   intent: NormalizedOlfactoryIntent,
   context: FormulaRevisionContext
 ): NormalizedOlfactoryIntent {
-  const deltas = new Map(
-    context.confirmedDeltas.map((value) => [
-      `${value.assignmentType}:${value.taxonomyTerm}`,
-      value.delta
-    ])
-  );
+  // G4 owns whole-composition intent rather than sensory phases. Preserve every
+  // phase observation by summing phase-qualified deltas into one deterministic
+  // whole-composition adjustment instead of allowing later phases to overwrite it.
+  const deltas = new Map<
+    string,
+    Pick<FormulaRevisionContext["confirmedDeltas"][number], "assignmentType" | "taxonomyTerm"> & {
+      delta: number;
+    }
+  >();
+  for (const value of context.confirmedDeltas) {
+    const key = `${value.assignmentType}:${value.taxonomyTerm}`;
+    const current = deltas.get(key);
+    deltas.set(key, {
+      assignmentType: value.assignmentType,
+      taxonomyTerm: value.taxonomyTerm,
+      delta: (current?.delta ?? 0) + value.delta
+    });
+  }
   const present = new Set<string>();
   const adjust = (target: AccordTaxonomyTarget): AccordTaxonomyTarget => {
     const key = taxonomyTargetKey(target);
     present.add(key);
-    const delta = deltas.get(key);
-    return delta == null
+    const aggregate = deltas.get(key);
+    return aggregate == null
       ? target
-      : { ...target, targetStrength: adjustedStrength(target.targetStrength, delta) };
+      : { ...target, targetStrength: adjustedStrength(target.targetStrength, aggregate.delta) };
   };
   const preferred = intent.preferred.map(adjust);
   const required = intent.required.map(adjust);
   const inferred = intent.inferred.map(adjust);
-  for (const value of context.confirmedDeltas) {
-    const key = `${value.assignmentType}:${value.taxonomyTerm}`;
+  for (const [key, value] of deltas) {
     if (present.has(key) || value.delta <= 0) continue;
     preferred.push({
       assignmentType: value.assignmentType,

@@ -286,6 +286,7 @@ export class TrialSensoryApplication
     const evaluation = await this.requireEvaluation(context.tenantId, trialId, evaluationId);
     if (evaluation.status === "FINAL")
       throw new TrialSensoryProblem(409, "EVALUATION_ALREADY_FINAL", "Evaluation is FINAL.");
+    ensurePreparedTrial(await this.requireTrial(context.tenantId, trialId));
     validateDeltas(input.deltas, false);
     const updated = await this.store.updateDraftEvaluation({
       ...context,
@@ -301,8 +302,10 @@ export class TrialSensoryApplication
       diagnosticNote: input.diagnosticNote ?? null,
       deltas: input.deltas
     });
-    if (!updated)
+    if (!updated) {
+      ensurePreparedTrial(await this.requireTrial(context.tenantId, trialId));
       throw new TrialSensoryProblem(409, "EVALUATION_ALREADY_FINAL", "Evaluation is FINAL.");
+    }
     return updated;
   }
 

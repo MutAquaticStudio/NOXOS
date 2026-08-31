@@ -39,6 +39,7 @@ describe("G5 cloud acceptance boundary", () => {
     expect(stagingVerifier).toContain("G4 revision freeze from G5 evidence");
     expect(stagingVerifier).toContain("G4 Formula approval with G5 evidence");
     expect(stagingVerifier).toContain("G5_STAGING_ACCORD_TRIAL=PASS");
+    expect(stagingVerifier).toContain("G5_CANCELLED_TRIAL_EVIDENCE_LOCK=PASS");
     expect(stagingVerifier).toContain("G5 AuditEvent ${action} is missing");
     expect(stagingWorkflow).toContain("g5-staging-evidence-${{ github.sha }}");
   });

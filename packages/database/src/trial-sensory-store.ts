@@ -375,10 +375,20 @@ class PostgresTrialSensoryStore implements TrialSensoryStore {
     input: Parameters<TrialSensoryStore["updateDraftEvaluation"]>[0]
   ): Promise<SensoryEvaluation | undefined> {
     const changed = await this.sql.begin(async (tx) => {
-      const trials = await tx<{ formula_version_id: string }[]>`
-        select formula_version_id from trial_sensory.trials
-        where tenant_id = ${input.tenantId} and id = ${input.trialId}
+      const locked = await tx<
+        { trial_status: string; evaluation_status: string; formula_version_id: string }[]
+      >`
+        select trial.status as trial_status, evaluation.status as evaluation_status,
+               trial.formula_version_id
+        from trial_sensory.trials as trial
+        join trial_sensory.sensory_evaluations as evaluation
+          on evaluation.tenant_id = trial.tenant_id and evaluation.trial_id = trial.id
+        where trial.tenant_id = ${input.tenantId} and trial.id = ${input.trialId}
+          and evaluation.id = ${input.evaluationId}
+        for update of trial, evaluation
       `;
+      if (locked[0]?.trial_status !== "PREPARED" || locked[0]?.evaluation_status !== "DRAFT")
+        return false;
       const rows = await tx<{ id: string }[]>`
         update trial_sensory.sensory_evaluations set
           evaluation_medium = ${input.context.evaluationMedium},
@@ -404,7 +414,7 @@ class PostgresTrialSensoryStore implements TrialSensoryStore {
         resourceId: input.evaluationId,
         metadata: {
           trialId: input.trialId,
-          formulaVersionId: trials[0]?.formula_version_id ?? null,
+          formulaVersionId: locked[0].formula_version_id,
           deltaCount: input.deltas.length
         }
       });

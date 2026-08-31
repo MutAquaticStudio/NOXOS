@@ -1,6 +1,6 @@
 begin;
 
-select plan(18);
+select plan(19);
 
 select is(
   (
@@ -89,6 +89,12 @@ select ok(
   pg_get_functiondef('trial_sensory.protect_trial()'::regprocedure)
     like '%sum(scaled_mass_mg)%TRIAL_FORMULA_TOTAL_INVALID%',
   'PREPARED transition enforces the exact target mass total'
+);
+
+select ok(
+  pg_get_functiondef('trial_sensory.protect_evaluation()'::regprocedure)
+    like '%trial_status is distinct from ''PREPARED''%TRIAL_NOT_PREPARED%',
+  'draft sensory evidence is immutable after its Trial leaves PREPARED'
 );
 
 select * from finish();

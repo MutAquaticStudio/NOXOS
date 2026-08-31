@@ -297,6 +297,8 @@ function TrialDetail({
   const [diagnosticNote, setDiagnosticNote] = useState("");
   const [medium, setMedium] = useState<EvaluationPayload["context"]["evaluationMedium"]>("BLOTTER");
   const [sampleAgeMinutes, setSampleAgeMinutes] = useState(0);
+  const [temperatureC, setTemperatureC] = useState<number | null>(null);
+  const [humidityPct, setHumidityPct] = useState<number | null>(null);
   const [deltas, setDeltas] = useState<SensoryDeltaDraft[]>([]);
   const [decision, setDecision] = useState<FinalEvaluationDecision>("REVISION_REQUIRED");
   const [revisionCandidates, setRevisionCandidates] = useState<FormulaCandidate[]>([]);
@@ -318,6 +320,8 @@ function TrialDetail({
       setDiagnosticNote(payload.evaluation.diagnosticNote ?? "");
       setMedium(payload.evaluation.context.evaluationMedium);
       setSampleAgeMinutes(payload.evaluation.context.sampleAgeMinutes);
+      setTemperatureC(payload.evaluation.context.temperatureC ?? null);
+      setHumidityPct(payload.evaluation.context.humidityPct ?? null);
       setDeltas(payload.evaluation.deltas);
       if (payload.evaluation.decision) setDecision(payload.evaluation.decision);
     }
@@ -348,6 +352,8 @@ function TrialDetail({
           setDiagnosticNote(payload.evaluation.diagnosticNote ?? "");
           setMedium(payload.evaluation.context.evaluationMedium);
           setSampleAgeMinutes(payload.evaluation.context.sampleAgeMinutes);
+          setTemperatureC(payload.evaluation.context.temperatureC ?? null);
+          setHumidityPct(payload.evaluation.context.humidityPct ?? null);
           setDeltas(payload.evaluation.deltas);
           if (payload.evaluation.decision) setDecision(payload.evaluation.decision);
         }
@@ -403,8 +409,8 @@ function TrialDetail({
       body: {
         evaluationMedium: medium,
         sampleAgeMinutes,
-        temperatureC: null,
-        humidityPct: null,
+        temperatureC,
+        humidityPct,
         evaluationText,
         diagnosticNote: diagnosticNote || null,
         deltas
@@ -439,6 +445,7 @@ function TrialDetail({
     [formula]
   );
   if (!trial) return <p aria-busy="true">Loading Trial…</p>;
+  const canEditEvaluation = evaluation?.status === "DRAFT" && trial.status === "PREPARED";
 
   const prompts =
     trial.compositionKind === "FULL_FORMULA"
@@ -610,7 +617,7 @@ function TrialDetail({
                 What did this sample smell like?
                 <textarea
                   value={evaluationText}
-                  disabled={evaluation.status === "FINAL"}
+                  disabled={!canEditEvaluation}
                   onChange={(event) => setEvaluationText(event.target.value)}
                 />
               </label>
@@ -619,7 +626,7 @@ function TrialDetail({
                   Medium
                   <select
                     value={medium}
-                    disabled={evaluation.status === "FINAL"}
+                    disabled={!canEditEvaluation}
                     onChange={(event) => setMedium(event.target.value as typeof medium)}
                   >
                     {["BLOTTER", "SKIN", "PRODUCT", "OTHER"].map((value) => (
@@ -633,8 +640,34 @@ function TrialDetail({
                     type="number"
                     min="0"
                     value={sampleAgeMinutes}
-                    disabled={evaluation.status === "FINAL"}
+                    disabled={!canEditEvaluation}
                     onChange={(event) => setSampleAgeMinutes(Number(event.target.value))}
+                  />
+                </label>
+                <label>
+                  Temperature (°C)
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={temperatureC ?? ""}
+                    disabled={!canEditEvaluation}
+                    onChange={(event) =>
+                      setTemperatureC(event.target.value === "" ? null : Number(event.target.value))
+                    }
+                  />
+                </label>
+                <label>
+                  Humidity (%)
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={humidityPct ?? ""}
+                    disabled={!canEditEvaluation}
+                    onChange={(event) =>
+                      setHumidityPct(event.target.value === "" ? null : Number(event.target.value))
+                    }
                   />
                 </label>
               </div>
@@ -642,7 +675,7 @@ function TrialDetail({
                 Diagnostic note (non-canonical hypothesis)
                 <textarea
                   value={diagnosticNote}
-                  disabled={evaluation.status === "FINAL"}
+                  disabled={!canEditEvaluation}
                   onChange={(event) => setDiagnosticNote(event.target.value)}
                 />
               </label>
@@ -660,7 +693,7 @@ function TrialDetail({
                     <select
                       aria-label="Sensory phase"
                       value={delta.phase}
-                      disabled={evaluation.status === "FINAL"}
+                      disabled={!canEditEvaluation}
                       onChange={(event) =>
                         setDeltas(
                           deltas.map((item, itemIndex) =>
@@ -678,7 +711,7 @@ function TrialDetail({
                     <select
                       aria-label="Canonical taxonomy term"
                       value={`${delta.assignmentType}:${delta.taxonomyTerm}`}
-                      disabled={evaluation.status === "FINAL"}
+                      disabled={!canEditEvaluation}
                       onChange={(event) => {
                         const choice = taxonomy.find(
                           (item) =>
@@ -708,7 +741,7 @@ function TrialDetail({
                       max="5"
                       step="1"
                       value={delta.confirmedDelta ?? 0}
-                      disabled={evaluation.status === "FINAL"}
+                      disabled={!canEditEvaluation}
                       onChange={(event) =>
                         setDeltas(
                           deltas.map((item, itemIndex) =>
@@ -719,7 +752,7 @@ function TrialDetail({
                         )
                       }
                     />
-                    {evaluation.status === "DRAFT" ? (
+                    {canEditEvaluation ? (
                       <button
                         type="button"
                         onClick={() =>
@@ -732,7 +765,7 @@ function TrialDetail({
                   </div>
                 ))}
               </div>
-              {evaluation.status === "DRAFT" ? (
+              {canEditEvaluation ? (
                 <>
                   <button type="button" onClick={addDelta} disabled={taxonomy.length === 0}>
                     Add taxonomy delta
@@ -792,10 +825,12 @@ function TrialDetail({
                     Finalize Evaluation
                   </button>
                 </>
-              ) : (
+              ) : evaluation.status === "FINAL" ? (
                 <p>
                   <strong>FINAL · {evaluation.decision?.replaceAll("_", " ")}</strong>
                 </p>
+              ) : (
+                <p role="status">Draft evidence is locked because the Trial is not PREPARED.</p>
               )}
             </>
           ) : null}

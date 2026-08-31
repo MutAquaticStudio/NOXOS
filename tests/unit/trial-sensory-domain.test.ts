@@ -211,6 +211,37 @@ describe("Sensory evidence and G4 handoff", () => {
     );
   });
 
+  it("locks draft sensory evidence when its prepared Trial is cancelled", async () => {
+    const { application } = fixture();
+    const prepared = await application.prepareTrial(command, (await draftTrial(application)).id);
+    const evaluation = await application.createEvaluation(command, prepared.id, {
+      evaluationMedium: "BLOTTER",
+      sampleAgeMinutes: 15,
+      temperatureC: 23,
+      humidityPct: 55,
+      evaluationText: "Draft evidence before cancellation.",
+      diagnosticNote: null
+    });
+    await application.cancelTrial(command, prepared.id);
+    await expect(
+      application.updateEvaluation(command, prepared.id, evaluation.id, {
+        evaluationMedium: "BLOTTER",
+        sampleAgeMinutes: 20,
+        temperatureC: 25,
+        humidityPct: 60,
+        evaluationText: "Mutation after cancellation must fail.",
+        diagnosticNote: null,
+        deltas: []
+      })
+    ).rejects.toMatchObject({ code: "TRIAL_CANCELLED" });
+    await expect(
+      application.requireEvaluation(G5_IDS.tenantA, prepared.id, evaluation.id)
+    ).resolves.toMatchObject({
+      evaluationText: "Draft evidence before cancellation.",
+      context: { temperatureC: 23, humidityPct: 55 }
+    });
+  });
+
   it("requires a PREPARED Trial and rejects non-canonical taxonomy", async () => {
     const { application } = fixture();
     const draft = await draftTrial(application);
@@ -334,10 +365,16 @@ describe("Sensory evidence and G4 handoff", () => {
           assignmentType: "DESCRIPTOR",
           taxonomyTerm: "Bergamotty",
           delta: 3
+        },
+        {
+          phase: "BASE",
+          assignmentType: "DESCRIPTOR",
+          taxonomyTerm: "Bergamotty",
+          delta: -2
         }
       ]
     });
-    expect(candidates[0].intentSnapshot.required[0].targetStrength).toBeCloseTo(0.95);
+    expect(candidates[0].intentSnapshot.required[0].targetStrength).toBeCloseTo(0.85);
     expect(parent.candidate.intentSnapshot.required[0].targetStrength).toBe(0.8);
     expect(
       candidates[0].lines.every((line) =>

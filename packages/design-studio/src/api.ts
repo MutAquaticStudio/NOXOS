@@ -40,6 +40,9 @@ import { DesignStudioProblem } from "./problem.js";
 
 const MODULE_ID = "design-studio";
 const ENTITLEMENT = "module.design-studio";
+const TRIAL_SENSORY_MODULE_ID = "trial-sensory";
+const TRIAL_SENSORY_ENTITLEMENT = "module.trial-sensory";
+const TRIAL_SENSORY_REVISION_PERMISSION = "module.trial-sensory.revision.request";
 const uuid = z.string().uuid();
 const fileReferenceId = z
   .string()
@@ -493,6 +496,7 @@ export class DesignStudioApi {
       "/design-studio/formula-versions/:formulaVersionId/revisions/freeze",
       this.handle(async (request) => {
         const context = await this.tenant(request, designStudioPermissions.freezeFormula);
+        this.requireTrialSensoryRevisionAccess(context);
         const parentFormulaVersionId = routeUuid(request, "formulaVersionId");
         const input = body(revisionFreezeSchema, request);
         if (!this.options.revisionContextReader || !this.options.revisionPortFactory)
@@ -655,6 +659,26 @@ export class DesignStudioApi {
       );
     }
     return context;
+  }
+
+  private requireTrialSensoryRevisionAccess(context: TenantRequestContext): void {
+    const definition = this.options.definitions.find(
+      (item) => item.descriptor.id === TRIAL_SENSORY_MODULE_ID
+    );
+    if (
+      !definition ||
+      definition.descriptor.lifecycle === "DISABLED" ||
+      definition.descriptor.lifecycle === "DEPRECATED" ||
+      !this.options.featureFlags.isEnabled(definition.descriptor.featureFlag) ||
+      !context.entitlements.includes(TRIAL_SENSORY_ENTITLEMENT) ||
+      !context.authorization.modulePermissions.includes(TRIAL_SENSORY_REVISION_PERMISSION)
+    ) {
+      throw new DesignStudioProblem(
+        403,
+        "PERMISSION_DENIED",
+        "Trial and Sensory revision access is not granted."
+      );
+    }
   }
 
   private handle(handler: (request: ApiRequest) => Promise<ApiResponse>) {

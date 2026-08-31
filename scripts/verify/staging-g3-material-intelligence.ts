@@ -1474,6 +1474,68 @@ async function runG5Acceptance(
     "G5 foreign Formula line probe cleanup"
   );
 
+  const cancelledTrialId = await createPreparedTrial("cancelled-evidence-lock");
+  const cancelledEvaluation = await api<{ evaluation: { id: string } }>(
+    actor,
+    `/trials/${cancelledTrialId}/evaluations`,
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        evaluationMedium: "BLOTTER",
+        sampleAgeMinutes: 15,
+        temperatureC: 23,
+        humidityPct: 55,
+        evaluationText: "Draft evidence before cancellation.",
+        diagnosticNote: null
+      }
+    }
+  );
+  expectStatus(cancelledEvaluation, 201, "G5 cancellable draft evaluation");
+  expectStatus(
+    await api(actor, `/trials/${cancelledTrialId}/cancel`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G5 prepared Trial cancellation"
+  );
+  expectError(
+    await api(
+      actor,
+      `/trials/${cancelledTrialId}/evaluations/${cancelledEvaluation.body.evaluation.id}`,
+      {
+        method: "PUT",
+        tenantId: tenantA,
+        body: {
+          evaluationMedium: "BLOTTER",
+          sampleAgeMinutes: 20,
+          temperatureC: 25,
+          humidityPct: 60,
+          evaluationText: "Mutation after cancellation must fail.",
+          diagnosticNote: null,
+          deltas: []
+        }
+      }
+    ),
+    409,
+    "TRIAL_CANCELLED",
+    "G5 cancelled Trial API evidence lock"
+  );
+  let cancelledEvidenceMutationRejected = false;
+  try {
+    await maintenance`
+      update trial_sensory.sensory_evaluations
+      set evaluation_text = 'Direct mutation after cancellation must fail.'
+      where tenant_id = ${tenantA}
+        and id = ${cancelledEvaluation.body.evaluation.id}
+    `;
+  } catch {
+    cancelledEvidenceMutationRejected = true;
+  }
+  if (!cancelledEvidenceMutationRejected)
+    throw new Error("G5 database allowed sensory evidence mutation after Trial cancellation.");
+
   await signInInBrowser(page, fixture("B"));
   await page.goto(new URL("/trials", stagingUrl).toString(), { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Trial Registry" }).waitFor({ state: "visible" });
@@ -1508,6 +1570,7 @@ async function runG5Acceptance(
   console.log("G5_STAGING_TRIAL_SENSORY_ACCEPTANCE=PASS");
   console.log("G5_STAGING_REVISION_PATH=PASS");
   console.log("G5_STAGING_APPROVAL_PATH=PASS");
+  console.log("G5_CANCELLED_TRIAL_EVIDENCE_LOCK=PASS");
 }
 
 async function captureG5(page: Page, name: string, route: string): Promise<void> {
