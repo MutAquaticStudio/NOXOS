@@ -319,7 +319,7 @@ try {
       waitUntil: "networkidle"
     });
     await page.getByRole("heading", { name: mixtureName }).waitFor({ state: "visible" });
-    await expectVisible(page, "Tenant A");
+    await page.getByText("Tenant A", { exact: true }).first().waitFor({ state: "visible" });
     const crossTenantText = await page.locator("main").innerText();
     if (crossTenantText.includes(fixture("A").id) || crossTenantText.includes("G3 A")) {
       throw new Error("Cross-tenant contributor identity was exposed in the browser.");
