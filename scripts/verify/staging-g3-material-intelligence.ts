@@ -107,15 +107,17 @@ try {
       "Material Intelligence entitlement"
     );
   }
-  expectStatus(
-    await api(
-      platformOwnerToken,
-      `/platform/tenants/${tenantA}/entitlements/module.design-studio`,
-      { method: "PUT", body: { enabled: true } }
-    ),
-    200,
-    "Design Studio entitlement"
-  );
+  for (const tenantId of [tenantA, tenantB]) {
+    expectStatus(
+      await api(
+        platformOwnerToken,
+        `/platform/tenants/${tenantId}/entitlements/module.design-studio`,
+        { method: "PUT", body: { enabled: true } }
+      ),
+      200,
+      "Design Studio entitlement"
+    );
+  }
   const materialContext = await api<{
     moduleAvailability: Array<{ moduleId: string; state: string }>;
   }>(token("A"), "/context", { tenantId: tenantA });
@@ -847,7 +849,7 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
     if (/scientificInternal|canonical_smiles|chemical_entity_id/i.test(JSON.stringify(frozen)))
       throw new Error("G4 tenant Formula DTO leaked internal scientific Material data.");
     expectError(
-      await api(token("C"), `/design-studio/formula-versions/${frozen.formulaVersionId}`, {
+      await api(token("E"), `/design-studio/formula-versions/${frozen.formulaVersionId}`, {
         tenantId: tenantB
       }),
       404,
@@ -855,7 +857,7 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
       "Cross-tenant frozen Formula read"
     );
     expectError(
-      await api(token("C"), `/design-studio/briefs/${formulaBriefId}/generate`, {
+      await api(token("E"), `/design-studio/briefs/${formulaBriefId}/generate`, {
         method: "POST",
         tenantId: tenantB,
         body: { budget: { mode: "STANDARD" } }
