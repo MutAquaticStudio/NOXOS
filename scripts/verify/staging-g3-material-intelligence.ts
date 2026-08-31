@@ -272,7 +272,7 @@ try {
     await page.goto(new URL(`/materials/${dilution.body.material.id}`, stagingUrl).toString(), {
       waitUntil: "networkidle"
     });
-    await expectVisible(page, "Concentration");
+    await expectHeading(page, "Concentration");
     await expectVisible(page, referenceMaterial.displayName);
     await expectVisible(page, "10%");
     await expectVisible(page, "TEC");
@@ -616,6 +616,10 @@ async function signOutInBrowser(page: Page): Promise<void> {
 
 async function expectVisible(page: Page, text: string): Promise<void> {
   await page.getByText(text, { exact: true }).waitFor({ state: "visible" });
+}
+
+async function expectHeading(page: Page, text: string): Promise<void> {
+  await page.getByRole("heading", { name: text, exact: true }).waitFor({ state: "visible" });
 }
 
 function createdMaterialIdFromUrl(value: string): string {

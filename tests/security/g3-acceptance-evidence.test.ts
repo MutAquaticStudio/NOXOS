@@ -30,6 +30,7 @@ describe("G3 acceptance evidence boundary", () => {
       "Platform Owner did not resolve the global Material correction."
     );
     expect(stagingVerifier).toContain("Dilution acceptance requires structured source");
+    expect(stagingVerifier).toContain('expectHeading(page, "Concentration")');
     expect(stagingVerifier).toContain(
       "delete from material_intelligence.materials where id = ${materialId}"
     );
