@@ -29,6 +29,9 @@ describe("G3 acceptance evidence boundary", () => {
     expect(stagingVerifier).toContain("Cross-tenant contributor identity was exposed");
     expect(stagingVerifier).toContain("Tenant approver Platform correction");
     expect(stagingVerifier).toContain(
+      "/platform/material-intelligence/review/${correction.body.changeRequest.id}"
+    );
+    expect(stagingVerifier).toContain(
       "Platform Owner did not resolve the global Material correction."
     );
     expect(stagingVerifier).toContain("Dilution acceptance requires structured source");

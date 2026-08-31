@@ -358,7 +358,11 @@ try {
     });
     await expectVisible(page, "Global Material review");
     await capture(page, "platform-review-desktop", "/platform/material-intelligence/review");
-    await page.getByRole("link", { name: "Open review" }).click();
+    await page
+      .locator(
+        `a[href="/platform/material-intelligence/review/${correction.body.changeRequest.id}"]`
+      )
+      .click();
     await page
       .getByRole("heading", { name: referenceMaterial.displayName })
       .waitFor({ state: "visible" });
