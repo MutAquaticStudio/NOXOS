@@ -295,7 +295,7 @@ try {
     }
 
     const shareRequest = await api<{ changeRequest: ChangeSummary }>(
-      token("A"),
+      token("B"),
       `/materials/${created.id}/change-requests`,
       { method: "POST", tenantId: tenantA, body: { requestType: "GENERAL", visibility: "SHARED" } }
     );

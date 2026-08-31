@@ -284,6 +284,14 @@ describe("G3-A Material API", () => {
       tenantId: IDS.tenantA,
       body: {}
     });
+    const forbiddenSharing = await request({
+      method: "POST",
+      path: `/materials/${created.material.id}/change-requests`,
+      actor: "member-a",
+      tenantId: IDS.tenantA,
+      body: { requestType: "GENERAL", visibility: "SHARED" }
+    });
+    expect(forbiddenSharing.status).toBe(403);
     const sharing = await request({
       method: "POST",
       path: `/materials/${created.material.id}/change-requests`,
