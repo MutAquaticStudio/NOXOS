@@ -555,7 +555,7 @@ export class DesignStudioApi {
     ) {
       throw new DesignStudioProblem(
         403,
-        "TENANT_ACCESS_DENIED",
+        "PERMISSION_DENIED",
         "Design Studio access is not granted."
       );
     }
