@@ -1,0 +1,86 @@
+name: preview-auth-user-rotation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nox-os-preview-auth-user-rotation
+  cancel-in-progress: false
+
+jobs:
+  update-designated-preview-auth-user:
+    # This workflow is intentionally branch-bound and manual-only. It must not
+    # become an automatic PR, Preview, Staging, or Production deployment path.
+    if: github.ref == 'refs/heads/chore/preview-auth-rotation'
+    runs-on: ubuntu-24.04
+    environment: Preview
+    timeout-minutes: 5
+    env:
+      SUPABASE_PREVIEW_URL: ${{ vars.SUPABASE_PREVIEW_URL }}
+      SUPABASE_PREVIEW_PROJECT_REF: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_PREVIEW_SERVICE_ROLE_KEY }}
+      TARGET_USER_ID: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_ID }}
+      TARGET_EMAIL: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_EMAIL }}
+      TARGET_PASSWORD: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_PASSWORD }}
+    steps:
+      - name: Update only the designated Preview Auth user
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const required = (name) => {
+            const value = process.env[name];
+            if (!value) {
+              throw new Error(`${name} is required.`);
+            }
+            return value;
+          };
+
+          const projectRef = required("SUPABASE_PREVIEW_PROJECT_REF");
+          const previewUrl = new URL(required("SUPABASE_PREVIEW_URL"));
+          const targetUserId = required("TARGET_USER_ID");
+          const targetEmail = required("TARGET_EMAIL");
+          const targetPassword = required("TARGET_PASSWORD");
+          const serviceRoleKey = required("SUPABASE_SERVICE_ROLE_KEY");
+
+          if (projectRef !== "uurkjmkhvtqydeikncaw") {
+            throw new Error("Unexpected Supabase project reference.");
+          }
+          if (previewUrl.hostname !== `${projectRef}.supabase.co`) {
+            throw new Error("Preview URL does not belong to the configured Preview project.");
+          }
+          if (targetUserId !== "7d9fe589-a316-41ca-8bd3-1f6c58bdcef1") {
+            throw new Error("Refusing to update an unexpected Auth user.");
+          }
+
+          const response = await fetch(
+            new URL(`/auth/v1/admin/users/${targetUserId}`, previewUrl),
+            {
+              method: "PUT",
+              headers: {
+                apikey: serviceRoleKey,
+                Authorization: `Bearer ${serviceRoleKey}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                email: targetEmail,
+                password: targetPassword,
+                email_confirm: true
+              })
+            }
+          );
+
+          const responseBody = await response.json().catch(() => null);
+          if (!response.ok) {
+            throw new Error(`Supabase Auth update rejected with HTTP ${response.status}.`);
+          }
+
+          const updatedUser = responseBody?.user ?? responseBody;
+          if (updatedUser?.id !== targetUserId || updatedUser?.email !== targetEmail) {
+            throw new Error("Supabase Auth response did not confirm the designated Preview user.");
+          }
+
+          console.log("PREVIEW_AUTH_USER_ROTATION=PASS");
+          NODE
