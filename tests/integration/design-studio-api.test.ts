@@ -278,7 +278,10 @@ describe("G4 Design Studio authenticated API", () => {
       },
       body: { name: "Forged", tenantId: IDS.tenantB }
     });
-    expect(denied.status).toBe(403);
+    expect(denied).toMatchObject({
+      status: 403,
+      body: { error: { code: "PERMISSION_DENIED", requestId: "req_g4" } }
+    });
     expect(store.projects.size).toBe(0);
   });
 

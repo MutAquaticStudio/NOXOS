@@ -42,11 +42,7 @@ export function requireDesignStudioPermission(
   permission: DesignStudioPermission
 ): void {
   if (!context.permissions.has(permission)) {
-    throw new DesignStudioProblem(
-      403,
-      "TENANT_ACCESS_DENIED",
-      "Design Studio permission was denied."
-    );
+    throw new DesignStudioProblem(403, "PERMISSION_DENIED", "Design Studio permission was denied.");
   }
 }
 
