@@ -21,7 +21,7 @@ jobs:
     env:
       SUPABASE_PREVIEW_URL: ${{ vars.SUPABASE_PREVIEW_URL }}
       SUPABASE_PREVIEW_PROJECT_REF: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_PREVIEW_SERVICE_ROLE_KEY }}
+      SUPABASE_PREVIEW_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_ACCESS_TOKEN }}
       TARGET_USER_ID: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_ID }}
       TARGET_EMAIL: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_EMAIL }}
       TARGET_PASSWORD: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_PASSWORD }}
@@ -43,7 +43,7 @@ jobs:
           const targetUserId = required("TARGET_USER_ID");
           const targetEmail = required("TARGET_EMAIL");
           const targetPassword = required("TARGET_PASSWORD");
-          const serviceRoleKey = required("SUPABASE_SERVICE_ROLE_KEY");
+          const accessToken = required("SUPABASE_PREVIEW_ACCESS_TOKEN");
 
           if (projectRef !== "uurkjmkhvtqydeikncaw") {
             throw new Error("Unexpected Supabase project reference.");
@@ -53,6 +53,28 @@ jobs:
           }
           if (targetUserId !== "7d9fe589-a316-41ca-8bd3-1f6c58bdcef1") {
             throw new Error("Refusing to update an unexpected Auth user.");
+          }
+
+          const keysResponse = await fetch(
+            `https://api.supabase.com/v1/projects/${projectRef}/api-keys?reveal=true`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`
+              }
+            }
+          );
+          const apiKeys = await keysResponse.json().catch(() => null);
+          if (!keysResponse.ok || !Array.isArray(apiKeys)) {
+            throw new Error(
+              `Supabase Management API key lookup rejected with HTTP ${keysResponse.status}.`
+            );
+          }
+
+          const serviceRoleKey =
+            apiKeys.find((apiKey) => apiKey?.name === "service_role")?.api_key ??
+            apiKeys.find((apiKey) => apiKey?.type === "secret")?.api_key;
+          if (typeof serviceRoleKey !== "string" || !serviceRoleKey) {
+            throw new Error("No Preview-only Supabase Auth admin key was available.");
           }
 
           const response = await fetch(
