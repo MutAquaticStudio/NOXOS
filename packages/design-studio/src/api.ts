@@ -4,6 +4,7 @@ import type {
   ApiRequest,
   ApiResponse,
   ApiRouteRegistrar,
+  ErrorCode,
   FileStore,
   ModuleDefinition,
   TenantRequestContext
@@ -563,7 +564,7 @@ export class DesignStudioApi {
       try {
         return await handler(request);
       } catch (error) {
-        if (error instanceof DesignStudioProblem)
+        if (isProblem(error))
           return {
             status: error.status,
             body: {
@@ -589,6 +590,12 @@ export class DesignStudioApi {
       }
     };
   }
+}
+
+function isProblem(value: unknown): value is { status: number; code: ErrorCode; message: string } {
+  return Boolean(
+    value && typeof value === "object" && "status" in value && "code" in value && "message" in value
+  );
 }
 
 export function createDesignStudioApi(options: DesignStudioApiOptions): DesignStudioApi {

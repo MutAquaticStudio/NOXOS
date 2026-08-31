@@ -103,6 +103,8 @@ function fixture() {
         return tenantContext(IDS.ownerB, IDS.tenantB, permissionSet);
       if (actor === "reader-a" && tenantId === IDS.tenantA)
         return tenantContext(IDS.ownerA, IDS.tenantA, [designStudioPermissions.read]);
+      if (actor === "unauthenticated")
+        throw { status: 401, code: "AUTH_REQUIRED", message: "Authentication is required." };
       throw new DesignStudioProblem(403, "TENANT_ACCESS_DENIED", "Tenant access is denied.");
     }
   };
@@ -192,6 +194,21 @@ async function prepareConfirmedBrief(request: ReturnType<typeof fixture>["reques
 }
 
 describe("G4 Design Studio authenticated API", () => {
+  it("preserves the Platform Core authentication error envelope", async () => {
+    const { request } = fixture();
+    const denied = await request({
+      path: "/design-studio/projects",
+      method: "POST",
+      actor: "unauthenticated",
+      tenantId: IDS.tenantA,
+      body: { name: "Unauthenticated" }
+    });
+    expect(denied).toMatchObject({
+      status: 401,
+      body: { error: { code: "AUTH_REQUIRED", requestId: "req_g4" } }
+    });
+  });
+
   it("uses trusted tenant context and rejects forged permission headers before side effects", async () => {
     const { store, request } = fixture();
     const denied = await request({
