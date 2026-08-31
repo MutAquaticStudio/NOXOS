@@ -7,6 +7,7 @@ import {
   arbitrateIntent,
   buildAccordArchitecture,
   buildFormulaIntentFromAccords,
+  computeFormulaCandidateId,
   computeFormulaBundleHash,
   confirmIntent,
   createMaterialCandidateEvidence,
@@ -190,6 +191,26 @@ describe("Accord Architecture", () => {
 });
 
 describe("Material evidence and deterministic Formula synthesis", () => {
+  it("reconstructs the same candidate identity from persisted Formula fields", () => {
+    expect(
+      computeFormulaCandidateId({
+        projectId: "11111111-1111-4111-8111-111111111111",
+        sourceBriefId: "22222222-2222-4222-8222-222222222222",
+        generationStrategy: "FAITHFUL",
+        lines: [
+          {
+            materialId: "33333333-3333-4333-8333-333333333333",
+            normalizedMassMg: "400000"
+          },
+          {
+            materialId: "44444444-4444-4444-8444-444444444444",
+            normalizedMassMg: "600000"
+          }
+        ]
+      })
+    ).toBe("71f752be-485a-4b84-8e00-6d3976af4c2d");
+  });
+
   it("fails closed for pending, inaccessible and excluded Materials", () => {
     expect(() =>
       createMaterialCandidateEvidence({
