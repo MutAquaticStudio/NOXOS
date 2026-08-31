@@ -48,6 +48,9 @@ jobs:
           if (projectRef !== "uurkjmkhvtqydeikncaw") {
             throw new Error("Unexpected Supabase project reference.");
           }
+          if (previewUrl.protocol !== "https:") {
+            throw new Error("Preview URL must use HTTPS.");
+          }
           if (previewUrl.hostname !== `${projectRef}.supabase.co`) {
             throw new Error("Preview URL does not belong to the configured Preview project.");
           }
