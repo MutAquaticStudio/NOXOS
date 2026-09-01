@@ -88,6 +88,9 @@ importers:
       "@nox-os/platform":
         specifier: workspace:*
         version: link:../../packages/platform
+      "@nox-os/procurement":
+        specifier: workspace:*
+        version: link:../../packages/procurement
       "@nox-os/release-readiness":
         specifier: workspace:*
         version: link:../../packages/release-readiness
@@ -164,6 +167,9 @@ importers:
       "@nox-os/material-intelligence":
         specifier: workspace:*
         version: link:../material-intelligence
+      "@nox-os/procurement":
+        specifier: workspace:*
+        version: link:../procurement
       "@nox-os/release-readiness":
         specifier: workspace:*
         version: link:../release-readiness
@@ -251,6 +257,21 @@ importers:
       zod:
         specifier: 4.3.6
         version: 4.3.6
+
+  packages/procurement:
+    dependencies:
+      "@nox-os/contracts":
+        specifier: workspace:*
+        version: link:../contracts
+      "@nox-os/inventory":
+        specifier: workspace:*
+        version: link:../inventory
+      "@nox-os/module-registry":
+        specifier: workspace:*
+        version: link:../module-registry
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   packages/release-readiness:
     dependencies:

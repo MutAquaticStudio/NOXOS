@@ -1307,35 +1307,103 @@ export class PostgresInventoryReceiptPort implements InventoryReceiptPort {
         "MATERIAL_NOT_FOUND",
         "Tenant-accessible Material not found."
       );
-    return this.sql.begin(async (tx) => {
-      let lots = await tx<
-        { id: string; material_id: string }[]
-      >`select id, material_id from inventory.material_lots where tenant_id = ${input.context.tenantId} and lot_code = ${input.lotCode} for update`;
-      if (lots[0] && lots[0].material_id !== input.materialId)
-        throw new InventoryProblem(
-          409,
-          "LOT_IDENTITY_IMMUTABLE",
-          "Lot code belongs to another Material."
-        );
-      if (!lots[0]) {
-        lots = await tx<
-          { id: string; material_id: string }[]
-        >`insert into inventory.material_lots (tenant_id, material_id, lot_code, created_by_user_id) values (${input.context.tenantId}, ${input.materialId}, ${input.lotCode}, ${input.context.actorUserId}) returning id, material_id`;
-      }
-      return insertMovement(tx, {
-        ...input.context,
-        lotId: lots[0].id,
-        movementType: "RECEIPT",
+    return this.sql.begin((tx) => receiveProcurementLotInTransaction(tx, input));
+  }
+}
+
+type ProcurementLotRow = {
+  id: string;
+  material_id: string;
+  supplier_lot_code: string | null;
+  manufactured_at: Date | null;
+  expires_at: Date | null;
+  retest_at: Date | null;
+};
+
+function sameInstant(left: Date | null, right: Date | null): boolean {
+  return left?.getTime() === right?.getTime();
+}
+
+/**
+ * Canonical Gate 7 receipt implementation for a caller-owned transaction.
+ * Gate 8 uses this narrow adapter so procurement POST and physical Inventory
+ * receipt either commit together or roll back together.
+ */
+export async function receiveProcurementLotInTransaction(
+  tx: TransactionSql,
+  input: Parameters<InventoryReceiptPort["receiveProcurementLot"]>[0]
+): Promise<StockMovement> {
+  let lots = await tx<ProcurementLotRow[]>`
+    select id, material_id, supplier_lot_code, manufactured_at, expires_at, retest_at
+    from inventory.material_lots
+    where tenant_id = ${input.context.tenantId} and lot_code = ${input.lotCode}
+    for update
+  `;
+  const identity = {
+    supplierLotCode: input.supplierLotCode ?? null,
+    manufacturedAt: input.manufacturedAt ?? null,
+    expiresAt: input.expiresAt ?? null,
+    retestAt: input.retestAt ?? null
+  };
+  if (
+    lots[0] &&
+    (lots[0].material_id !== input.materialId ||
+      lots[0].supplier_lot_code !== identity.supplierLotCode ||
+      !sameInstant(lots[0].manufactured_at, identity.manufacturedAt) ||
+      !sameInstant(lots[0].expires_at, identity.expiresAt) ||
+      !sameInstant(lots[0].retest_at, identity.retestAt))
+  )
+    throw new InventoryProblem(
+      409,
+      "INVENTORY_LOT_IDENTITY_CONFLICT",
+      "Existing Inventory Lot identity conflicts with the procurement receipt."
+    );
+  if (!lots[0]) {
+    lots = await tx<ProcurementLotRow[]>`
+      insert into inventory.material_lots (
+        tenant_id, material_id, lot_code, supplier_lot_code,
+        manufactured_at, expires_at, retest_at, created_by_user_id
+      ) values (
+        ${input.context.tenantId}, ${input.materialId}, ${input.lotCode},
+        ${identity.supplierLotCode}, ${identity.manufacturedAt}, ${identity.expiresAt},
+        ${identity.retestAt}, ${input.context.actorUserId}
+      ) returning id, material_id, supplier_lot_code, manufactured_at, expires_at, retest_at
+    `;
+  }
+  const existingMovement = await findMovementByOperation(
+    tx,
+    input.context.tenantId,
+    input.operationKey
+  );
+  const value = await insertMovement(tx, {
+    ...input.context,
+    lotId: lots[0].id,
+    movementType: "RECEIPT",
+    quantityMg: input.quantityMg,
+    fromLocationId: null,
+    toLocationId: input.locationId,
+    sourceModule: "PROCUREMENT",
+    sourceReferenceId: input.procurementReceiptId,
+    reasonCode: null,
+    operationKey: input.operationKey
+  });
+  if (!existingMovement)
+    await audit(tx, {
+      ...input.context,
+      action: "inventory.stock.received",
+      resourceType: "StockMovement",
+      resourceId: value.id,
+      metadata: {
+        lotId: value.lotId,
+        materialId: value.materialId,
+        locationId: input.locationId,
         quantityMg: input.quantityMg,
-        fromLocationId: null,
-        toLocationId: input.locationId,
         sourceModule: "PROCUREMENT",
         sourceReferenceId: input.procurementReceiptId,
-        reasonCode: null,
         operationKey: input.operationKey
-      });
+      }
     });
-  }
+  return value;
 }
 
 export type PostgresProductionInventoryPort = ProductionInventoryPort;

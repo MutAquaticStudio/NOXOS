@@ -18,6 +18,7 @@
     "@nox-os/material-intelligence": "workspace:*",
     "@nox-os/module-registry": "workspace:*",
     "@nox-os/platform": "workspace:*",
+    "@nox-os/procurement": "workspace:*",
     "@nox-os/release-readiness": "workspace:*",
     "@nox-os/scientific": "workspace:*",
     "@nox-os/storage": "workspace:*",

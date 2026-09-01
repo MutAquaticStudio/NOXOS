@@ -97,6 +97,11 @@ try {
       key: "module.inventory",
       enabled: true
     });
+    await store.upsertTenantEntitlement({
+      tenantId: tenant.id,
+      key: "module.procurement",
+      enabled: true
+    });
     return tenant;
   });
 

@@ -73,6 +73,11 @@ const LazyInventoryExperience = lazy(async () => {
   return { default: module.InventoryExperience };
 });
 
+const LazyProcurementExperience = lazy(async () => {
+  const module = await import("./procurement");
+  return { default: module.ProcurementExperience };
+});
+
 const publicIdentity = publicEnvironment({
   VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
   VITE_NOX_SOURCE_SHA: import.meta.env.VITE_NOX_SOURCE_SHA,
@@ -384,7 +389,8 @@ function AuthenticatedApplication({
             definition.descriptor.id !== "design-studio" &&
             definition.descriptor.id !== "trial-sensory" &&
             definition.descriptor.id !== "release-readiness" &&
-            definition.descriptor.id !== "inventory"
+            definition.descriptor.id !== "inventory" &&
+            definition.descriptor.id !== "procurement"
         )
         .flatMap((definition) => [
           { path: definition.descriptor.routeRoot, definition },
@@ -403,7 +409,9 @@ function AuthenticatedApplication({
           ? moduleDefinitions.find((definition) => definition.descriptor.id === "trial-sensory")
           : location.pathname.startsWith("/inventory")
             ? moduleDefinitions.find((definition) => definition.descriptor.id === "inventory")
-            : undefined);
+            : location.pathname.startsWith("/procurement")
+              ? moduleDefinitions.find((definition) => definition.descriptor.id === "procurement")
+              : undefined);
   const density = activeDefinition ? toShellDensity(activeDefinition.uxProfile.density) : "DEFAULT";
   const isPlatformOwner = platformIdentity.identity?.platformRoleKey === "PLATFORM_OWNER";
   const hasNoWorkspace = tenantSelection.state === "ready" && tenantSelection.choices.length === 0;
@@ -560,6 +568,18 @@ function AuthenticatedApplication({
             element={
               <Suspense fallback={<p className="nox-ai-context">Loading Inventory…</p>}>
                 <LazyInventoryExperience
+                  api={api}
+                  tenantId={activeTenant?.tenantId}
+                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/procurement/*"
+            element={
+              <Suspense fallback={<p className="nox-ai-context">Loading Procurement…</p>}>
+                <LazyProcurementExperience
                   api={api}
                   tenantId={activeTenant?.tenantId}
                   modulePermissions={tenantContext?.authorization.modulePermissions ?? []}

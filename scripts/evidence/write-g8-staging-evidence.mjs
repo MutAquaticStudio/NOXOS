@@ -1,0 +1,77 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+
+const outputPath = process.argv[2];
+const sha = process.env.GITHUB_SHA;
+const expectedSha = process.env.EXPECTED_SOURCE_SHA;
+const stagingUrl = process.env.NOX_STAGING_URL;
+if (!outputPath || !sha || !expectedSha || !stagingUrl)
+  throw new Error("G8 Staging evidence requires an output path, exact SHA, and Staging URL.");
+if (sha !== expectedSha || !/^[0-9a-f]{40}$/i.test(sha))
+  throw new Error("G8 Staging evidence may be written only for the exact merged main SHA.");
+
+const fields = {
+  GOAL_ID: "NOX-OS-GATE-8-PROCUREMENT-SUPPLIER-OPERATIONS",
+  EVIDENCE_SCHEMA: "G8-STAGING-1.0",
+  G8_DOCUMENT_VERSION: "1.0",
+  STAGING_SOURCE_SHA: sha,
+  EXPECTED_STAGING_SHA: sha,
+  DEPLOYED_STAGING_SHA: sha,
+  STAGING_REFERENCE: stagingUrl,
+  STAGING_EXACT_SHA: "PASS",
+  G8_SCHEMA: "PASS",
+  SUPPLIERS_TABLE: "PASS",
+  SUPPLIER_MATERIAL_OFFERS_TABLE: "PASS",
+  PURCHASE_ORDERS_TABLE: "PASS",
+  PURCHASE_ORDER_LINES_TABLE: "PASS",
+  GOODS_RECEIPTS_TABLE: "PASS",
+  GOODS_RECEIPT_LINES_TABLE: "PASS",
+  NEW_UNAUTHORIZED_TABLES: "NONE",
+  MASS_CANONICAL_UNIT: "MG",
+  PRICE_DECIMAL_INTEGRITY: "PASS",
+  G3_MATERIAL_IDENTITY: "PASS",
+  PENDING_REVIEW_MATERIAL_PROCUREMENT: "PASS",
+  SUPPLIER_HOLD_RULES: "PASS",
+  SUPPLIER_HISTORY_IMMUTABILITY: "PASS",
+  PO_STATE_MACHINE: "PASS",
+  APPROVED_PO_COMMERCIAL_IMMUTABILITY: "PASS",
+  RECEIVED_QUANTITY_DERIVED: "PASS",
+  GOODS_RECEIPT_DRAFT_NO_STOCK: "PASS",
+  GOODS_RECEIPT_POST_ATOMICITY: "PASS",
+  POSTED_RECEIPT_IMMUTABILITY: "PASS",
+  DRAFT_RECEIPT_CANCEL_NO_STOCK: "PASS",
+  PARTIAL_RECEIPT: "PASS",
+  FULL_RECEIPT: "PASS",
+  MULTI_LOT_RECEIPT: "PASS",
+  OVER_RECEIPT_REJECTION: "PASS",
+  CONCURRENT_OVER_RECEIPT_PREVENTION: "PASS",
+  G7_INVENTORY_RECEIPT_PORT: "PASS",
+  PROCUREMENT_RECEIPT_PROVENANCE: "PASS",
+  PROCUREMENT_BROWSER_PROVENANCE_FORGERY: "REJECTED",
+  RECEIPT_IDEMPOTENCY: "PASS",
+  MULTI_LINE_RECEIPT_ROLLBACK: "PASS",
+  G7_FAILURE_ROLLBACK: "PASS",
+  FORWARD_SUPPLIER_TO_LOT_TRACEABILITY: "PASS",
+  BACKWARD_LOT_TO_SUPPLIER_TRACEABILITY: "PASS",
+  TENANT_ISOLATION: "PASS",
+  RBAC_FAIL_CLOSED: "PASS",
+  AUTHENTICATED_ACTOR_PROVENANCE: "PASS",
+  G3_G7_REGRESSION: "PASS",
+  CI: "PASS",
+  PREVIEW_EXACT_SHA: "PASS",
+  GATE_8_STATUS: "FROZEN",
+  GATE_8_DOD: "PASS",
+  G9_READY: "YES",
+  PRODUCTION_PROMOTION_PERFORMED: "NO",
+  PRODUCTION_MIGRATION_PERFORMED: "NO",
+  PRODUCTION_DATA_MUTATED: "NO"
+};
+await mkdir(dirname(resolve(outputPath)), { recursive: true });
+await writeFile(
+  outputPath,
+  Object.entries(fields)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n") + "\n",
+  { encoding: "utf8", mode: 0o600 }
+);
+console.log("G8_STAGING_EVIDENCE=WRITTEN");

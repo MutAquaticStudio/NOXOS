@@ -56,6 +56,7 @@ describe("canonical Module Registry", () => {
       "platform",
       "material-intelligence",
       "inventory",
+      "procurement",
       "settings",
       "support",
       "design-studio",
@@ -78,18 +79,18 @@ describe("canonical Module Registry", () => {
   });
 
   it("keeps disabled future modules unavailable even when a UI caller presents flags", () => {
-    const procurement = moduleDefinitions.find(
-      (definition) => definition.descriptor.id === "procurement"
+    const production = moduleDefinitions.find(
+      (definition) => definition.descriptor.id === "production"
     );
-    if (!procurement) {
-      throw new Error("Expected procurement declaration.");
+    if (!production) {
+      throw new Error("Expected production declaration.");
     }
 
     expect(
-      resolveModuleAvailability(procurement.descriptor, {
-        featureFlags: new Set(["module.procurement"]),
-        entitlements: new Set(["module.procurement"]),
-        permissions: new Set(procurement.descriptor.permissions)
+      resolveModuleAvailability(production.descriptor, {
+        featureFlags: new Set(["module.production"]),
+        entitlements: new Set(["module.production"]),
+        permissions: new Set(production.descriptor.permissions)
       }).state
     ).toBe("DISABLED");
   });
@@ -189,6 +190,7 @@ describe("canonical Module Registry", () => {
 
     expect(registeredPaths).toContain("/materials/foundation");
     expect(registeredPaths).toContain("/inventory/foundation");
-    expect(registeredPaths).not.toContain("/procurement/foundation");
+    expect(registeredPaths).toContain("/procurement/foundation");
+    expect(registeredPaths).not.toContain("/production/foundation");
   });
 });

@@ -18,6 +18,7 @@ const protectionBypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 const captureDirectory = process.env.G5_VISUAL_CAPTURE_DIR;
 const g6CaptureDirectory = process.env.G6_VISUAL_CAPTURE_DIR;
 const g7CaptureDirectory = process.env.G7_VISUAL_CAPTURE_DIR;
+const g8CaptureDirectory = process.env.G8_VISUAL_CAPTURE_DIR;
 const runtimeDatabaseUrl = required("NOX_PREVIEW_RUNTIME_DATABASE_URL");
 const suffix = randomUUID().slice(0, 8);
 const inventoryStock = new Map<string, { locationId: string; lots: Map<string, string> }>();
@@ -126,6 +127,8 @@ try {
 
   await runG7PreviewAcceptance(page, tenantId);
 
+  await runG8PreviewAcceptance(page, tenantId);
+
   await page.goto(url("/trials"), { waitUntil: "networkidle" });
   await visible(page, page.getByRole("heading", { name: "Trial Registry" }));
   await capture(page, "trial-registry-desktop", "/trials");
@@ -169,6 +172,9 @@ console.log("G6_PREVIEW_IMMUTABLE_HISTORY=PASS");
 console.log("G7_PREVIEW_INVENTORY_ACCEPTANCE=PASS");
 console.log("G7_PREVIEW_TRIAL_RESERVATION=PASS");
 console.log("G7_PREVIEW_TRIAL_CONSUMPTION=PASS");
+console.log("G8_PREVIEW_PROCUREMENT_ACCEPTANCE=PASS");
+console.log("G8_PREVIEW_RECEIPT_ATOMICITY=PASS");
+console.log("G8_PREVIEW_TRACEABILITY=PASS");
 
 function required(name: string): string {
   const value = process.env[name];
@@ -977,6 +983,352 @@ async function runG7PreviewAcceptance(page: Page, tenantId: string): Promise<voi
   await captureG7(page, "inventory-lot-detail-desktop", `/inventory/lots/${lotId}`);
 }
 
+async function runG8PreviewAcceptance(page: Page, tenantId: string): Promise<void> {
+  type PurchaseOrderResult = {
+    purchaseOrder: {
+      id: string;
+      status: string;
+      lines: Array<{
+        id: string;
+        materialId: string;
+        orderedQuantityMg: string;
+        receivedQuantityMg: string;
+        remainingQuantityMg: string;
+      }>;
+    };
+  };
+  type ReceiptResult = {
+    goodsReceipt: {
+      id: string;
+      status: string;
+      purchaseOrderId: string;
+      supplierId: string;
+      lines: Array<{
+        id: string;
+        inventoryLotId: string | null;
+        inventoryMovementId: string | null;
+        receivedQuantityMg: string;
+      }>;
+    };
+  };
+  type LotTrace = {
+    lot: { id: string; materialId: string; lotCode: string };
+    movements: Array<{
+      id: string;
+      sourceModule: string;
+      sourceReferenceId: string | null;
+      quantityMg: string;
+    }>;
+  };
+
+  const stock = inventoryStock.get(tenantId);
+  const materialId = stock ? [...stock.lots.keys()][0] : undefined;
+  if (!stock || !materialId)
+    throw new Error("G8 Preview requires the accepted G7 Location and G3 Material seam.");
+
+  const context = expectStatus(
+    await api<{
+      moduleAvailability: Array<{ moduleId: string; state: string }>;
+      authorization: { modulePermissions: string[] };
+    }>(page, tenantId, "/context"),
+    200,
+    "G8 Preview tenant context"
+  );
+  if (
+    context.moduleAvailability.find((item) => item.moduleId === "procurement")?.state !==
+      "AVAILABLE" ||
+    !context.authorization.modulePermissions.includes("module.procurement.receipt.post")
+  )
+    throw new Error("G8 Procurement is not AVAILABLE with receipt authority in Preview.");
+
+  const supplier = expectStatus(
+    await api<{ supplier: { id: string; status: string } }>(
+      page,
+      tenantId,
+      "/procurement/suppliers",
+      "POST",
+      {
+        supplierCode: `G8-${suffix.toUpperCase()}`,
+        legalName: `G8 Preview Supplier ${suffix}`,
+        displayName: `G8 Preview Supplier ${suffix}`,
+        countryCode: "AU",
+        primaryEmail: null,
+        primaryPhone: null,
+        website: null,
+        taxIdentifier: null,
+        defaultCurrency: "AUD",
+        defaultIncoterm: "DAP",
+        notes: "Exact-SHA G8 Preview acceptance"
+      }
+    ),
+    201,
+    "G8 Supplier creation"
+  ).supplier;
+
+  expectStatus(
+    await api(page, tenantId, "/procurement/supplier-offers", "POST", {
+      supplierId: supplier.id,
+      materialId,
+      supplierSku: `SKU-${suffix.toUpperCase()}`,
+      supplierMaterialName: `G8 Preview Material ${suffix}`,
+      packSizeMg: "25000000",
+      minimumOrderQuantityMg: "1000000",
+      unitPricePerKg: "123.4567",
+      currencyCode: "AUD",
+      leadTimeDays: 14,
+      lastQuotedAt: new Date().toISOString(),
+      sourceReference: "G8 exact-SHA Preview fixture"
+    }),
+    201,
+    "G8 Supplier Offer creation"
+  );
+
+  const createPo = async (number: string, quantityMg: string) =>
+    expectStatus(
+      await api<PurchaseOrderResult>(page, tenantId, "/procurement/purchase-orders", "POST", {
+        poNumber: number,
+        supplierId: supplier.id,
+        orderType: "STANDARD",
+        currencyCode: "AUD",
+        supplierQuoteReference: `QUOTE-${suffix}`,
+        expectedDeliveryAt: null,
+        incoterm: "DAP",
+        freightAmount: "0",
+        notes: "G8 exact-SHA Preview fixture",
+        lines: [
+          {
+            materialId,
+            supplierOfferId: null,
+            supplierSkuSnapshot: `SKU-${suffix.toUpperCase()}`,
+            supplierMaterialNameSnapshot: `G8 Preview Material ${suffix}`,
+            orderedQuantityMg: quantityMg,
+            unitPricePerKg: "123.4567",
+            expectedDeliveryAt: null,
+            notes: null
+          }
+        ]
+      }),
+      201,
+      `G8 Purchase Order ${number}`
+    ).purchaseOrder;
+  const approvePo = async (id: string) =>
+    expectStatus(
+      await api<PurchaseOrderResult>(
+        page,
+        tenantId,
+        `/procurement/purchase-orders/${id}/approve`,
+        "POST"
+      ),
+      200,
+      "G8 Purchase Order approval"
+    ).purchaseOrder;
+  const createReceipt = async (
+    purchaseOrderId: string,
+    purchaseOrderLineId: string,
+    receiptNumber: string,
+    lines: Array<{ quantityMg: string; lotCode: string }>
+  ) =>
+    expectStatus(
+      await api<ReceiptResult>(page, tenantId, "/procurement/goods-receipts", "POST", {
+        receiptNumber,
+        purchaseOrderId,
+        supplierDeliveryReference: `DEL-${receiptNumber}`,
+        receivedAt: new Date().toISOString(),
+        lines: lines.map((line) => ({
+          purchaseOrderLineId,
+          materialId,
+          receivedQuantityMg: line.quantityMg,
+          lotCode: line.lotCode,
+          supplierLotCode: `SUP-${line.lotCode}`,
+          manufacturedAt: null,
+          expiresAt: null,
+          retestAt: null,
+          destinationLocationId: stock.locationId
+        }))
+      }),
+      201,
+      `G8 Goods Receipt ${receiptNumber}`
+    ).goodsReceipt;
+  const postReceipt = async (receiptId: string) =>
+    expectStatus(
+      await api<ReceiptResult>(
+        page,
+        tenantId,
+        `/procurement/goods-receipts/${receiptId}/post`,
+        "POST"
+      ),
+      200,
+      "G8 Goods Receipt POST"
+    ).goodsReceipt;
+
+  const po = await createPo(`G8-PO-${suffix}`, "25000000");
+  const approved = await approvePo(po.id);
+  const poLineId = approved.lines[0]?.id;
+  if (!poLineId) throw new Error("G8 approved Purchase Order has no line.");
+  const immutable = await api(page, tenantId, `/procurement/purchase-orders/${po.id}`, "PUT", {
+    notes: "forbidden commercial rewrite"
+  });
+  if (immutable.status !== 409)
+    throw new Error("G8 Preview allowed APPROVED Purchase Order mutation.");
+
+  const lotA = `G8-A-${suffix}`;
+  const draftA = await createReceipt(po.id, poLineId, `G8-GR-A-${suffix}`, [
+    { quantityMg: "10000000", lotCode: lotA }
+  ]);
+  const beforeLots = expectStatus(
+    await api<{ lots: Array<{ lotCode: string }> }>(page, tenantId, "/inventory/lots"),
+    200,
+    "G8 DRAFT Inventory probe"
+  );
+  if (beforeLots.lots.some((item) => item.lotCode === lotA))
+    throw new Error("DRAFT Goods Receipt changed G7 Inventory.");
+  const postedA = await postReceipt(draftA.id);
+  if (
+    postedA.status !== "POSTED" ||
+    !postedA.lines[0]?.inventoryLotId ||
+    !postedA.lines[0]?.inventoryMovementId
+  )
+    throw new Error("G8 Goods Receipt POST did not persist G7 trace references.");
+  const traceA = expectStatus(
+    await api<LotTrace>(page, tenantId, `/inventory/lots/${postedA.lines[0].inventoryLotId}`),
+    200,
+    "G8 forward Inventory trace"
+  );
+  if (
+    !traceA.movements.some(
+      (movement) =>
+        movement.id === postedA.lines[0]?.inventoryMovementId &&
+        movement.sourceModule === "PROCUREMENT" &&
+        movement.sourceReferenceId === postedA.lines[0]?.id &&
+        movement.quantityMg === "10000000"
+    )
+  )
+    throw new Error("G8→G7 PROCUREMENT provenance is incomplete.");
+
+  const partial = expectStatus(
+    await api<PurchaseOrderResult>(page, tenantId, `/procurement/purchase-orders/${po.id}`),
+    200,
+    "G8 partial receipt derivation"
+  ).purchaseOrder;
+  if (
+    partial.status !== "PARTIALLY_RECEIVED" ||
+    partial.lines[0]?.receivedQuantityMg !== "10000000" ||
+    partial.lines[0]?.remainingQuantityMg !== "15000000"
+  )
+    throw new Error("G8 partial Purchase Order totals were not derived from POSTED receipts.");
+
+  const draftB = await createReceipt(po.id, poLineId, `G8-GR-B-${suffix}`, [
+    { quantityMg: "10000000", lotCode: `G8-B1-${suffix}` },
+    { quantityMg: "5000000", lotCode: `G8-B2-${suffix}` }
+  ]);
+  const postedB = await postReceipt(draftB.id);
+  if (
+    postedB.lines.length !== 2 ||
+    postedB.lines.some((line) => !line.inventoryLotId || !line.inventoryMovementId)
+  )
+    throw new Error("G8 multi-Lot receipt did not create two exact G7 traces.");
+  const complete = expectStatus(
+    await api<PurchaseOrderResult>(page, tenantId, `/procurement/purchase-orders/${po.id}`),
+    200,
+    "G8 full receipt derivation"
+  ).purchaseOrder;
+  if (
+    complete.status !== "RECEIVED" ||
+    complete.lines[0]?.receivedQuantityMg !== "25000000" ||
+    complete.lines[0]?.remainingQuantityMg !== "0"
+  )
+    throw new Error("G8 full Purchase Order receipt did not close exact quantity.");
+
+  const movementCounts = new Map<string, number>();
+  for (const line of postedB.lines) {
+    const trace = expectStatus(
+      await api<LotTrace>(page, tenantId, `/inventory/lots/${line.inventoryLotId}`),
+      200,
+      "G8 reverse Inventory trace"
+    );
+    movementCounts.set(
+      line.id,
+      trace.movements.filter(
+        (movement) =>
+          movement.sourceModule === "PROCUREMENT" && movement.sourceReferenceId === line.id
+      ).length
+    );
+  }
+  await postReceipt(draftB.id);
+  for (const line of postedB.lines) {
+    const trace = expectStatus(
+      await api<LotTrace>(page, tenantId, `/inventory/lots/${line.inventoryLotId}`),
+      200,
+      "G8 idempotent Inventory trace"
+    );
+    const count = trace.movements.filter(
+      (movement) =>
+        movement.sourceModule === "PROCUREMENT" && movement.sourceReferenceId === line.id
+    ).length;
+    if (count !== 1 || count !== movementCounts.get(line.id))
+      throw new Error("G8 receipt retry duplicated G7 stock.");
+  }
+
+  const overPo = await createPo(`G8-OVER-${suffix}`, "10000000");
+  const overApproved = await approvePo(overPo.id);
+  const overLineId = overApproved.lines[0]?.id;
+  if (!overLineId) throw new Error("G8 over-receipt PO has no line.");
+  const overReceipt = await createReceipt(overPo.id, overLineId, `G8-GR-OVER-${suffix}`, [
+    { quantityMg: "10000001", lotCode: `G8-OVER-${suffix}` }
+  ]);
+  const overPost = await api(
+    page,
+    tenantId,
+    `/procurement/goods-receipts/${overReceipt.id}/post`,
+    "POST"
+  );
+  if (overPost.status !== 409)
+    throw new Error("G8 Preview allowed receipt beyond ordered quantity.");
+
+  const heldCompatible = await createPo(`G8-HOLD-OLD-${suffix}`, "1000");
+  const heldApproved = await approvePo(heldCompatible.id);
+  expectStatus(
+    await api(page, tenantId, `/procurement/suppliers/${supplier.id}`, "PUT", { status: "HOLD" }),
+    200,
+    "G8 Supplier HOLD"
+  );
+  const newHeldPo = await createPo(`G8-HOLD-NEW-${suffix}`, "1000");
+  const heldApproval = await api(
+    page,
+    tenantId,
+    `/procurement/purchase-orders/${newHeldPo.id}/approve`,
+    "POST"
+  );
+  if (heldApproval.status !== 409)
+    throw new Error("G8 Supplier HOLD allowed new Purchase Order approval.");
+  const heldLineId = heldApproved.lines[0]?.id;
+  if (!heldLineId) throw new Error("G8 pre-HOLD approved PO has no line.");
+  const heldReceipt = await createReceipt(heldApproved.id, heldLineId, `G8-GR-HOLD-${suffix}`, [
+    { quantityMg: "1000", lotCode: `G8-HOLD-${suffix}` }
+  ]);
+  await postReceipt(heldReceipt.id);
+
+  const denied = await api(page, randomUUID(), `/procurement/suppliers/${supplier.id}`);
+  if (![403, 404].includes(denied.status))
+    throw new Error("G8 Preview accepted forged cross-tenant Procurement access.");
+  const baseLotId = [...stock.lots.values()][0];
+  const forged = await api(page, tenantId, `/inventory/lots/${baseLotId}/receive`, "POST", {
+    quantityMg: "1",
+    toLocationId: stock.locationId,
+    reasonCode: "G8_PREVIEW_FORGERY",
+    operationKey: `preview:${suffix}:forged-procurement`,
+    sourceModule: "PROCUREMENT",
+    sourceReferenceId: postedA.lines[0].id
+  });
+  if (forged.status !== 400) throw new Error("G8 Preview browser forged PROCUREMENT provenance.");
+
+  await page.goto(url("/procurement"), { waitUntil: "networkidle" });
+  await visible(page, page.getByRole("heading", { name: "Procurement" }));
+  await visible(page, page.getByRole("heading", { name: "Purchase Orders" }));
+  await visible(page, page.getByText(`G8-PO-${suffix}`));
+  await captureG8(page, "procurement-purchase-orders-desktop", "/procurement");
+}
+
 async function assertTrialConsumption(
   page: Page,
   tenantId: string,
@@ -1140,6 +1492,20 @@ async function captureG7(page: Page, name: string, route: string) {
   await page.screenshot({ path: resolve(g7CaptureDirectory, `${name}.png`), fullPage: true });
   await writeFile(
     resolve(g7CaptureDirectory, `${name}.json`),
+    JSON.stringify(
+      { route, viewport: page.viewportSize(), sha: expectedSha, environment: "preview" },
+      null,
+      2
+    ) + "\n"
+  );
+}
+
+async function captureG8(page: Page, name: string, route: string) {
+  if (!g8CaptureDirectory) return;
+  await mkdir(g8CaptureDirectory, { recursive: true });
+  await page.screenshot({ path: resolve(g8CaptureDirectory, `${name}.png`), fullPage: true });
+  await writeFile(
+    resolve(g8CaptureDirectory, `${name}.json`),
     JSON.stringify(
       { route, viewport: page.viewportSize(), sha: expectedSha, environment: "preview" },
       null,
