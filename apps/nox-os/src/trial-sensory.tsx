@@ -4,7 +4,10 @@ import type { FormulaCandidate, OsmoTaxonomyAssignmentType } from "@nox-os/desig
 import {
   formatMassMg,
   type FinalEvaluationDecision,
-  type SensoryDeltaDraft
+  type SensoryDeltaDraft,
+  type TrialInventoryAvailability,
+  type TrialLotAllocation,
+  type TrialPreparationPlan
 } from "@nox-os/trial-sensory/browser";
 import type { ApiClient } from "./platform-control";
 
@@ -19,7 +22,8 @@ const permissions = {
   revision: "module.trial-sensory.revision.request",
   recommendApproval: "module.trial-sensory.approval.recommend",
   freezeRevision: "module.design-studio.formula.freeze",
-  approveFormula: "module.design-studio.formula.approve"
+  approveFormula: "module.design-studio.formula.approve",
+  inventoryRead: "module.inventory.read"
 } as const;
 
 type TrialPayload = {
@@ -74,6 +78,19 @@ type FormulaSummary = {
 type TaxonomyChoice = {
   assignmentType: OsmoTaxonomyAssignmentType;
   taxonomyTerm: string;
+};
+
+type TrialInventoryTrace = {
+  trialId: string;
+  movements: Array<{
+    id: string;
+    lotId: string;
+    materialId: string;
+    quantityMg: string;
+    fromLocationId: string | null;
+    sourceModule: string;
+    sourceReferenceId: string | null;
+  }>;
 };
 
 function has(values: readonly string[], permission: string): boolean {
@@ -302,6 +319,10 @@ function TrialDetail({
   const [deltas, setDeltas] = useState<SensoryDeltaDraft[]>([]);
   const [decision, setDecision] = useState<FinalEvaluationDecision>("REVISION_REQUIRED");
   const [revisionCandidates, setRevisionCandidates] = useState<FormulaCandidate[]>([]);
+  const [preparationPlan, setPreparationPlan] = useState<TrialPreparationPlan>();
+  const [inventory, setInventory] = useState<TrialInventoryAvailability>();
+  const [inventoryTrace, setInventoryTrace] = useState<TrialInventoryTrace>();
+  const [allocations, setAllocations] = useState<TrialLotAllocation[]>([]);
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
   const [working, setWorking] = useState(false);
@@ -325,6 +346,46 @@ function TrialDetail({
       setDeltas(payload.evaluation.deltas);
       if (payload.evaluation.decision) setDecision(payload.evaluation.decision);
     }
+    if (payload.trial.status === "DRAFT") await loadInventory();
+    else if (has(modulePermissions, permissions.inventoryRead)) await loadInventoryTrace();
+  };
+
+  const loadInventory = async () => {
+    const [planPayload, inventoryPayload] = await Promise.all([
+      api<{ plan: TrialPreparationPlan }>(`/trials/${trialId}/preparation-plan`, { tenantId }),
+      api<{ availability: TrialInventoryAvailability }>(`/trials/${trialId}/inventory`, {
+        tenantId
+      })
+    ]);
+    setPreparationPlan(planPayload.plan);
+    setInventory(inventoryPayload.availability);
+    setAllocations((current) => {
+      if (current.length > 0 || inventoryPayload.availability.activeReservations.length > 0)
+        return current;
+      return planPayload.plan.requirements.flatMap((requirement) => {
+        const candidate = inventoryPayload.availability.allocations.find(
+          (item) => item.materialId === requirement.materialId && item.eligible
+        );
+        return candidate
+          ? [
+              {
+                materialId: requirement.materialId,
+                lotId: candidate.lotId,
+                locationId: candidate.locationId,
+                quantityMg: requirement.requiredMassMg
+              }
+            ]
+          : [];
+      });
+    });
+  };
+
+  const loadInventoryTrace = async () => {
+    const payload = await api<{ trace: TrialInventoryTrace }>(
+      `/inventory/trials/${trialId}/trace`,
+      { tenantId }
+    );
+    setInventoryTrace(payload.trace);
   };
 
   useEffect(() => {
@@ -379,6 +440,10 @@ function TrialDetail({
             taxonomyTerm
           }))
         ]);
+        if (payload.trial.status === "DRAFT")
+          void loadInventory().catch((reason) => setError(problem(reason)));
+        else if (has(modulePermissions, permissions.inventoryRead))
+          void loadInventoryTrace().catch((reason) => setError(problem(reason)));
       })
       .catch((reason) => current && setError(problem(reason)));
     return () => {
@@ -444,6 +509,41 @@ function TrialDetail({
     () => new Map(formula?.lines.map((line) => [line.materialId, line.displayName]) ?? []),
     [formula]
   );
+  const requiredByMaterial = useMemo(
+    () =>
+      new Map(
+        preparationPlan?.requirements.map((item) => [
+          item.materialId,
+          BigInt(item.requiredMassMg)
+        ]) ?? []
+      ),
+    [preparationPlan]
+  );
+  const allocatedByMaterial = useMemo(() => {
+    const values = new Map<string, bigint>();
+    for (const item of allocations)
+      values.set(
+        item.materialId,
+        (values.get(item.materialId) ?? 0n) + BigInt(item.quantityMg || "0")
+      );
+    return values;
+  }, [allocations]);
+  const activeReservedByMaterial = useMemo(() => {
+    const values = new Map<string, bigint>();
+    for (const item of inventory?.activeReservations ?? [])
+      values.set(item.materialId, (values.get(item.materialId) ?? 0n) + BigInt(item.quantityMg));
+    return values;
+  }, [inventory]);
+  const exactDraftAllocation =
+    requiredByMaterial.size > 0 &&
+    [...requiredByMaterial].every(
+      ([materialId, mass]) => allocatedByMaterial.get(materialId) === mass
+    );
+  const exactActiveReservation =
+    requiredByMaterial.size > 0 &&
+    [...requiredByMaterial].every(
+      ([materialId, mass]) => activeReservedByMaterial.get(materialId) === mass
+    );
   if (!trial) return <p aria-busy="true">Loading Trial…</p>;
   const canEditEvaluation = evaluation?.status === "DRAFT" && trial.status === "PREPARED";
 
@@ -517,36 +617,244 @@ function TrialDetail({
             </div>
           </dl>
           {trial.status === "DRAFT" ? (
-            <div className="nox-trial-actions">
-              {has(modulePermissions, permissions.prepare) ? (
-                <button
-                  type="button"
-                  disabled={working}
-                  onClick={() =>
-                    void action(
-                      () => api(`/trials/${trialId}/prepare`, { method: "POST", tenantId }),
-                      "Trial prepared with exact G4 scaling."
-                    )
-                  }
-                >
-                  Prepare exact weighing plan
-                </button>
+            <>
+              <h3>Lot allocation</h3>
+              <p className="nox-design-muted">
+                Reservation reduces Available only. Physical stock is consumed atomically when this
+                Trial enters PREPARED.
+              </p>
+              <div className="nox-table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Material required</th>
+                      <th>Required</th>
+                      <th>Allocated</th>
+                      <th>Remaining</th>
+                      <th>Selected Lot / Location</th>
+                      <th>On Hand</th>
+                      <th>Reserved</th>
+                      <th>Available</th>
+                      <th>Expiry / HOLD</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preparationPlan?.requirements.flatMap((requirement) => {
+                      const rows = allocations.filter(
+                        (item) => item.materialId === requirement.materialId
+                      );
+                      const rendered =
+                        rows.length > 0
+                          ? rows
+                          : [
+                              {
+                                materialId: requirement.materialId,
+                                lotId: "",
+                                locationId: "",
+                                quantityMg: requirement.requiredMassMg
+                              }
+                            ];
+                      const candidates =
+                        inventory?.allocations.filter(
+                          (item) => item.materialId === requirement.materialId
+                        ) ?? [];
+                      return rendered.map((allocation, allocationIndex) => {
+                        const candidate = candidates.find(
+                          (item) =>
+                            item.lotId === allocation.lotId &&
+                            item.locationId === allocation.locationId
+                        );
+                        const allocated = allocatedByMaterial.get(requirement.materialId) ?? 0n;
+                        const remaining = BigInt(requirement.requiredMassMg) - allocated;
+                        return (
+                          <tr key={`${requirement.materialId}:${allocationIndex}`}>
+                            <td>{names.get(requirement.materialId) ?? requirement.materialId}</td>
+                            <td>{formatMassMg(requirement.requiredMassMg)}</td>
+                            <td>
+                              <input
+                                aria-label="Allocated mass in milligrams"
+                                inputMode="numeric"
+                                pattern="[1-9][0-9]*"
+                                value={allocation.quantityMg}
+                                disabled={exactActiveReservation}
+                                onChange={(event) =>
+                                  setAllocations((current) => {
+                                    const matches = current.filter(
+                                      (item) => item.materialId === requirement.materialId
+                                    );
+                                    if (matches.length === 0)
+                                      return [
+                                        ...current,
+                                        { ...allocation, quantityMg: event.target.value }
+                                      ];
+                                    let seen = -1;
+                                    return current.map((item) =>
+                                      item.materialId === requirement.materialId &&
+                                      ++seen === allocationIndex
+                                        ? { ...item, quantityMg: event.target.value }
+                                        : item
+                                    );
+                                  })
+                                }
+                              />
+                            </td>
+                            <td>{formatMassMg((remaining > 0n ? remaining : 0n).toString())}</td>
+                            <td>
+                              <select
+                                aria-label="Inventory Lot and Location"
+                                value={`${allocation.lotId}:${allocation.locationId}`}
+                                disabled={exactActiveReservation}
+                                onChange={(event) => {
+                                  const selected = candidates.find(
+                                    (item) =>
+                                      `${item.lotId}:${item.locationId}` === event.target.value
+                                  );
+                                  if (!selected) return;
+                                  setAllocations((current) => {
+                                    const matches = current.filter(
+                                      (item) => item.materialId === requirement.materialId
+                                    );
+                                    const next = {
+                                      ...allocation,
+                                      lotId: selected.lotId,
+                                      locationId: selected.locationId
+                                    };
+                                    if (matches.length === 0) return [...current, next];
+                                    let seen = -1;
+                                    return current.map((item) =>
+                                      item.materialId === requirement.materialId &&
+                                      ++seen === allocationIndex
+                                        ? next
+                                        : item
+                                    );
+                                  });
+                                }}
+                              >
+                                <option value=":" disabled>
+                                  Select eligible stock
+                                </option>
+                                {candidates.map((item) => (
+                                  <option
+                                    key={`${item.lotId}:${item.locationId}`}
+                                    value={`${item.lotId}:${item.locationId}`}
+                                    disabled={!item.eligible}
+                                  >
+                                    {item.lotCode} · {item.locationCode}
+                                    {item.eligible ? "" : ` · ${item.ineligibilityReason}`}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td>{candidate ? formatMassMg(candidate.onHandMg) : "—"}</td>
+                            <td>{candidate ? formatMassMg(candidate.reservedMg) : "—"}</td>
+                            <td>{candidate ? formatMassMg(candidate.availableMg) : "—"}</td>
+                            <td>
+                              {candidate
+                                ? `${candidate.expiresAt ? new Date(candidate.expiresAt).toLocaleDateString() : "No expiry"}${candidate.availabilityStatus === "HOLD" ? " · HOLD" : ""}${candidate.retestAt && new Date(candidate.retestAt) <= new Date() ? " · RETEST DUE" : ""}`
+                                : "—"}
+                            </td>
+                          </tr>
+                        );
+                      });
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {!exactActiveReservation && has(modulePermissions, permissions.prepare) ? (
+                <div className="nox-trial-actions">
+                  <button
+                    type="button"
+                    disabled={
+                      working ||
+                      !exactDraftAllocation ||
+                      allocations.some((item) => !item.lotId || !item.locationId)
+                    }
+                    onClick={() =>
+                      void action(async () => {
+                        await api(`/trials/${trialId}/inventory/reservations`, {
+                          method: "POST",
+                          tenantId,
+                          body: {
+                            allocations,
+                            operationKey: `trial:${trialId}:allocation:${crypto.randomUUID()}`
+                          }
+                        });
+                        await loadInventory();
+                      }, "Exact Trial inventory reserved.")
+                    }
+                  >
+                    Reserve exact allocation
+                  </button>
+                  <button
+                    type="button"
+                    disabled={working}
+                    onClick={() =>
+                      setAllocations((current) => {
+                        const last = current.at(-1);
+                        return last ? [...current, { ...last, quantityMg: "1" }] : current;
+                      })
+                    }
+                  >
+                    Add split-lot row
+                  </button>
+                </div>
               ) : null}
-              {has(modulePermissions, permissions.cancel) ? (
-                <button
-                  type="button"
-                  disabled={working}
-                  onClick={() =>
-                    void action(
-                      () => api(`/trials/${trialId}/cancel`, { method: "POST", tenantId }),
-                      "Trial cancelled."
-                    )
-                  }
-                >
-                  Cancel Trial
-                </button>
+              {exactActiveReservation ? (
+                <p role="status">
+                  Exact allocation reserved. Available stock reflects the reservation; on-hand is
+                  unchanged.
+                </p>
               ) : null}
-            </div>
+              <div className="nox-trial-actions">
+                {has(modulePermissions, permissions.prepare) ? (
+                  <button
+                    type="button"
+                    disabled={working || !exactActiveReservation}
+                    onClick={() =>
+                      void action(
+                        () => api(`/trials/${trialId}/prepare`, { method: "POST", tenantId }),
+                        "Trial prepared with exact G4 scaling."
+                      )
+                    }
+                  >
+                    Prepare exact weighing plan
+                  </button>
+                ) : null}
+                {exactActiveReservation ? (
+                  <button
+                    type="button"
+                    disabled={working}
+                    onClick={() =>
+                      void action(async () => {
+                        await api(`/trials/${trialId}/inventory/release`, {
+                          method: "POST",
+                          tenantId,
+                          body: { operationKey: `trial:${trialId}:release:${crypto.randomUUID()}` }
+                        });
+                        setAllocations([]);
+                        await loadInventory();
+                      }, "Draft Trial reservations released without stock movement.")
+                    }
+                  >
+                    Release reservation
+                  </button>
+                ) : null}
+                {has(modulePermissions, permissions.cancel) ? (
+                  <button
+                    type="button"
+                    disabled={working}
+                    onClick={() =>
+                      void action(
+                        () => api(`/trials/${trialId}/cancel`, { method: "POST", tenantId }),
+                        "Trial cancelled."
+                      )
+                    }
+                  >
+                    Cancel Trial
+                  </button>
+                ) : null}
+              </div>
+            </>
           ) : null}
           <h3>Exact weighing table</h3>
           <div className="nox-table-wrap">
@@ -572,6 +880,44 @@ function TrialDetail({
             </table>
           </div>
           {trial.lines.length === 0 ? <p>No weighing plan until the Trial is prepared.</p> : null}
+          {trial.status !== "DRAFT" && inventoryTrace ? (
+            <>
+              <h3>Consumed Inventory Trace</h3>
+              <p className="nox-design-muted">
+                This physical preparation consumed the exact Lot set below. Evaluation does not
+                change these movements.
+              </p>
+              <div className="nox-table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Material</th>
+                      <th>Lot</th>
+                      <th>Location</th>
+                      <th>Consumed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {inventoryTrace.movements.map((movement) => (
+                      <tr key={movement.id}>
+                        <td>{names.get(movement.materialId) ?? movement.materialId}</td>
+                        <td>
+                          <a href={`/inventory/lots/${movement.lotId}`}>
+                            {movement.lotId.slice(0, 8)}…
+                          </a>
+                        </td>
+                        <td>{movement.fromLocationId ?? "—"}</td>
+                        <td>{formatMassMg(movement.quantityMg)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {inventoryTrace.movements.length === 0 ? (
+                <p className="nox-design-warning">No physical Inventory trace is available.</p>
+              ) : null}
+            </>
+          ) : null}
         </section>
         <section className="nox-design-panel" aria-labelledby="sensory-title">
           <p className="nox-ai-context">

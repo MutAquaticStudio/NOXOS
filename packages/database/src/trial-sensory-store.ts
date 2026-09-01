@@ -5,6 +5,10 @@ import type {
   Trial,
   TrialSensoryStore
 } from "@nox-os/trial-sensory";
+import {
+  cancelDraftTrialReservationsInTransaction,
+  consumeTrialReservationsInTransaction
+} from "./inventory-store.js";
 
 type SqlExecutor = Sql | TransactionSql;
 
@@ -273,6 +277,14 @@ class PostgresTrialSensoryStore implements TrialSensoryStore {
           )
         `;
       }
+      await consumeTrialReservationsInTransaction(tx, {
+        tenantId: input.tenantId,
+        actorUserId: input.actorUserId,
+        requestId: input.requestId,
+        correlationId: input.correlationId,
+        trialId: input.trialId,
+        requirements: input.lines
+      });
       const rows = await tx<{ id: string }[]>`
         update trial_sensory.trials set
           status = 'PREPARED', prepared_by_user_id = ${input.actorUserId},
@@ -297,6 +309,18 @@ class PostgresTrialSensoryStore implements TrialSensoryStore {
     input: Parameters<TrialSensoryStore["cancelTrial"]>[0]
   ): Promise<Trial | undefined> {
     const changed = await this.sql.begin(async (tx) => {
+      const locked = await tx<{ status: string }[]>`
+        select status from trial_sensory.trials
+        where tenant_id = ${input.tenantId} and id = ${input.trialId}
+        for update
+      `;
+      if (!locked[0] || !["DRAFT", "PREPARED"].includes(locked[0].status)) return false;
+      if (locked[0].status === "DRAFT") {
+        await cancelDraftTrialReservationsInTransaction(tx, {
+          ...input,
+          trialId: input.trialId
+        });
+      }
       const rows = await tx<{ formula_version_id: string }[]>`
         update trial_sensory.trials set
           status = 'CANCELLED', cancelled_by_user_id = ${input.actorUserId},

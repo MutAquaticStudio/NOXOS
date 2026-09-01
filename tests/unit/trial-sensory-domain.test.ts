@@ -21,13 +21,17 @@ const command = {
 
 function fixture(formula = g5FrozenFormula()) {
   const store = new InMemoryTrialSensoryStore();
-  const application = new TrialSensoryApplication(store, {
-    async findFrozenFormulaVersion(tenantId, formulaVersionId) {
-      return formula.tenantId === tenantId && formula.formulaVersionId === formulaVersionId
-        ? structuredClone(formula)
-        : undefined;
-    }
-  });
+  const application = new TrialSensoryApplication(
+    store,
+    {
+      async findFrozenFormulaVersion(tenantId, formulaVersionId) {
+        return formula.tenantId === tenantId && formula.formulaVersionId === formulaVersionId
+          ? structuredClone(formula)
+          : undefined;
+      }
+    },
+    store
+  );
   return { store, application };
 }
 

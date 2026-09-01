@@ -87,6 +87,80 @@ export const finalizeEvaluationSchema = z.object({
 });
 export type FinalizeEvaluationRequest = z.infer<typeof finalizeEvaluationSchema>;
 
+export const trialLotAllocationSchema = z
+  .object({
+    materialId: z.string().uuid(),
+    lotId: z.string().uuid(),
+    locationId: z.string().uuid(),
+    quantityMg: positiveMassMgSchema
+  })
+  .strict();
+export type TrialLotAllocation = z.infer<typeof trialLotAllocationSchema>;
+
+export const reserveTrialInventorySchema = z
+  .object({
+    allocations: z.array(trialLotAllocationSchema).min(1).max(500),
+    operationKey: z.string().trim().min(1).max(240)
+  })
+  .strict();
+export type ReserveTrialInventoryRequest = z.infer<typeof reserveTrialInventorySchema>;
+
+export const releaseTrialInventorySchema = z
+  .object({ operationKey: z.string().trim().min(1).max(240) })
+  .strict();
+export type ReleaseTrialInventoryRequest = z.infer<typeof releaseTrialInventorySchema>;
+
+export type TrialPreparationRequirement = {
+  materialId: string;
+  requiredMassMg: MassMg;
+  materialSnapshotHash: string;
+};
+
+export type TrialPreparationPlan = {
+  trialId: string;
+  formulaVersionId: string;
+  targetMassMg: MassMg;
+  requirements: readonly TrialPreparationRequirement[];
+};
+
+export type TrialInventoryLotAvailability = {
+  materialId: string;
+  lotId: string;
+  lotCode: string;
+  locationId: string;
+  locationCode: string;
+  onHandMg: MassMg;
+  reservedMg: MassMg;
+  availableMg: MassMg;
+  lifecycleStatus: "OPEN" | "CLOSED";
+  availabilityStatus: "AVAILABLE" | "HOLD";
+  expiresAt: Date | null;
+  retestAt: Date | null;
+  eligible: boolean;
+  ineligibilityReason: string | null;
+};
+
+export type TrialInventoryAvailability = {
+  trialId: string;
+  requirements: readonly TrialPreparationRequirement[];
+  allocations: readonly TrialInventoryLotAvailability[];
+  activeReservations: readonly TrialInventoryReservation[];
+};
+
+export type TrialInventoryReservation = {
+  reservationId: string;
+  materialId: string;
+  lotId: string;
+  locationId: string;
+  quantityMg: MassMg;
+  status: "ACTIVE" | "RELEASED" | "CONSUMED" | "CANCELLED";
+};
+
+export type TrialInventoryReservationSet = {
+  trialId: string;
+  reservations: readonly TrialInventoryReservation[];
+};
+
 export type TrialLine = {
   materialId: string;
   lineOrder: number;

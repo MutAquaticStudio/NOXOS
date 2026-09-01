@@ -12,6 +12,8 @@ export default defineConfig({
       "@nox-os/database": source("./packages/database/src/index.ts"),
       "@nox-os/design-studio": source("./packages/design-studio/src/index.ts"),
       "@nox-os/design-studio/browser": source("./packages/design-studio/src/browser.ts"),
+      "@nox-os/inventory": source("./packages/inventory/src/index.ts"),
+      "@nox-os/inventory/browser": source("./packages/inventory/src/browser.ts"),
       "@nox-os/material-intelligence": source("./packages/material-intelligence/src/index.ts"),
       "@nox-os/module-registry": source("./packages/module-registry/src/index.ts"),
       "@nox-os/observability": source("./packages/observability/src/index.ts"),

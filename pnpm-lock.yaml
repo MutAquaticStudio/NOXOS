@@ -76,6 +76,9 @@ importers:
       "@nox-os/design-studio":
         specifier: workspace:*
         version: link:../../packages/design-studio
+      "@nox-os/inventory":
+        specifier: workspace:*
+        version: link:../../packages/inventory
       "@nox-os/material-intelligence":
         specifier: workspace:*
         version: link:../../packages/material-intelligence
@@ -155,6 +158,9 @@ importers:
       "@nox-os/design-studio":
         specifier: workspace:*
         version: link:../design-studio
+      "@nox-os/inventory":
+        specifier: workspace:*
+        version: link:../inventory
       "@nox-os/material-intelligence":
         specifier: workspace:*
         version: link:../material-intelligence
@@ -176,6 +182,18 @@ importers:
       "@nox-os/material-intelligence":
         specifier: workspace:*
         version: link:../material-intelligence
+      "@nox-os/module-registry":
+        specifier: workspace:*
+        version: link:../module-registry
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
+  packages/inventory:
+    dependencies:
+      "@nox-os/contracts":
+        specifier: workspace:*
+        version: link:../contracts
       "@nox-os/module-registry":
         specifier: workspace:*
         version: link:../module-registry

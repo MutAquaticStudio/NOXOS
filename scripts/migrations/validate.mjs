@@ -181,4 +181,42 @@ for (const requiredBoundary of [
   }
 }
 
+const inventoryMigration = readFileSync(
+  resolve(migrationDirectory, "20260901155903_g7_inventory_lot_traceability.sql"),
+  "utf8"
+);
+const declaredInventoryTables = [
+  ...inventoryMigration.matchAll(/create\s+table\s+inventory\.([a-z_]+)/gi)
+].map((match) => match[1]);
+const canonicalInventoryTables = [
+  "locations",
+  "material_lots",
+  "stock_movements",
+  "stock_reservations"
+];
+if (
+  declaredInventoryTables.length !== canonicalInventoryTables.length ||
+  canonicalInventoryTables.some((table) => !declaredInventoryTables.includes(table))
+) {
+  throw new Error(
+    `Gate 7 must create exactly the four canonical Inventory tables; found ${declaredInventoryTables.join(",")}`
+  );
+}
+for (const forbiddenTruth of ["current_quantity", "on_hand_balance", "stock_balance"]) {
+  if (inventoryMigration.includes(forbiddenTruth))
+    throw new Error(`Gate 7 migration contains mutable balance truth: ${forbiddenTruth}`);
+}
+for (const requiredBoundary of [
+  "quantity_mg bigint not null check (quantity_mg > 0)",
+  "STOCK_MOVEMENT_APPEND_ONLY",
+  "RESERVATION_ALREADY_TERMINAL",
+  "CONSUMED_MOVEMENT_INVALID",
+  "LOT_IDENTITY_IMMUTABLE",
+  "force row level security",
+  "revoke all on all tables in schema inventory from anon, authenticated"
+]) {
+  if (!inventoryMigration.includes(requiredBoundary))
+    throw new Error(`Gate 7 persistence boundary missing: ${requiredBoundary}`);
+}
+
 console.log("MIGRATION_STATIC_VALIDATION=PASS");

@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { SensoryEvaluation, Trial, TrialSensoryStore } from "@nox-os/trial-sensory";
+import type {
+  SensoryEvaluation,
+  Trial,
+  TrialInventoryPort,
+  TrialSensoryStore
+} from "@nox-os/trial-sensory";
 
 function cloneTrial(value: Trial): Trial {
   return {
@@ -17,7 +22,7 @@ function cloneEvaluation(value: SensoryEvaluation): SensoryEvaluation {
   };
 }
 
-export class InMemoryTrialSensoryStore implements TrialSensoryStore {
+export class InMemoryTrialSensoryStore implements TrialSensoryStore, TrialInventoryPort {
   readonly trials = new Map<string, Trial>();
   readonly evaluations = new Map<string, SensoryEvaluation>();
   readonly auditEvents: Array<{
@@ -25,6 +30,21 @@ export class InMemoryTrialSensoryStore implements TrialSensoryStore {
     resourceId: string;
     metadata?: Record<string, unknown>;
   }> = [];
+
+  async listAvailability(input: Parameters<TrialInventoryPort["listAvailability"]>[0]) {
+    return {
+      trialId: input.trialId,
+      requirements: input.requirements,
+      allocations: [],
+      activeReservations: []
+    };
+  }
+
+  async reserve(input: Parameters<TrialInventoryPort["reserve"]>[0]) {
+    return { trialId: input.trialId, reservations: [] };
+  }
+
+  async releaseDraftTrialReservations(): Promise<void> {}
 
   async createTrial(input: Parameters<TrialSensoryStore["createTrial"]>[0]): Promise<Trial> {
     const now = new Date();

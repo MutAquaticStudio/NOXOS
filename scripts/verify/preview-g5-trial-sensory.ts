@@ -6,6 +6,9 @@ import { createRuntimeDatabase } from "@nox-os/database";
 
 type ApiResult<T = unknown> = { status: number; body: T };
 type Candidate = { generationStrategy: string };
+type PreparationPlan = {
+  requirements: Array<{ materialId: string; requiredMassMg: string }>;
+};
 
 const previewUrl = required("NOX_PREVIEW_URL");
 const expectedSha = required("EXPECTED_SOURCE_SHA");
@@ -14,8 +17,10 @@ const password = required("NOX_PREVIEW_MATERIAL_USER_PASSWORD");
 const protectionBypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 const captureDirectory = process.env.G5_VISUAL_CAPTURE_DIR;
 const g6CaptureDirectory = process.env.G6_VISUAL_CAPTURE_DIR;
+const g7CaptureDirectory = process.env.G7_VISUAL_CAPTURE_DIR;
 const runtimeDatabaseUrl = required("NOX_PREVIEW_RUNTIME_DATABASE_URL");
 const suffix = randomUUID().slice(0, 8);
+const inventoryStock = new Map<string, { locationId: string; lots: Map<string, string> }>();
 
 if (!/^[0-9a-f]{40}$/i.test(expectedSha))
   throw new Error("G5 Preview acceptance requires a full immutable source SHA.");
@@ -119,6 +124,8 @@ try {
 
   await runG6PreviewAcceptance(page, tenantId, formulaVersionId, accordVersionId);
 
+  await runG7PreviewAcceptance(page, tenantId);
+
   await page.goto(url("/trials"), { waitUntil: "networkidle" });
   await visible(page, page.getByRole("heading", { name: "Trial Registry" }));
   await capture(page, "trial-registry-desktop", "/trials");
@@ -159,6 +166,9 @@ console.log("G6_PREVIEW_BLOCKED_PATH=PASS");
 console.log("G6_PREVIEW_ACCORD_REJECTION=PASS");
 console.log("G6_PREVIEW_TENANT_DENIAL=PASS");
 console.log("G6_PREVIEW_IMMUTABLE_HISTORY=PASS");
+console.log("G7_PREVIEW_INVENTORY_ACCEPTANCE=PASS");
+console.log("G7_PREVIEW_TRIAL_RESERVATION=PASS");
+console.log("G7_PREVIEW_TRIAL_CONSUMPTION=PASS");
 
 function required(name: string): string {
   const value = process.env[name];
@@ -260,6 +270,12 @@ async function assertAvailability(page: Page, tenantId: string) {
     !context.authorization?.modulePermissions?.includes("module.trial-sensory.trial.prepare")
   )
     throw new Error("Trial & Sensory is not available with expected server permissions.");
+  if (
+    context.moduleAvailability?.find((item) => item.moduleId === "inventory")?.state !==
+      "AVAILABLE" ||
+    !context.authorization?.modulePermissions?.includes("module.inventory.read")
+  )
+    throw new Error("Inventory is not available with expected server permissions.");
   const denied = await page.request.post(url("/api/v1/trials"), {
     headers: {
       ...(bypassHeaders() ?? {}),
@@ -604,6 +620,8 @@ async function completeRevisionInBrowser(
   await page.waitForURL(/\/trials\/[0-9a-f-]{36}$/i);
   const trialId = page.url().match(/\/trials\/([0-9a-f-]{36})$/i)?.[1];
   if (!trialId) throw new Error("G5 browser workflow did not navigate to the created Trial.");
+  await allocateTrialInventory(page, tenantId, trialId);
+  await page.reload({ waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Prepare exact weighing plan" }).click();
   await visible(page, page.getByText("Trial prepared with exact G4 scaling."));
   await visible(page, page.getByText("25 g"));
@@ -655,6 +673,7 @@ async function completeRevisionInBrowser(
   const total = detail.trial.lines.reduce((sum, line) => sum + BigInt(line.scaledMassMg), 0n);
   if (total !== 25_000n || !detail.evaluation)
     throw new Error("G5 browser workflow did not preserve exact mass and evaluation evidence.");
+  await assertTrialConsumption(page, tenantId, trialId, 25_000n);
   return { trialId, evaluationId: detail.evaluation.id };
 }
 async function createPreparedTrial(
@@ -675,6 +694,7 @@ async function createPreparedTrial(
     201,
     `G5 ${purpose} Trial creation`
   ).trial;
+  await allocateTrialInventory(page, tenantId, trial.id);
   const prepared = expectStatus(
     await api<{ trial: { lines: Array<{ scaledMassMg: string }> } }>(
       page,
@@ -687,7 +707,324 @@ async function createPreparedTrial(
   ).trial;
   const total = prepared.lines.reduce((sum, line) => sum + BigInt(line.scaledMassMg), 0n);
   if (total !== 20_000n) throw new Error("G5 exact scaling did not conserve target mass.");
+  await assertTrialConsumption(page, tenantId, trial.id, 20_000n);
   return trial.id;
+}
+
+async function allocateTrialInventory(
+  page: Page,
+  tenantId: string,
+  trialId: string
+): Promise<void> {
+  const plan = expectStatus(
+    await api<{ plan: PreparationPlan }>(page, tenantId, `/trials/${trialId}/preparation-plan`),
+    200,
+    "G7 Trial preparation plan"
+  ).plan;
+  let stock = inventoryStock.get(tenantId);
+  if (!stock) {
+    const created = expectStatus(
+      await api<{ location: { id: string } }>(page, tenantId, "/inventory/locations", "POST", {
+        locationCode: `PREVIEW-${suffix.toUpperCase()}`,
+        name: "Preview Trial Lab",
+        description: "Gate 7 isolated acceptance"
+      }),
+      201,
+      "G7 Preview Location"
+    );
+    stock = { locationId: created.location.id, lots: new Map() };
+    inventoryStock.set(tenantId, stock);
+  }
+  const allocations: Array<{
+    materialId: string;
+    lotId: string;
+    locationId: string;
+    quantityMg: string;
+  }> = [];
+  const before = new Map<
+    string,
+    { onHand: bigint; reserved: bigint; available: bigint; quantity: bigint }
+  >();
+  for (const requirement of plan.requirements) {
+    let lotId = stock.lots.get(requirement.materialId);
+    if (!lotId) {
+      const created = expectStatus(
+        await api<{ lot: { id: string } }>(page, tenantId, "/inventory/lots", "POST", {
+          materialId: requirement.materialId,
+          lotCode: `PREVIEW-${suffix}-${requirement.materialId.slice(0, 8)}`,
+          supplierLotCode: null,
+          manufacturedAt: null,
+          expiresAt: null,
+          retestAt: null,
+          notes: "Gate 7 isolated acceptance"
+        }),
+        201,
+        "G7 Preview Lot"
+      );
+      lotId = created.lot.id;
+      stock.lots.set(requirement.materialId, lotId);
+      expectStatus(
+        await api(page, tenantId, `/inventory/lots/${lotId}/receive`, "POST", {
+          quantityMg: "10000000",
+          toLocationId: stock.locationId,
+          reasonCode: "G7_PREVIEW_ACCEPTANCE",
+          operationKey: `preview:${suffix}:lot:${lotId}:opening`
+        }),
+        201,
+        "G7 Preview opening stock"
+      );
+    }
+    allocations.push({
+      materialId: requirement.materialId,
+      lotId,
+      locationId: stock.locationId,
+      quantityMg: requirement.requiredMassMg
+    });
+    const detail = expectStatus(
+      await api<{
+        lot: {
+          balances: Array<{
+            locationId: string;
+            onHandMg: string;
+            reservedMg: string;
+            availableMg: string;
+          }>;
+        };
+      }>(page, tenantId, `/inventory/lots/${lotId}`),
+      200,
+      "G7 pre-reservation Lot balance"
+    );
+    const balance = detail.lot.balances.find((item) => item.locationId === stock.locationId);
+    if (!balance) throw new Error("G7 Preview opening balance is missing.");
+    before.set(lotId, {
+      onHand: BigInt(balance.onHandMg),
+      reserved: BigInt(balance.reservedMg),
+      available: BigInt(balance.availableMg),
+      quantity: BigInt(requirement.requiredMassMg)
+    });
+  }
+  const draftTrace = expectStatus(
+    await api<{ trace: { movements: unknown[] } }>(
+      page,
+      tenantId,
+      `/inventory/trials/${trialId}/trace`
+    ),
+    200,
+    "G7 DRAFT Trial trace"
+  );
+  if (draftTrace.trace.movements.length !== 0)
+    throw new Error("Create DRAFT Trial consumed Inventory.");
+  expectStatus(
+    await api(page, tenantId, `/trials/${trialId}/inventory/reservations`, "POST", {
+      allocations,
+      operationKey: `preview:${suffix}:trial:${trialId}:reserve`
+    }),
+    201,
+    "G7 exact Trial reservation"
+  );
+  for (const allocation of allocations) {
+    const original = before.get(allocation.lotId);
+    const detail = expectStatus(
+      await api<{
+        lot: {
+          balances: Array<{
+            locationId: string;
+            onHandMg: string;
+            reservedMg: string;
+            availableMg: string;
+          }>;
+        };
+      }>(page, tenantId, `/inventory/lots/${allocation.lotId}`),
+      200,
+      "G7 post-reservation Lot balance"
+    );
+    const balance = detail.lot.balances.find((item) => item.locationId === allocation.locationId);
+    if (
+      !original ||
+      !balance ||
+      BigInt(balance.onHandMg) !== original.onHand ||
+      BigInt(balance.reservedMg) !== original.reserved + original.quantity ||
+      BigInt(balance.availableMg) !== original.available - original.quantity
+    )
+      throw new Error("G7 reservation changed On Hand or derived an incorrect Available balance.");
+  }
+}
+
+async function runG7PreviewAcceptance(page: Page, tenantId: string): Promise<void> {
+  type LotDetail = {
+    lot: {
+      id: string;
+      lotCode: string;
+      balances: Array<{
+        locationId: string;
+        onHandMg: string;
+        reservedMg: string;
+        availableMg: string;
+      }>;
+    };
+    movements: Array<{
+      id: string;
+      sourceModule: string;
+      sourceReferenceId: string | null;
+      quantityMg: string;
+    }>;
+  };
+  const stock = inventoryStock.get(tenantId);
+  const lotId = stock ? [...stock.lots.values()][0] : undefined;
+  if (!stock || !lotId) throw new Error("G7 Preview did not reconcile physical Material Lots.");
+  const initial = expectStatus(
+    await api<LotDetail>(page, tenantId, `/inventory/lots/${lotId}`),
+    200,
+    "G7 Preview Lot trace"
+  );
+  const firstBalance = initial.lot.balances.find((item) => item.locationId === stock.locationId);
+  if (!firstBalance || BigInt(firstBalance.availableMg) < 1000n)
+    throw new Error("G7 Preview Lot does not have enough derived Available stock.");
+
+  const overConsume = await api(page, tenantId, `/inventory/lots/${lotId}/consume`, "POST", {
+    quantityMg: (BigInt(firstBalance.availableMg) + 1n).toString(),
+    fromLocationId: stock.locationId,
+    reasonCode: "G7_PREVIEW_RESERVED_STOCK_PROBE",
+    operationKey: `preview:${suffix}:reserved-stock-probe`
+  });
+  if (overConsume.status !== 409)
+    throw new Error("G7 Preview allowed manual consumption beyond Available stock.");
+
+  const secondLocation = expectStatus(
+    await api<{ location: { id: string } }>(page, tenantId, "/inventory/locations", "POST", {
+      locationCode: `PREVIEW-B-${suffix.toUpperCase()}`,
+      name: "Preview Secondary Trial Lab",
+      description: "Gate 7 transfer acceptance"
+    }),
+    201,
+    "G7 Preview secondary Location"
+  ).location;
+  expectStatus(
+    await api(page, tenantId, `/inventory/lots/${lotId}/transfer`, "POST", {
+      quantityMg: "1000",
+      fromLocationId: stock.locationId,
+      toLocationId: secondLocation.id,
+      reasonCode: "G7_PREVIEW_TRANSFER",
+      operationKey: `preview:${suffix}:transfer`
+    }),
+    201,
+    "G7 Preview atomic transfer"
+  );
+  expectStatus(
+    await api(page, tenantId, `/inventory/lots/${lotId}/hold`, "POST"),
+    200,
+    "G7 Preview Lot HOLD"
+  );
+  for (const [path, body] of [
+    [
+      "reservations",
+      {
+        locationId: secondLocation.id,
+        quantityMg: "1",
+        operationKey: `preview:${suffix}:hold-reservation`
+      }
+    ],
+    [
+      "consume",
+      {
+        fromLocationId: secondLocation.id,
+        quantityMg: "1",
+        reasonCode: "G7_PREVIEW_HOLD",
+        operationKey: `preview:${suffix}:hold-consume`
+      }
+    ]
+  ] as const) {
+    const blocked = await api(page, tenantId, `/inventory/lots/${lotId}/${path}`, "POST", body);
+    if (blocked.status !== 409) throw new Error(`G7 Preview HOLD allowed ${path}.`);
+  }
+  expectStatus(
+    await api(page, tenantId, `/inventory/lots/${lotId}/release-hold`, "POST"),
+    200,
+    "G7 Preview Lot HOLD release"
+  );
+
+  const denied = await api(page, randomUUID(), `/inventory/lots/${lotId}`);
+  if (![403, 404].includes(denied.status))
+    throw new Error("G7 Preview forged cross-tenant context was accepted.");
+  const forged = await api(page, tenantId, `/inventory/lots/${lotId}/receive`, "POST", {
+    quantityMg: "1",
+    toLocationId: stock.locationId,
+    operationKey: `preview:${suffix}:forged-trial-provenance`,
+    sourceModule: "TRIAL"
+  });
+  if (forged.status !== 400) throw new Error("G7 Preview browser forged TRIAL provenance.");
+
+  const traced = expectStatus(
+    await api<LotDetail>(page, tenantId, `/inventory/lots/${lotId}`),
+    200,
+    "G7 Preview Lot reverse trace"
+  );
+  const trialReferences = new Set(
+    traced.movements
+      .filter((item) => item.sourceModule === "TRIAL")
+      .map((item) => item.sourceReferenceId)
+      .filter((item): item is string => Boolean(item))
+  );
+  if (trialReferences.size < 2)
+    throw new Error("G7 Preview Lot did not trace multiple independent physical Trials.");
+
+  await page.goto(url("/inventory"), { waitUntil: "networkidle" });
+  await visible(page, page.getByRole("heading", { name: "Inventory Registry" }));
+  await visible(page, page.getByText(/kg| g|mg/).first());
+  await captureG7(page, "inventory-registry-desktop", "/inventory");
+  await page.goto(url(`/inventory/lots/${lotId}`), { waitUntil: "networkidle" });
+  await visible(page, page.getByRole("heading", { name: new RegExp(initial.lot.lotCode) }));
+  await captureG7(page, "inventory-lot-detail-desktop", `/inventory/lots/${lotId}`);
+}
+
+async function assertTrialConsumption(
+  page: Page,
+  tenantId: string,
+  trialId: string,
+  expected: bigint
+) {
+  const value = expectStatus(
+    await api<{
+      trace: {
+        movements: Array<{
+          lotId: string;
+          quantityMg: string;
+          sourceModule: string;
+          sourceReferenceId: string;
+        }>;
+      };
+    }>(page, tenantId, `/inventory/trials/${trialId}/trace`),
+    200,
+    "G7 PREPARED Trial trace"
+  );
+  if (
+    value.trace.movements.reduce((sum, item) => sum + BigInt(item.quantityMg), 0n) !== expected ||
+    value.trace.movements.some(
+      (item) => item.sourceModule !== "TRIAL" || item.sourceReferenceId !== trialId
+    )
+  )
+    throw new Error("PREPARED Trial did not consume its exact Inventory reservation set.");
+  for (const lotId of new Set(value.trace.movements.map((item) => item.lotId))) {
+    const detail = expectStatus(
+      await api<{
+        lot: {
+          balances: Array<{ onHandMg: string; reservedMg: string; availableMg: string }>;
+        };
+        reservations: Array<{ sourceReferenceId: string | null; status: string }>;
+      }>(page, tenantId, `/inventory/lots/${lotId}`),
+      200,
+      "G7 consumed Trial Lot state"
+    );
+    if (
+      detail.reservations.some(
+        (item) => item.sourceReferenceId === trialId && item.status !== "CONSUMED"
+      ) ||
+      detail.lot.balances.some(
+        (item) => BigInt(item.onHandMg) - BigInt(item.reservedMg) !== BigInt(item.availableMg)
+      )
+    )
+      throw new Error("PREPARED Trial left a non-consumed reservation or invalid balance.");
+  }
 }
 function delta(confirmedDelta: number) {
   return {
@@ -789,6 +1126,20 @@ async function captureG6(page: Page, name: string, route: string) {
   await page.screenshot({ path: resolve(g6CaptureDirectory, `${name}.png`), fullPage: true });
   await writeFile(
     resolve(g6CaptureDirectory, `${name}.json`),
+    JSON.stringify(
+      { route, viewport: page.viewportSize(), sha: expectedSha, environment: "preview" },
+      null,
+      2
+    ) + "\n"
+  );
+}
+
+async function captureG7(page: Page, name: string, route: string) {
+  if (!g7CaptureDirectory) return;
+  await mkdir(g7CaptureDirectory, { recursive: true });
+  await page.screenshot({ path: resolve(g7CaptureDirectory, `${name}.png`), fullPage: true });
+  await writeFile(
+    resolve(g7CaptureDirectory, `${name}.json`),
     JSON.stringify(
       { route, viewport: page.viewportSize(), sha: expectedSha, environment: "preview" },
       null,

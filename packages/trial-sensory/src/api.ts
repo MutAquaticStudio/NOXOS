@@ -14,6 +14,8 @@ import {
   createEvaluationSchema,
   createTrialSchema,
   finalizeEvaluationSchema,
+  releaseTrialInventorySchema,
+  reserveTrialInventorySchema,
   updateEvaluationSchema,
   type SensoryEvaluation,
   type Trial
@@ -160,6 +162,71 @@ export class TrialSensoryApi {
           routeUuid(request, "trialId")
         );
         return { status: 200, body: { trial: trialPayload(trial) } };
+      })
+    );
+
+    registrar.get(
+      "/trials/:trialId/preparation-plan",
+      this.handle(async (request) => {
+        const context = await this.tenant(request, trialSensoryPermissions.readTrial);
+        const plan = await this.options.application.preparationPlan(
+          context.tenant.tenantId,
+          routeUuid(request, "trialId")
+        );
+        return { status: 200, body: { plan } };
+      })
+    );
+
+    registrar.get(
+      "/trials/:trialId/inventory",
+      this.handle(async (request) => {
+        const context = await this.tenant(request, trialSensoryPermissions.prepareTrial);
+        const availability = await this.options.application.inventoryAvailability(
+          context.tenant.tenantId,
+          routeUuid(request, "trialId")
+        );
+        return {
+          status: 200,
+          body: {
+            availability: {
+              ...availability,
+              allocations: availability.allocations.map((item) => ({
+                ...item,
+                expiresAt: item.expiresAt?.toISOString() ?? null,
+                retestAt: item.retestAt?.toISOString() ?? null
+              }))
+            }
+          }
+        };
+      })
+    );
+
+    registrar.register(
+      "POST",
+      "/trials/:trialId/inventory/reservations",
+      this.handle(async (request) => {
+        const context = await this.tenant(request, trialSensoryPermissions.prepareTrial);
+        const reservations = await this.options.application.reserveInventory(
+          commandContext(context, request),
+          routeUuid(request, "trialId"),
+          body(reserveTrialInventorySchema, request)
+        );
+        return { status: 201, body: { reservations } };
+      })
+    );
+
+    registrar.register(
+      "POST",
+      "/trials/:trialId/inventory/release",
+      this.handle(async (request) => {
+        const context = await this.tenant(request, trialSensoryPermissions.prepareTrial);
+        const input = body(releaseTrialInventorySchema, request);
+        await this.options.application.releaseInventory(
+          commandContext(context, request),
+          routeUuid(request, "trialId"),
+          input.operationKey
+        );
+        return { status: 200, body: { released: true } };
       })
     );
 

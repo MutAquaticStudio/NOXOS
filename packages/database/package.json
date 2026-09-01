@@ -13,6 +13,7 @@
   "dependencies": {
     "@nox-os/contracts": "workspace:*",
     "@nox-os/design-studio": "workspace:*",
+    "@nox-os/inventory": "workspace:*",
     "@nox-os/material-intelligence": "workspace:*",
     "@nox-os/release-readiness": "workspace:*",
     "@nox-os/trial-sensory": "workspace:*",

@@ -4,9 +4,38 @@ import type {
   SensoryEvaluation,
   SensoryEvaluationContext,
   Trial,
+  TrialInventoryAvailability,
+  TrialInventoryReservationSet,
   TrialLine,
+  TrialLotAllocation,
+  TrialPreparationRequirement,
   TrialPreparationContext
 } from "./contracts.js";
+
+export interface TrialInventoryPort {
+  listAvailability(input: {
+    tenantId: string;
+    trialId: string;
+    requirements: readonly TrialPreparationRequirement[];
+  }): Promise<TrialInventoryAvailability>;
+  reserve(input: {
+    tenantId: string;
+    actorUserId: string;
+    requestId: string;
+    correlationId: string;
+    trialId: string;
+    allocations: readonly TrialLotAllocation[];
+    operationKey: string;
+  }): Promise<TrialInventoryReservationSet>;
+  releaseDraftTrialReservations(input: {
+    tenantId: string;
+    actorUserId: string;
+    requestId: string;
+    correlationId: string;
+    trialId: string;
+    operationKey: string;
+  }): Promise<void>;
+}
 
 export interface TrialSensoryStore {
   createTrial(input: {

@@ -37,7 +37,7 @@ function fixture(
   const designStore = new InMemoryDesignStudioStore();
   const formula = g5FrozenFormula();
   designStore.formulaVersions.set(formula.formulaVersionId, formula);
-  const application = new TrialSensoryApplication(trialStore, designStore);
+  const application = new TrialSensoryApplication(trialStore, designStore, trialStore);
   let allPermissions = [
     ...Object.values(trialSensoryPermissions),
     ...Object.values(designStudioPermissions)
