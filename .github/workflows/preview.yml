@@ -34,11 +34,10 @@ concurrency:
 
 jobs:
   bootstrap-authenticated-preview-migrations:
-    # The PR path is deliberately limited to the one protected G3 integration
-    # branches that introduce protected non-production migrations. It is removed from
-    # ordinary PR trust domains: the job has only
-    # Supabase migration credentials and never sees Vercel or runtime secrets.
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feature/g3-material-intelligence' || github.event.pull_request.head.ref == 'feature/g7-inventory-lot-traceability')) }}
+    # This migration-only bootstrap is manual. Authenticated PR acceptance already
+    # replays migrations itself; running both paths for one PR races the Supabase
+    # migration ledger and can attempt the same schema transaction concurrently.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     environment: Preview
     timeout-minutes: 20

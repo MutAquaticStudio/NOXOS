@@ -11,7 +11,8 @@ describe("G7 cloud-only exact-SHA closure contract", () => {
   const stagingAcceptance = read("scripts/verify/staging-g3-material-intelligence.ts");
 
   it("replays G7 migrations and binds authenticated Preview evidence to the exact PR SHA", () => {
-    expect(preview).toContain("feature/g7-inventory-lot-traceability");
+    expect(preview).toContain("if: ${{ github.event_name == 'workflow_dispatch' }}");
+    expect(preview.match(/name: Replay version-controlled Preview migrations/g)).toHaveLength(2);
     expect(preview).toContain("G7_VISUAL_CAPTURE_DIR");
     expect(preview).toContain("write-g7-preview-evidence.mjs");
     expect(preview).toContain("g7-preview-evidence-${{ github.event.pull_request.head.sha }}");
