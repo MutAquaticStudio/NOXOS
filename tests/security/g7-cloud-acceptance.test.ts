@@ -35,6 +35,9 @@ describe("G7 cloud-only exact-SHA closure contract", () => {
       "G7_STAGING_TENANT_RBAC=PASS"
     ])
       expect(stagingAcceptance).toContain(marker);
+    expect(stagingAcceptance).toMatch(
+      /await refreshToken\("B"\);\s*await runG7OperationalAcceptance\(page, token\("B"\),/
+    );
   });
 
   it("requires matching merged, Preview, and Staging SHA evidence before an immutable tag", () => {

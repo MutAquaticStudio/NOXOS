@@ -2009,7 +2009,11 @@ async function runG5Acceptance(
   ])
     if (!observed.has(action)) throw new Error(`G5 AuditEvent ${action} is missing.`);
 
-  await runG7OperationalAcceptance(page, actor, tenantA, tenantB, frozen.formulaVersionId);
+  // Browser sign-out revokes every Supabase session for the fixture user. Issue a
+  // fresh password-grant token before the API-only G7 acceptance rather than
+  // carrying the now-revoked token captured at G5 entry.
+  await refreshToken("B");
+  await runG7OperationalAcceptance(page, token("B"), tenantA, tenantB, frozen.formulaVersionId);
 
   console.log("G5_STAGING_TRIAL_SENSORY_ACCEPTANCE=PASS");
   console.log("G5_STAGING_REVISION_PATH=PASS");

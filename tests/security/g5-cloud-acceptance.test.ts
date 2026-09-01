@@ -40,9 +40,9 @@ describe("G5 cloud acceptance boundary", () => {
     expect(stagingVerifier).toContain("G4 Formula approval with G5 evidence");
     expect(stagingVerifier).toContain("G5_STAGING_ACCORD_TRIAL=PASS");
     expect(stagingVerifier).toContain("G5_CANCELLED_TRIAL_EVIDENCE_LOCK=PASS");
-    // G6 adds one authenticated browser sign-out between the G5 Accord evidence
-    // and the enclosing G4 journey, so the password-grant token must be refreshed once more.
-    expect(stagingVerifier.match(/await refreshToken\("B"\);/g)).toHaveLength(4);
+    // G6 and G7 each continue with API acceptance after an authenticated browser
+    // sign-out, so every revoked password-grant token is refreshed explicitly.
+    expect(stagingVerifier.match(/await refreshToken\("B"\);/g)).toHaveLength(5);
     expect(stagingVerifier).toContain('actor = token("B");');
     expect(stagingVerifier).toContain("G5 AuditEvent ${action} is missing");
     expect(stagingWorkflow).toContain("g5-staging-evidence-${{ github.sha }}");
