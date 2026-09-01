@@ -2,6 +2,7 @@ const requiredRuntimePackages = [
   "@nox-os/database",
   "@nox-os/material-intelligence",
   "@nox-os/platform",
+  "@nox-os/release-readiness",
   "@nox-os/scientific"
 ];
 

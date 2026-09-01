@@ -913,15 +913,14 @@ function TrialDetail({
               type="button"
               disabled={working}
               onClick={() =>
-                void action(
-                  () =>
-                    api(`/design-studio/formula-versions/${trial.formulaVersionId}/approve`, {
-                      method: "POST",
-                      tenantId,
-                      body: { sourceTrialId: trial.id, sourceEvaluationId: evaluation.id }
-                    }),
-                  "Formula approved by G4 using FINAL G5 evidence."
-                )
+                void action(async () => {
+                  await api(`/design-studio/formula-versions/${trial.formulaVersionId}/approve`, {
+                    method: "POST",
+                    tenantId,
+                    body: { sourceTrialId: trial.id, sourceEvaluationId: evaluation.id }
+                  });
+                  navigate(`/design-studio/formula-versions/${trial.formulaVersionId}`);
+                }, "Formula approved by G4 using FINAL G5 evidence.")
               }
             >
               Approve in Design Studio

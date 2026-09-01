@@ -87,6 +87,11 @@ try {
       key: "module.trial-sensory",
       enabled: true
     });
+    await store.upsertTenantEntitlement({
+      tenantId: tenant.id,
+      key: "module.release-readiness",
+      enabled: true
+    });
     return tenant;
   });
 

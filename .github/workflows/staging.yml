@@ -162,6 +162,7 @@ jobs:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           G3_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g3-visual
           G5_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g5-visual
+          G6_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g6-visual
       - id: g3-evidence
         run: |
           artifact_path="$RUNNER_TEMP/g3-evidence/G3_STAGING_${GITHUB_SHA}.env"
@@ -216,6 +217,27 @@ jobs:
         with:
           name: g5-staging-visual-${{ github.sha }}
           path: ${{ runner.temp }}/g5-visual
+          if-no-files-found: error
+          retention-days: 365
+      - id: g6-evidence
+        run: |
+          artifact_path="$RUNNER_TEMP/g6-evidence/G6_STAGING_${GITHUB_SHA}.env"
+          node scripts/evidence/write-g6-staging-evidence.mjs "$artifact_path"
+          echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
+        env:
+          NOX_STAGING_URL: ${{ steps.deploy.outputs.staging_url }}
+      - name: Upload G6 exact-SHA Staging evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g6-staging-evidence-${{ github.sha }}
+          path: ${{ steps.g6-evidence.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 365
+      - name: Upload G6 Staging visual acceptance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g6-staging-visual-${{ github.sha }}
+          path: ${{ runner.temp }}/g6-visual
           if-no-files-found: error
           retention-days: 365
       - name: Record exact accepted Staging identity

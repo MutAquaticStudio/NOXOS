@@ -8,7 +8,11 @@ describe("Design Studio module authority", () => {
   it("owns one canonical product route and one permission namespace", () => {
     expect(definition?.descriptor).toMatchObject({
       routeRoot: "/design-studio",
-      childRoutes: ["/design-studio/formula", "/design-studio/accords"],
+      childRoutes: [
+        "/design-studio/formula",
+        "/design-studio/accords",
+        "/design-studio/formula-versions/:formulaVersionId"
+      ],
       apiNamespace: "design-studio",
       lifecycle: "INTERNAL",
       dependencies: ["platform", "material-intelligence"],

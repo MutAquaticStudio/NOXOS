@@ -16,6 +16,8 @@ export default defineConfig({
       "@nox-os/module-registry": source("./packages/module-registry/src/index.ts"),
       "@nox-os/observability": source("./packages/observability/src/index.ts"),
       "@nox-os/platform": source("./packages/platform/src/index.ts"),
+      "@nox-os/release-readiness": source("./packages/release-readiness/src/index.ts"),
+      "@nox-os/release-readiness/browser": source("./packages/release-readiness/src/browser.ts"),
       "@nox-os/scientific": source("./packages/scientific/src/index.ts"),
       "@nox-os/shared": source("./packages/shared/src/index.ts"),
       "@nox-os/storage": source("./packages/storage/src/index.ts"),
