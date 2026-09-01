@@ -107,6 +107,10 @@ export interface InventoryReceiptPort {
     procurementReceiptId: string;
     materialId: string;
     lotCode: string;
+    supplierLotCode?: string | null;
+    manufacturedAt?: Date | null;
+    expiresAt?: Date | null;
+    retestAt?: Date | null;
     locationId: string;
     quantityMg: QuantityMg;
     operationKey: string;

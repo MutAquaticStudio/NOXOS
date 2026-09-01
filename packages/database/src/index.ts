@@ -5,6 +5,7 @@ export * from "./material-store.js";
 export * from "./design-studio-store.js";
 export * from "./trial-sensory-store.js";
 export * from "./inventory-store.js";
+export * from "./procurement-store.js";
 export * from "./release-readiness-store.js";
 export * from "./staging-fixture-maintenance.js";
 

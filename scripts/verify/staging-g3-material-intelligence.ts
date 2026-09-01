@@ -36,6 +36,7 @@ const visualCaptureDirectory = process.env.G3_VISUAL_CAPTURE_DIR;
 const g5VisualCaptureDirectory = process.env.G5_VISUAL_CAPTURE_DIR;
 const g6VisualCaptureDirectory = process.env.G6_VISUAL_CAPTURE_DIR;
 const g7VisualCaptureDirectory = process.env.G7_VISUAL_CAPTURE_DIR;
+const g8VisualCaptureDirectory = process.env.G8_VISUAL_CAPTURE_DIR;
 
 if (raw.NOX_EXPECTED_ENV !== "staging" || stagingProjectRef === productionProjectRef) {
   throw new Error("G3 fixture acceptance may target only the isolated Staging project.");
@@ -153,6 +154,20 @@ try {
       }),
       200,
       "Inventory entitlement"
+    );
+  }
+  for (const tenantId of [tenantA, tenantB]) {
+    expectStatus(
+      await api(
+        platformOwnerToken,
+        `/platform/tenants/${tenantId}/entitlements/module.procurement`,
+        {
+          method: "PUT",
+          body: { enabled: true }
+        }
+      ),
+      200,
+      "Procurement entitlement"
     );
   }
   const materialContext = await api<{
@@ -2014,11 +2029,16 @@ async function runG5Acceptance(
   // carrying the now-revoked token captured at G5 entry.
   await refreshToken("B");
   await runG7OperationalAcceptance(page, token("B"), tenantA, tenantB, frozen.formulaVersionId);
+  await runG8OperationalAcceptance(page, token("B"), tenantA, tenantB);
 
   console.log("G5_STAGING_TRIAL_SENSORY_ACCEPTANCE=PASS");
   console.log("G5_STAGING_REVISION_PATH=PASS");
   console.log("G5_STAGING_APPROVAL_PATH=PASS");
   console.log("G5_CANCELLED_TRIAL_EVIDENCE_LOCK=PASS");
+  console.log("G8_STAGING_PROCUREMENT_ACCEPTANCE=PASS");
+  console.log("G8_STAGING_RECEIPT_ATOMICITY=PASS");
+  console.log("G8_STAGING_CONCURRENT_OVER_RECEIPT=PASS");
+  console.log("G8_STAGING_TRACEABILITY=PASS");
 }
 
 async function runG7OperationalAcceptance(
@@ -2729,6 +2749,654 @@ async function runG7OperationalAcceptance(
   console.log("G7_STAGING_TENANT_RBAC=PASS");
 }
 
+async function runG8OperationalAcceptance(
+  page: Page,
+  actor: string,
+  tenantA: string,
+  tenantB: string
+): Promise<void> {
+  type Po = {
+    id: string;
+    status: string;
+    supplierId: string;
+    lines: Array<{
+      id: string;
+      materialId: string;
+      receivedQuantityMg: string;
+      remainingQuantityMg: string;
+    }>;
+  };
+  type Receipt = {
+    id: string;
+    status: string;
+    purchaseOrderId: string;
+    supplierId: string;
+    lines: Array<{
+      id: string;
+      inventoryLotId: string | null;
+      inventoryMovementId: string | null;
+      receivedQuantityMg: string;
+    }>;
+  };
+  type LotTrace = {
+    lot: { id: string; materialId: string; lotCode: string };
+    movements: Array<{
+      id: string;
+      sourceModule: string;
+      sourceReferenceId: string | null;
+      quantityMg: string;
+    }>;
+  };
+  const stock = inventoryStock.get(tenantA);
+  const approvedMaterialId = stock ? [...stock.lots.keys()][0] : undefined;
+  if (!stock || !approvedMaterialId)
+    throw new Error("G8 Staging requires the accepted G3 Material and G7 Location seam.");
+
+  const context = await api<{
+    moduleAvailability: Array<{ moduleId: string; state: string }>;
+    authorization: { modulePermissions: string[] };
+  }>(actor, "/context", { tenantId: tenantA });
+  expectStatus(context, 200, "G8 tenant context");
+  if (
+    context.body.moduleAvailability.find((item) => item.moduleId === "procurement")?.state !==
+      "AVAILABLE" ||
+    !context.body.authorization.modulePermissions.includes("module.procurement.receipt.post")
+  )
+    throw new Error("G8 Procurement is not AVAILABLE for the accepted tenant owner.");
+
+  const pending = await api<{ material: MaterialSummary }>(token("A"), "/materials", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      displayName: `G8 Pending Material ${suffix.slice(0, 8)}`,
+      materialType: "NATURAL",
+      odorAssignments: []
+    }
+  });
+  expectStatus(pending, 201, "G8 PENDING_REVIEW Material fixture");
+  materialIds.push(pending.body.material.id);
+  if (pending.body.material.approvalStatus !== "PENDING_REVIEW")
+    throw new Error("G8 pending Material fixture was not PENDING_REVIEW.");
+
+  const supplier = await api<{ supplier: { id: string; status: string } }>(
+    actor,
+    "/procurement/suppliers",
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        supplierCode: `G8-${suffix.slice(0, 12).toUpperCase()}`,
+        legalName: `G8 Staging Supplier ${suffix}`,
+        displayName: `G8 Staging Supplier ${suffix}`,
+        countryCode: "AU",
+        primaryEmail: null,
+        primaryPhone: null,
+        website: null,
+        taxIdentifier: null,
+        defaultCurrency: "AUD",
+        defaultIncoterm: "DAP",
+        notes: "Exact-SHA G8 Staging acceptance"
+      }
+    }
+  );
+  expectStatus(supplier, 201, "G8 Supplier creation");
+  const supplierId = supplier.body.supplier.id;
+
+  const pendingOffer = await api(actor, "/procurement/supplier-offers", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      supplierId,
+      materialId: pending.body.material.id,
+      supplierSku: `PENDING-${suffix.slice(0, 8).toUpperCase()}`,
+      supplierMaterialName: pending.body.material.displayName,
+      packSizeMg: "25000000",
+      minimumOrderQuantityMg: "1000000",
+      unitPricePerKg: "0",
+      currencyCode: "AUD",
+      leadTimeDays: 14,
+      lastQuotedAt: new Date().toISOString(),
+      sourceReference: "G8 PENDING_REVIEW procurement acceptance"
+    }
+  });
+  expectStatus(pendingOffer, 201, "G8 PENDING_REVIEW Material Supplier Offer");
+
+  const createPo = async (
+    number: string,
+    quantityMg: string,
+    materialId = approvedMaterialId
+  ): Promise<Po> => {
+    const result = await api<{ purchaseOrder: Po }>(actor, "/procurement/purchase-orders", {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        poNumber: number,
+        supplierId,
+        orderType: "STANDARD",
+        currencyCode: "AUD",
+        supplierQuoteReference: `QUOTE-${suffix}`,
+        expectedDeliveryAt: null,
+        incoterm: "DAP",
+        freightAmount: "0",
+        notes: "G8 exact-SHA Staging fixture",
+        lines: [
+          {
+            materialId,
+            supplierOfferId: null,
+            supplierSkuSnapshot: `SKU-${suffix.slice(0, 8).toUpperCase()}`,
+            supplierMaterialNameSnapshot: `G8 Material ${suffix}`,
+            orderedQuantityMg: quantityMg,
+            unitPricePerKg: "123.4567",
+            expectedDeliveryAt: null,
+            notes: null
+          }
+        ]
+      }
+    });
+    expectStatus(result, 201, `G8 Purchase Order ${number}`);
+    return result.body.purchaseOrder;
+  };
+  const approvePo = async (purchaseOrderId: string): Promise<Po> => {
+    const result = await api<{ purchaseOrder: Po }>(
+      actor,
+      `/procurement/purchase-orders/${purchaseOrderId}/approve`,
+      { method: "POST", tenantId: tenantA }
+    );
+    expectStatus(result, 200, "G8 Purchase Order approval");
+    return result.body.purchaseOrder;
+  };
+  const getPo = async (purchaseOrderId: string): Promise<Po> => {
+    const result = await api<{ purchaseOrder: Po }>(
+      actor,
+      `/procurement/purchase-orders/${purchaseOrderId}`,
+      { tenantId: tenantA }
+    );
+    expectStatus(result, 200, "G8 Purchase Order read");
+    return result.body.purchaseOrder;
+  };
+  const createReceipt = async (
+    purchaseOrderId: string,
+    receiptNumber: string,
+    lines: Array<{
+      purchaseOrderLineId: string;
+      materialId: string;
+      quantityMg: string;
+      lotCode: string;
+      locationId?: string;
+    }>
+  ): Promise<Receipt> => {
+    const result = await api<{ goodsReceipt: Receipt }>(actor, "/procurement/goods-receipts", {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        receiptNumber,
+        purchaseOrderId,
+        supplierDeliveryReference: `DEL-${receiptNumber}`,
+        receivedAt: new Date().toISOString(),
+        lines: lines.map((line) => ({
+          purchaseOrderLineId: line.purchaseOrderLineId,
+          materialId: line.materialId,
+          receivedQuantityMg: line.quantityMg,
+          lotCode: line.lotCode,
+          supplierLotCode: `SUP-${line.lotCode}`,
+          manufacturedAt: null,
+          expiresAt: null,
+          retestAt: null,
+          destinationLocationId: line.locationId ?? stock.locationId
+        }))
+      }
+    });
+    expectStatus(result, 201, `G8 Goods Receipt ${receiptNumber}`);
+    return result.body.goodsReceipt;
+  };
+  const postReceipt = async (receiptId: string): Promise<Receipt> => {
+    const result = await api<{ goodsReceipt: Receipt }>(
+      actor,
+      `/procurement/goods-receipts/${receiptId}/post`,
+      { method: "POST", tenantId: tenantA }
+    );
+    expectStatus(result, 200, "G8 Goods Receipt POST");
+    return result.body.goodsReceipt;
+  };
+
+  const po = await createPo(`G8-PO-${suffix.slice(0, 10)}`, "25000000");
+  const approved = await approvePo(po.id);
+  const poLineId = approved.lines[0]?.id;
+  if (!poLineId) throw new Error("G8 approved Purchase Order has no line.");
+  expectError(
+    await api(actor, `/procurement/purchase-orders/${po.id}`, {
+      method: "PUT",
+      tenantId: tenantA,
+      body: { notes: "forbidden commercial rewrite" }
+    }),
+    409,
+    "PURCHASE_ORDER_NOT_EDITABLE",
+    "G8 APPROVED PO commercial immutability"
+  );
+  let supplierHistoryImmutable = false;
+  try {
+    await maintenance`
+      update procurement.suppliers set supplier_code = 'FORBIDDEN'
+      where tenant_id = ${tenantA} and id = ${supplierId}
+    `;
+  } catch {
+    supplierHistoryImmutable = true;
+  }
+  if (!supplierHistoryImmutable)
+    throw new Error("G8 database allowed Supplier code mutation after PO history existed.");
+
+  const firstLotCode = `G8-A-${suffix.slice(0, 12)}`;
+  const draftA = await createReceipt(po.id, `G8-GR-A-${suffix.slice(0, 10)}`, [
+    {
+      purchaseOrderLineId: poLineId,
+      materialId: approvedMaterialId,
+      quantityMg: "10000000",
+      lotCode: firstLotCode
+    }
+  ]);
+  const draftStock = await maintenance<{ count: string }[]>`
+    select count(*)::text as count from inventory.material_lots
+    where tenant_id = ${tenantA} and lot_code = ${firstLotCode}
+  `;
+  if (draftStock[0]?.count !== "0") throw new Error("DRAFT Goods Receipt changed G7 stock.");
+  const postedA = await postReceipt(draftA.id);
+  const lineA = postedA.lines[0];
+  if (postedA.status !== "POSTED" || !lineA?.inventoryLotId || !lineA.inventoryMovementId)
+    throw new Error("G8 POST did not persist its G7 Lot and Movement references.");
+  const traceA = await api<LotTrace>(actor, `/inventory/lots/${lineA.inventoryLotId}`, {
+    tenantId: tenantA
+  });
+  expectStatus(traceA, 200, "G8 forward Inventory trace");
+  if (
+    !traceA.body.movements.some(
+      (movement) =>
+        movement.id === lineA.inventoryMovementId &&
+        movement.sourceModule === "PROCUREMENT" &&
+        movement.sourceReferenceId === lineA.id &&
+        movement.quantityMg === "10000000"
+    )
+  )
+    throw new Error("G8→G7 PROCUREMENT provenance is incomplete.");
+  const partial = await getPo(po.id);
+  if (
+    partial.status !== "PARTIALLY_RECEIVED" ||
+    partial.lines[0]?.receivedQuantityMg !== "10000000" ||
+    partial.lines[0]?.remainingQuantityMg !== "15000000"
+  )
+    throw new Error("G8 partial receipt totals are not exact and derived.");
+
+  const draftB = await createReceipt(po.id, `G8-GR-B-${suffix.slice(0, 10)}`, [
+    {
+      purchaseOrderLineId: poLineId,
+      materialId: approvedMaterialId,
+      quantityMg: "10000000",
+      lotCode: `G8-B1-${suffix.slice(0, 10)}`
+    },
+    {
+      purchaseOrderLineId: poLineId,
+      materialId: approvedMaterialId,
+      quantityMg: "5000000",
+      lotCode: `G8-B2-${suffix.slice(0, 10)}`
+    }
+  ]);
+  const postedB = await postReceipt(draftB.id);
+  if (
+    postedB.lines.length !== 2 ||
+    postedB.lines.some((line) => !line.inventoryLotId || !line.inventoryMovementId)
+  )
+    throw new Error("G8 multi-Lot receipt did not persist two exact Inventory traces.");
+  const complete = await getPo(po.id);
+  if (
+    complete.status !== "RECEIVED" ||
+    complete.lines[0]?.receivedQuantityMg !== "25000000" ||
+    complete.lines[0]?.remainingQuantityMg !== "0"
+  )
+    throw new Error("G8 full receipt did not resolve the ordered quantity exactly.");
+  await postReceipt(draftB.id);
+  const retryCounts = await maintenance<{ source_reference_id: string; count: string }[]>`
+    select source_reference_id::text, count(*)::text as count
+    from inventory.stock_movements
+    where tenant_id = ${tenantA} and source_module = 'PROCUREMENT'
+      and source_reference_id in ${maintenance(postedB.lines.map((line) => line.id))}
+    group by source_reference_id
+  `;
+  if (retryCounts.length !== 2 || retryCounts.some((item) => item.count !== "1"))
+    throw new Error("G8 receipt retry duplicated G7 stock.");
+  expectError(
+    await api(actor, `/procurement/goods-receipts/${postedA.id}`, {
+      method: "PUT",
+      tenantId: tenantA,
+      body: { supplierDeliveryReference: "FORBIDDEN" }
+    }),
+    409,
+    "GOODS_RECEIPT_NOT_EDITABLE",
+    "G8 POSTED Receipt immutability"
+  );
+  expectError(
+    await api(actor, `/procurement/goods-receipts/${postedA.id}/cancel`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "GOODS_RECEIPT_NOT_EDITABLE",
+    "G8 POSTED Receipt cancellation"
+  );
+
+  const racePo = await createPo(`G8-RACE-${suffix.slice(0, 10)}`, "10000000");
+  const raceApproved = await approvePo(racePo.id);
+  const raceLineId = raceApproved.lines[0]?.id;
+  if (!raceLineId) throw new Error("G8 concurrency PO has no line.");
+  const raceA = await createReceipt(racePo.id, `G8-RACE-A-${suffix.slice(0, 8)}`, [
+    {
+      purchaseOrderLineId: raceLineId,
+      materialId: approvedMaterialId,
+      quantityMg: "7000000",
+      lotCode: `G8-RACE-A-${suffix.slice(0, 8)}`
+    }
+  ]);
+  const raceB = await createReceipt(racePo.id, `G8-RACE-B-${suffix.slice(0, 8)}`, [
+    {
+      purchaseOrderLineId: raceLineId,
+      materialId: approvedMaterialId,
+      quantityMg: "7000000",
+      lotCode: `G8-RACE-B-${suffix.slice(0, 8)}`
+    }
+  ]);
+  const raceResults = await Promise.all([
+    api(actor, `/procurement/goods-receipts/${raceA.id}/post`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    api(actor, `/procurement/goods-receipts/${raceB.id}/post`, {
+      method: "POST",
+      tenantId: tenantA
+    })
+  ]);
+  const raceStatuses = raceResults.map((item) => item.status).sort((a, b) => a - b);
+  if (raceStatuses[0] !== 200 || raceStatuses[1] !== 409)
+    throw new Error(`G8 concurrent receipt result was ${raceStatuses.join(",")}.`);
+  const raceFinal = await getPo(racePo.id);
+  if (
+    raceFinal.lines[0]?.receivedQuantityMg !== "7000000" ||
+    raceFinal.lines[0]?.remainingQuantityMg !== "3000000"
+  )
+    throw new Error("G8 concurrent partial receipts over-received the Purchase Order line.");
+  const raceMovement = await maintenance<{ quantity_mg: string }[]>`
+    select coalesce(sum(quantity_mg), 0)::text as quantity_mg
+    from inventory.stock_movements
+    where tenant_id = ${tenantA} and source_module = 'PROCUREMENT'
+      and source_reference_id in (
+        select id from procurement.goods_receipt_lines
+        where tenant_id = ${tenantA} and goods_receipt_id in (${raceA.id}, ${raceB.id})
+      )
+  `;
+  if (raceMovement[0]?.quantity_mg !== "7000000")
+    throw new Error("G8 concurrent receipt created excess physical Inventory.");
+
+  const rollbackLocation = await api<{ location: { id: string } }>(actor, "/inventory/locations", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      locationCode: `G8-ROLLBACK-${suffix.slice(0, 8).toUpperCase()}`,
+      name: "G8 Archived Receipt Target",
+      description: "Atomic rollback acceptance"
+    }
+  });
+  expectStatus(rollbackLocation, 201, "G8 rollback Location");
+  const rollbackPo = await createPo(`G8-ROLLBACK-${suffix.slice(0, 8)}`, "1000");
+  const rollbackApproved = await approvePo(rollbackPo.id);
+  const rollbackLineId = rollbackApproved.lines[0]?.id;
+  if (!rollbackLineId) throw new Error("G8 rollback PO has no line.");
+  const rollbackLotCode = `G8-ROLL-${suffix.slice(0, 10)}`;
+  const rollbackReceipt = await createReceipt(rollbackPo.id, `G8-GR-ROLL-${suffix.slice(0, 8)}`, [
+    {
+      purchaseOrderLineId: rollbackLineId,
+      materialId: approvedMaterialId,
+      quantityMg: "1000",
+      lotCode: rollbackLotCode,
+      locationId: rollbackLocation.body.location.id
+    }
+  ]);
+  expectStatus(
+    await api(actor, `/inventory/locations/${rollbackLocation.body.location.id}/archive`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G8 rollback Location archive"
+  );
+  const rollbackPost = await api(actor, `/procurement/goods-receipts/${rollbackReceipt.id}/post`, {
+    method: "POST",
+    tenantId: tenantA
+  });
+  if (rollbackPost.status !== 409)
+    throw new Error("G8 POST did not fail when the G7 destination Location was archived.");
+  const rollbackState = await api<{ goodsReceipt: Receipt }>(
+    actor,
+    `/procurement/goods-receipts/${rollbackReceipt.id}`,
+    { tenantId: tenantA }
+  );
+  expectStatus(rollbackState, 200, "G8 rollback Receipt state");
+  const rollbackOrder = await getPo(rollbackPo.id);
+  const rollbackLots = await maintenance<{ count: string }[]>`
+    select count(*)::text as count from inventory.material_lots
+    where tenant_id = ${tenantA} and lot_code = ${rollbackLotCode}
+  `;
+  if (
+    rollbackState.body.goodsReceipt.status !== "DRAFT" ||
+    rollbackState.body.goodsReceipt.lines.some(
+      (line) => line.inventoryLotId !== null || line.inventoryMovementId !== null
+    ) ||
+    rollbackOrder.status !== "APPROVED" ||
+    rollbackOrder.lines[0]?.receivedQuantityMg !== "0" ||
+    rollbackLots[0]?.count !== "0"
+  )
+    throw new Error("G8/G7 failure did not roll back the whole receipt transaction.");
+
+  const multiPoResult = await api<{ purchaseOrder: Po }>(actor, "/procurement/purchase-orders", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      poNumber: `G8-MULTI-ROLL-${suffix.slice(0, 8)}`,
+      supplierId,
+      orderType: "STANDARD",
+      currencyCode: "AUD",
+      supplierQuoteReference: null,
+      expectedDeliveryAt: null,
+      incoterm: null,
+      freightAmount: "0",
+      notes: "G8 multi-line atomic rollback fixture",
+      lines: [1, 2].map((line) => ({
+        materialId: approvedMaterialId,
+        supplierOfferId: null,
+        supplierSkuSnapshot: null,
+        supplierMaterialNameSnapshot: `G8 rollback line ${line}`,
+        orderedQuantityMg: "1000",
+        unitPricePerKg: "1.25",
+        expectedDeliveryAt: null,
+        notes: null
+      }))
+    }
+  });
+  expectStatus(multiPoResult, 201, "G8 multi-line rollback Purchase Order");
+  const multiApproved = await approvePo(multiPoResult.body.purchaseOrder.id);
+  if (multiApproved.lines.length !== 2)
+    throw new Error("G8 multi-line rollback Purchase Order is incomplete.");
+  const firstRollbackLot = `G8-MULTI-A-${suffix.slice(0, 8)}`;
+  const secondRollbackLot = `G8-MULTI-B-${suffix.slice(0, 8)}`;
+  const multiReceipt = await createReceipt(multiApproved.id, `G8-GR-MULTI-${suffix.slice(0, 8)}`, [
+    {
+      purchaseOrderLineId: multiApproved.lines[0].id,
+      materialId: approvedMaterialId,
+      quantityMg: "1000",
+      lotCode: firstRollbackLot
+    },
+    {
+      purchaseOrderLineId: multiApproved.lines[1].id,
+      materialId: approvedMaterialId,
+      quantityMg: "1000",
+      lotCode: secondRollbackLot,
+      locationId: rollbackLocation.body.location.id
+    }
+  ]);
+  const multiPost = await api(actor, `/procurement/goods-receipts/${multiReceipt.id}/post`, {
+    method: "POST",
+    tenantId: tenantA
+  });
+  if (multiPost.status !== 409)
+    throw new Error("G8 multi-line POST did not fail on its invalid second G7 receipt.");
+  const multiState = await api<{ goodsReceipt: Receipt }>(
+    actor,
+    `/procurement/goods-receipts/${multiReceipt.id}`,
+    { tenantId: tenantA }
+  );
+  expectStatus(multiState, 200, "G8 multi-line rollback Receipt state");
+  const multiOrder = await getPo(multiApproved.id);
+  const multiLots = await maintenance<{ count: string }[]>`
+    select count(*)::text as count from inventory.material_lots
+    where tenant_id = ${tenantA} and lot_code in (${firstRollbackLot}, ${secondRollbackLot})
+  `;
+  if (
+    multiState.body.goodsReceipt.status !== "DRAFT" ||
+    multiState.body.goodsReceipt.lines.some(
+      (line) => line.inventoryLotId !== null || line.inventoryMovementId !== null
+    ) ||
+    multiOrder.status !== "APPROVED" ||
+    multiOrder.lines.some((line) => line.receivedQuantityMg !== "0") ||
+    multiLots[0]?.count !== "0"
+  )
+    throw new Error("G8 multi-line failure partially committed Procurement or Inventory truth.");
+
+  const draftCancelPo = await createPo(`G8-CANCEL-${suffix.slice(0, 8)}`, "1000");
+  const draftCancelApproved = await approvePo(draftCancelPo.id);
+  const draftCancelLineId = draftCancelApproved.lines[0]?.id;
+  if (!draftCancelLineId) throw new Error("G8 cancellation PO has no line.");
+  const cancelledLotCode = `G8-CANCEL-${suffix.slice(0, 8)}`;
+  const draftCancelReceipt = await createReceipt(
+    draftCancelPo.id,
+    `G8-GR-CANCEL-${suffix.slice(0, 8)}`,
+    [
+      {
+        purchaseOrderLineId: draftCancelLineId,
+        materialId: approvedMaterialId,
+        quantityMg: "1000",
+        lotCode: cancelledLotCode
+      }
+    ]
+  );
+  expectStatus(
+    await api(actor, `/procurement/goods-receipts/${draftCancelReceipt.id}/cancel`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G8 DRAFT Receipt cancellation"
+  );
+  const cancelledStock = await maintenance<{ count: string }[]>`
+    select count(*)::text as count from inventory.material_lots
+    where tenant_id = ${tenantA} and lot_code = ${cancelledLotCode}
+  `;
+  if (cancelledStock[0]?.count !== "0")
+    throw new Error("G8 DRAFT Receipt cancellation changed G7 stock.");
+
+  const preHoldPo = await createPo(`G8-HOLD-OLD-${suffix.slice(0, 8)}`, "1000");
+  const preHoldApproved = await approvePo(preHoldPo.id);
+  expectStatus(
+    await api(actor, `/procurement/suppliers/${supplierId}`, {
+      method: "PUT",
+      tenantId: tenantA,
+      body: { status: "HOLD" }
+    }),
+    200,
+    "G8 Supplier HOLD"
+  );
+  const newHoldPo = await createPo(`G8-HOLD-NEW-${suffix.slice(0, 8)}`, "1000");
+  expectError(
+    await api(actor, `/procurement/purchase-orders/${newHoldPo.id}/approve`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "SUPPLIER_ON_HOLD",
+    "G8 Supplier HOLD approval rule"
+  );
+  const preHoldLineId = preHoldApproved.lines[0]?.id;
+  if (!preHoldLineId) throw new Error("G8 pre-HOLD Purchase Order has no line.");
+  await postReceipt(
+    (
+      await createReceipt(preHoldPo.id, `G8-GR-HOLD-${suffix.slice(0, 8)}`, [
+        {
+          purchaseOrderLineId: preHoldLineId,
+          materialId: approvedMaterialId,
+          quantityMg: "1000",
+          lotCode: `G8-HOLD-${suffix.slice(0, 8)}`
+        }
+      ])
+    ).id
+  );
+
+  expectError(
+    await api(token("E"), `/procurement/suppliers/${supplierId}`, { tenantId: tenantB }),
+    404,
+    "SUPPLIER_NOT_FOUND",
+    "G8 cross-tenant Supplier read"
+  );
+  expectError(
+    await api(token("E"), `/procurement/goods-receipts/${postedA.id}/post`, {
+      method: "POST",
+      tenantId: tenantB
+    }),
+    404,
+    "GOODS_RECEIPT_NOT_FOUND",
+    "G8 cross-tenant Receipt POST"
+  );
+  expectError(
+    await api(token("A"), "/procurement/suppliers", {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        supplierCode: `FORGED-${suffix.slice(0, 8).toUpperCase()}`,
+        legalName: "Forbidden",
+        displayName: "Forbidden"
+      }
+    }),
+    403,
+    "PERMISSION_DENIED",
+    "G8 member RBAC fail closed"
+  );
+
+  const actorAudit = await maintenance<{ actor_user_id: string | null; metadata: unknown }[]>`
+    select actor_user_id::text, metadata from platform.audit_events
+    where tenant_id = ${tenantA} and action = 'procurement.goods_receipt.posted'
+      and resource_id = ${postedA.id}
+  `;
+  if (actorAudit.length !== 1 || actorAudit[0].actor_user_id !== fixture("B").id)
+    throw new Error("G8 Goods Receipt audit actor provenance is missing or forged.");
+
+  await signInInBrowser(page, fixture("B"));
+  await page.goto(new URL("/procurement", stagingUrl).toString(), { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "Procurement" }).waitFor({ state: "visible" });
+  await page.getByRole("heading", { name: "Purchase Orders" }).waitFor({ state: "visible" });
+  await page.getByText(`G8-PO-${suffix.slice(0, 10)}`).waitFor({ state: "visible" });
+  await captureG8(page, "procurement-purchase-orders-desktop", "/procurement");
+  await signOutInBrowser(page);
+}
+
+async function captureG8(page: Page, name: string, route: string): Promise<void> {
+  if (!g8VisualCaptureDirectory) return;
+  await mkdir(g8VisualCaptureDirectory, { recursive: true });
+  await page.screenshot({ path: resolve(g8VisualCaptureDirectory, `${name}.png`), fullPage: true });
+  await writeFile(
+    resolve(g8VisualCaptureDirectory, `${name}.json`),
+    JSON.stringify(
+      { route, viewport: page.viewportSize(), sha: expectedSourceSha, environment: "staging" },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
+}
+
 async function captureG7(page: Page, name: string, route: string): Promise<void> {
   if (!g7VisualCaptureDirectory) return;
   await mkdir(g7VisualCaptureDirectory, { recursive: true });
@@ -2820,6 +3488,12 @@ async function cleanupFixtures(): Promise<void> {
       // composition triggers for the explicitly enumerated disposable acceptance identities.
       await transaction`set local session_replication_role = replica`;
       for (const tenantId of tenantIds) {
+        await transaction`delete from procurement.goods_receipt_lines where tenant_id = ${tenantId}`;
+        await transaction`delete from procurement.goods_receipts where tenant_id = ${tenantId}`;
+        await transaction`delete from procurement.purchase_order_lines where tenant_id = ${tenantId}`;
+        await transaction`delete from procurement.purchase_orders where tenant_id = ${tenantId}`;
+        await transaction`delete from procurement.supplier_material_offers where tenant_id = ${tenantId}`;
+        await transaction`delete from procurement.suppliers where tenant_id = ${tenantId}`;
         await transaction`delete from inventory.stock_reservations where tenant_id = ${tenantId}`;
         await transaction`delete from inventory.stock_movements where tenant_id = ${tenantId}`;
         await transaction`delete from inventory.material_lots where tenant_id = ${tenantId}`;

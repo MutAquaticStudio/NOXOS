@@ -12,6 +12,8 @@ import {
   createPostgresReleaseReadinessSources,
   PostgresInventoryMaterialSource,
   PostgresInventoryStore,
+  PostgresProcurementMaterialSource,
+  PostgresProcurementStore,
   PostgresTrialInventoryPort,
   createRuntimeDatabase,
   probeDatabase
@@ -24,6 +26,7 @@ import {
 } from "@nox-os/design-studio";
 import { createTrialSensoryApi, TrialSensoryApplication } from "@nox-os/trial-sensory";
 import { createInventoryApi, InventoryApplication } from "@nox-os/inventory";
+import { createProcurementApi, ProcurementApplication } from "@nox-os/procurement";
 import {
   createReleaseReadinessApi,
   KnownLimitV1Policy,
@@ -115,6 +118,18 @@ const inventory =
         featureFlags
       })
     : undefined;
+const procurement =
+  runtimeDatabase && platformCore
+    ? createProcurementApi({
+        application: new ProcurementApplication(
+          new PostgresProcurementStore(runtimeDatabase),
+          new PostgresProcurementMaterialSource(runtimeDatabase)
+        ),
+        authorization: platformCore,
+        definitions: [...moduleDefinitions, ...acceptanceModules],
+        featureFlags
+      })
+    : undefined;
 const designStudio =
   platformCore && designStudioStore && designStudioApplication
     ? createDesignStudioApi({
@@ -185,7 +200,8 @@ const foundationApi = createFoundationApi({
     ...(designStudio ? [designStudio] : []),
     ...(trialSensory ? [trialSensory] : []),
     ...(releaseReadiness ? [releaseReadiness] : []),
-    ...(inventory ? [inventory] : [])
+    ...(inventory ? [inventory] : []),
+    ...(procurement ? [procurement] : [])
   ]
 });
 

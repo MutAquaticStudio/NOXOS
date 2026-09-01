@@ -27,6 +27,8 @@
       "@nox-os/module-registry": ["./packages/module-registry/src/index.ts"],
       "@nox-os/observability": ["./packages/observability/src/index.ts"],
       "@nox-os/platform": ["./packages/platform/src/index.ts"],
+      "@nox-os/procurement": ["./packages/procurement/src/index.ts"],
+      "@nox-os/procurement/browser": ["./packages/procurement/src/browser.ts"],
       "@nox-os/release-readiness": ["./packages/release-readiness/src/index.ts"],
       "@nox-os/release-readiness/browser": ["./packages/release-readiness/src/browser.ts"],
       "@nox-os/scientific": ["./packages/scientific/src/index.ts"],

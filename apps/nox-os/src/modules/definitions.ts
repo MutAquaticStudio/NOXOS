@@ -403,14 +403,61 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     childRoutes: [],
     apiNamespace: "procurement",
     navigationGroup: "Operations",
-    lifecycle: "DISABLED",
+    lifecycle: "ACTIVE",
     dependencies: ["platform", "material-intelligence", "inventory"],
-    permissions: ["procurement.read"],
+    permissions: ["module.procurement.read"],
     entitlement: "module.procurement",
     featureFlag: "module.procurement",
     uxProfile: moduleProfiles.procurement,
     owner: "Procurement owner",
-    icon: "cart"
+    icon: "cart",
+    authorization: {
+      permissions: [
+        "module.procurement.read",
+        "module.procurement.supplier.manage",
+        "module.procurement.offer.manage",
+        "module.procurement.purchase-order.create",
+        "module.procurement.purchase-order.edit",
+        "module.procurement.purchase-order.approve",
+        "module.procurement.purchase-order.close",
+        "module.procurement.purchase-order.cancel",
+        "module.procurement.receipt.create",
+        "module.procurement.receipt.edit",
+        "module.procurement.receipt.post",
+        "module.procurement.receipt.cancel"
+      ],
+      defaultRoleGrants: {
+        TENANT_OWNER: [
+          "module.procurement.read",
+          "module.procurement.supplier.manage",
+          "module.procurement.offer.manage",
+          "module.procurement.purchase-order.create",
+          "module.procurement.purchase-order.edit",
+          "module.procurement.purchase-order.approve",
+          "module.procurement.purchase-order.close",
+          "module.procurement.purchase-order.cancel",
+          "module.procurement.receipt.create",
+          "module.procurement.receipt.edit",
+          "module.procurement.receipt.post",
+          "module.procurement.receipt.cancel"
+        ],
+        TENANT_ADMIN: [
+          "module.procurement.read",
+          "module.procurement.supplier.manage",
+          "module.procurement.offer.manage",
+          "module.procurement.purchase-order.create",
+          "module.procurement.purchase-order.edit",
+          "module.procurement.purchase-order.approve",
+          "module.procurement.purchase-order.close",
+          "module.procurement.purchase-order.cancel",
+          "module.procurement.receipt.create",
+          "module.procurement.receipt.edit",
+          "module.procurement.receipt.post",
+          "module.procurement.receipt.cancel"
+        ],
+        TENANT_MEMBER: ["module.procurement.read"]
+      }
+    }
   }),
   defineModule({
     id: "production",
