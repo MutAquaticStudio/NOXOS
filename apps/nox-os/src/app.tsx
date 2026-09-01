@@ -377,7 +377,8 @@ function AuthenticatedApplication({
           (definition) =>
             definition.descriptor.id !== "material-intelligence" &&
             definition.descriptor.id !== "design-studio" &&
-            definition.descriptor.id !== "trial-sensory"
+            definition.descriptor.id !== "trial-sensory" &&
+            definition.descriptor.id !== "release-readiness"
         )
         .flatMap((definition) => [
           { path: definition.descriptor.routeRoot, definition },

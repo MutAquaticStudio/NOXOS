@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { resolveDefinitionAvailability } from "@nox-os/module-registry";
 import { moduleDefinitions } from "../../apps/nox-os/src/modules/definitions";
@@ -37,5 +38,11 @@ describe("Release Readiness module contract", () => {
     expect(
       resolveDefinitionAvailability(definition, { ...base, permissions: new Set() }).state
     ).toBe("NO_PERMISSION");
+  });
+
+  it("keeps the G6 experience as the single runtime renderer", () => {
+    const appSource = readFileSync("apps/nox-os/src/app.tsx", "utf8");
+    expect(appSource).toContain('definition.descriptor.id !== "release-readiness"');
+    expect(appSource).toContain('path="/release-readiness/*"');
   });
 });
