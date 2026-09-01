@@ -233,14 +233,16 @@ jobs:
           NOX_PREVIEW_MATERIAL_USER_PASSWORD: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_PASSWORD }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           G4_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g4-preview-visual
-      - name: Verify authenticated Trial and Sensory Preview
+      - name: Verify authenticated Trial, Sensory, and Release Readiness Preview
         run: pnpm verify:preview:g5-trial-sensory
         env:
           NOX_PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
           NOX_PREVIEW_MATERIAL_USER_EMAIL: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_EMAIL }}
           NOX_PREVIEW_MATERIAL_USER_PASSWORD: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_PASSWORD }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          NOX_PREVIEW_RUNTIME_DATABASE_URL: ${{ secrets.NOX_PREVIEW_RUNTIME_DATABASE_URL }}
           G5_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g5-preview-visual
+          G6_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g6-preview-visual
       - id: g3-preview-evidence
         run: |
           artifact_path="$RUNNER_TEMP/g3-preview-evidence/G3_PREVIEW_${EXPECTED_SOURCE_SHA}.env"
@@ -302,5 +304,26 @@ jobs:
         with:
           name: g5-preview-visual-${{ github.event.pull_request.head.sha }}
           path: ${{ runner.temp }}/g5-preview-visual
+          if-no-files-found: error
+          retention-days: 365
+      - id: g6-preview-evidence
+        run: |
+          artifact_path="$RUNNER_TEMP/g6-preview-evidence/G6_PREVIEW_${EXPECTED_SOURCE_SHA}.env"
+          node scripts/evidence/write-g6-preview-evidence.mjs "$artifact_path"
+          echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
+        env:
+          NOX_PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
+      - name: Upload G6 exact-SHA Preview evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g6-preview-evidence-${{ github.event.pull_request.head.sha }}
+          path: ${{ steps.g6-preview-evidence.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 365
+      - name: Upload G6 Preview visual acceptance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g6-preview-visual-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/g6-preview-visual
           if-no-files-found: error
           retention-days: 365

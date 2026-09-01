@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { matchPath, useLocation, useNavigate } from "react-router-dom";
 import {
   formatMassMg,
   type AccordArchitecturePlan,
@@ -34,6 +34,10 @@ type FrozenFormula = {
   name: string;
   bundleHash: string;
   frozenAt: string;
+  status: "FROZEN";
+  approvalState: "NOT_APPROVED" | "APPROVED" | "SUPERSEDED";
+  compositionKind: "FULL_FORMULA" | "ACCORD_FORMULATION";
+  versionNumber: number;
   candidate: FormulaCandidate;
 };
 
@@ -530,6 +534,103 @@ function FrozenFormulaView({ value, onTrial }: { value: FrozenFormula; onTrial: 
   );
 }
 
+function FormulaVersionEntry({
+  api,
+  tenantId,
+  formulaVersionId,
+  modulePermissions
+}: {
+  api: ApiClient;
+  tenantId: string;
+  formulaVersionId: string;
+  modulePermissions: readonly string[];
+}) {
+  const navigate = useNavigate();
+  const [formula, setFormula] = useState<FrozenFormula>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    let current = true;
+    void api<{ formulaVersion: FrozenFormula }>(
+      `/design-studio/formula-versions/${formulaVersionId}`,
+      { tenantId }
+    )
+      .then((result) => current && setFormula(result.formulaVersion))
+      .catch((reason) => current && setError(message(reason)));
+    return () => {
+      current = false;
+    };
+  }, [api, tenantId, formulaVersionId]);
+  if (error)
+    return (
+      <p role="alert" className="nox-design-warning">
+        {error}
+      </p>
+    );
+  if (!formula) return <p aria-busy="true">Loading FormulaVersion…</p>;
+  const eligible =
+    formula.status === "FROZEN" &&
+    formula.approvalState === "APPROVED" &&
+    formula.compositionKind === "FULL_FORMULA";
+  const canAssess =
+    eligible &&
+    has(modulePermissions, "module.release-readiness.assessment.create") &&
+    has(modulePermissions, "module.release-readiness.assessment.run");
+  return (
+    <section className="nox-design-studio" aria-labelledby="formula-version-title">
+      <header className="nox-design-header">
+        <div>
+          <button
+            type="button"
+            className="nox-design-back"
+            onClick={() => navigate("/design-studio")}
+          >
+            ← Design Studio
+          </button>
+          <p className="nox-ai-context">
+            {formula.status} · {formula.approvalState}
+          </p>
+          <h1 id="formula-version-title">
+            {formula.name} · v{formula.versionNumber}
+          </h1>
+        </div>
+        {canAssess ? (
+          <button
+            type="button"
+            onClick={() =>
+              navigate(`/release-readiness/new?formulaVersionId=${formula.formulaVersionId}`)
+            }
+          >
+            Assess Release Readiness
+          </button>
+        ) : null}
+      </header>
+      <dl className="nox-design-intent-list">
+        <div>
+          <dt>Composition</dt>
+          <dd>{formula.compositionKind.replaceAll("_", " ")}</dd>
+        </div>
+        <div>
+          <dt>Bundle Hash</dt>
+          <dd>
+            <code>{formula.bundleHash}</code>
+          </dd>
+        </div>
+        <div>
+          <dt>FormulaVersion</dt>
+          <dd>
+            <code>{formula.formulaVersionId}</code>
+          </dd>
+        </div>
+      </dl>
+      {!eligible ? (
+        <p className="nox-design-warning">
+          Release assessment is available only for an APPROVED, FROZEN FULL_FORMULA.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 export function DesignStudioExperience({
   api,
   tenantId,
@@ -560,6 +661,7 @@ export function DesignStudioExperience({
   const [frozen, setFrozen] = useState<FrozenFormula>();
   const [trialReady, setTrialReady] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -614,6 +716,19 @@ export function DesignStudioExperience({
       </section>
     );
   if (!has(modulePermissions, READ)) return <PermissionDenied />;
+  const formulaVersionRoute = matchPath(
+    "/design-studio/formula-versions/:formulaVersionId",
+    location.pathname
+  );
+  if (formulaVersionRoute?.params.formulaVersionId)
+    return (
+      <FormulaVersionEntry
+        api={api}
+        tenantId={tenantId}
+        formulaVersionId={formulaVersionRoute.params.formulaVersionId}
+        modulePermissions={modulePermissions}
+      />
+    );
   if (!mode) return <WorkflowChooser onChoose={setMode} />;
 
   const uploadAsset = async (event: ChangeEvent<HTMLInputElement>) => {

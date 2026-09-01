@@ -146,4 +146,39 @@ for (const requiredBoundary of [
   }
 }
 
+const releaseReadinessMigration = readFileSync(
+  resolve(migrationDirectory, "20260901121537_g6_release_readiness.sql"),
+  "utf8"
+);
+const declaredReleaseReadinessTables = [
+  ...releaseReadinessMigration.matchAll(/create\s+table\s+release_readiness\.([a-z_]+)/gi)
+].map((match) => match[1]);
+const canonicalReleaseReadinessTables = ["assessments", "checks"];
+
+if (
+  declaredReleaseReadinessTables.length !== canonicalReleaseReadinessTables.length ||
+  canonicalReleaseReadinessTables.some((table) => !declaredReleaseReadinessTables.includes(table))
+) {
+  throw new Error(
+    `Gate 6 must create exactly assessments and checks; found ${declaredReleaseReadinessTables.join(",")}`
+  );
+}
+
+for (const requiredBoundary of [
+  "source_composition_kind is distinct from 'FULL_FORMULA'",
+  "source_approval is distinct from 'APPROVED'",
+  "FINAL_RELEASE_ASSESSMENT_IMMUTABLE",
+  "RELEASE_ASSESSMENT_CHECK_IMMUTABLE",
+  "RELEASE_ASSESSMENT_CHECK_SET_INCOMPLETE",
+  "RELEASE_ASSESSMENT_DECISION_MISMATCH",
+  "RELEASE_CHECK_MATERIAL_NOT_IN_FORMULA",
+  "deferrable initially deferred",
+  "force row level security",
+  "grant select, insert on release_readiness.assessments"
+]) {
+  if (!releaseReadinessMigration.includes(requiredBoundary)) {
+    throw new Error(`Gate 6 persistence boundary missing: ${requiredBoundary}`);
+  }
+}
+
 console.log("MIGRATION_STATIC_VALIDATION=PASS");

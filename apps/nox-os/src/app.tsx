@@ -63,6 +63,11 @@ const LazyTrialSensoryExperience = lazy(async () => {
   return { default: module.TrialSensoryExperience };
 });
 
+const LazyReleaseReadinessExperience = lazy(async () => {
+  const module = await import("./release-readiness");
+  return { default: module.ReleaseReadinessExperience };
+});
+
 const publicIdentity = publicEnvironment({
   VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
   VITE_NOX_SOURCE_SHA: import.meta.env.VITE_NOX_SOURCE_SHA,
@@ -534,6 +539,18 @@ function AuthenticatedApplication({
             element={
               <Suspense fallback={<p className="nox-ai-context">Loading Trial & Sensory…</p>}>
                 <LazyTrialSensoryExperience
+                  api={api}
+                  tenantId={activeTenant?.tenantId}
+                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/release-readiness/*"
+            element={
+              <Suspense fallback={<p className="nox-ai-context">Loading Release Readiness…</p>}>
+                <LazyReleaseReadinessExperience
                   api={api}
                   tenantId={activeTenant?.tenantId}
                   modulePermissions={tenantContext?.authorization.modulePermissions ?? []}

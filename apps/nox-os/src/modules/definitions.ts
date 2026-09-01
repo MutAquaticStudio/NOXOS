@@ -249,6 +249,19 @@ export const moduleProfiles = {
     supportedViews: ["table", "form"],
     mobilePriority: ["review trial", "record sensory evidence"],
     reactBitsIntensity: "none"
+  }),
+  releaseReadiness: profile({
+    id: "release-readiness",
+    name: "Release Readiness",
+    archetype: "workflow",
+    secondaryArchetype: "registry",
+    density: "compact",
+    primaryObject: "ReleaseAssessment",
+    primaryTasks: ["assess release profile", "review checks", "reassess evidence"],
+    navigation: { inspector: true, aiSidecar: false, workspaceTabs: true, splitView: true },
+    supportedViews: ["table", "form"],
+    mobilePriority: ["review decision", "inspect blocking evidence"],
+    reactBitsIntensity: "none"
   })
 } as const satisfies Record<string, ModuleUxProfile>;
 
@@ -474,7 +487,11 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     id: "design-studio",
     displayName: "Design Studio",
     routeRoot: "/design-studio",
-    childRoutes: ["/design-studio/formula", "/design-studio/accords"],
+    childRoutes: [
+      "/design-studio/formula",
+      "/design-studio/accords",
+      "/design-studio/formula-versions/:formulaVersionId"
+    ],
     apiNamespace: "design-studio",
     navigationGroup: "Creative",
     lifecycle: "INTERNAL",
@@ -585,6 +602,45 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
           "module.trial-sensory.revision.request",
           "module.trial-sensory.approval.recommend"
         ]
+      }
+    }
+  }),
+  defineModule({
+    id: "release-readiness",
+    displayName: "Release Readiness",
+    routeRoot: "/release-readiness",
+    childRoutes: ["/release-readiness/new", "/release-readiness/:assessmentId"],
+    apiNamespace: "release-readiness",
+    navigationGroup: "Compliance",
+    lifecycle: "INTERNAL",
+    dependencies: ["platform", "material-intelligence", "design-studio", "trial-sensory"],
+    permissions: ["module.release-readiness.assessment.read"],
+    entitlement: "module.release-readiness",
+    featureFlag: "module.release-readiness",
+    uxProfile: moduleProfiles.releaseReadiness,
+    owner: "Release Readiness owner",
+    icon: "shield",
+    authorization: {
+      permissions: [
+        "module.release-readiness.assessment.read",
+        "module.release-readiness.assessment.create",
+        "module.release-readiness.assessment.run",
+        "module.release-readiness.assessment.review"
+      ],
+      defaultRoleGrants: {
+        TENANT_OWNER: [
+          "module.release-readiness.assessment.read",
+          "module.release-readiness.assessment.create",
+          "module.release-readiness.assessment.run",
+          "module.release-readiness.assessment.review"
+        ],
+        TENANT_ADMIN: [
+          "module.release-readiness.assessment.read",
+          "module.release-readiness.assessment.create",
+          "module.release-readiness.assessment.run",
+          "module.release-readiness.assessment.review"
+        ],
+        TENANT_MEMBER: ["module.release-readiness.assessment.read"]
       }
     }
   })

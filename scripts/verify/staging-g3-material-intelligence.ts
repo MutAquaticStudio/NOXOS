@@ -34,6 +34,7 @@ const protectionBypass = required("VERCEL_AUTOMATION_BYPASS_SECRET");
 const expectedSourceSha = required("EXPECTED_SOURCE_SHA");
 const visualCaptureDirectory = process.env.G3_VISUAL_CAPTURE_DIR;
 const g5VisualCaptureDirectory = process.env.G5_VISUAL_CAPTURE_DIR;
+const g6VisualCaptureDirectory = process.env.G6_VISUAL_CAPTURE_DIR;
 
 if (raw.NOX_EXPECTED_ENV !== "staging" || stagingProjectRef === productionProjectRef) {
   throw new Error("G3 fixture acceptance may target only the isolated Staging project.");
@@ -129,6 +130,17 @@ try {
       ),
       200,
       "Trial & Sensory entitlement"
+    );
+  }
+  for (const tenantId of [tenantA, tenantB]) {
+    expectStatus(
+      await api(
+        platformOwnerToken,
+        `/platform/tenants/${tenantId}/entitlements/module.release-readiness`,
+        { method: "PUT", body: { enabled: true } }
+      ),
+      200,
+      "Release Readiness entitlement"
     );
   }
   const materialContext = await api<{
@@ -1014,6 +1026,9 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
     await runG5AccordAcceptance(page, tenantA, frozenAccord.body.formulaVersion);
     await refreshToken("B");
     actor = token("B");
+    await runG6Acceptance(page, tenantA, tenantB, frozen, frozenAccord.body.formulaVersion);
+    await refreshToken("B");
+    actor = token("B");
     expectStatus(
       await api(actor, `/design-studio/briefs/${accordBriefId}/generate`, {
         method: "POST",
@@ -1068,6 +1083,247 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
     if (!response.ok && response.status !== 404)
       throw new Error("G4 private source attachment cleanup failed.");
   }
+}
+
+async function runG6Acceptance(
+  page: Page,
+  tenantA: string,
+  tenantB: string,
+  formula: { formulaVersionId: string; bundleHash: string },
+  accord: { formulaVersionId: string }
+): Promise<void> {
+  const actor = token("B");
+  const formulaLines = await maintenance<
+    { material_id: string; active_aromatic_mass_mg: string }[]
+  >`
+    select material_id::text, active_aromatic_mass_mg::text
+    from design_studio.formula_lines
+    where tenant_id = ${tenantA} and formula_version_id = ${formula.formulaVersionId}
+    order by line_order
+  `;
+  const restrictedLine = formulaLines.find(
+    (candidate) => BigInt(candidate.active_aromatic_mass_mg) > 0n
+  );
+  if (!restrictedLine) throw new Error("G6 acceptance requires one active Formula line.");
+  const regulatoryMaterialId = restrictedLine.material_id;
+  for (const formulaLine of formulaLines) {
+    const isRestricted = formulaLine.material_id === regulatoryMaterialId;
+    await maintenance`
+      insert into material_intelligence.material_properties (
+        material_id, source_reference, ifra_cat4_max_pct, ifra_amendment,
+        ifra_source_reference, ifra_restricted, ifra_limits, eu_allergens
+      ) values (
+        ${formulaLine.material_id},
+        ${isRestricted ? "G6-STAGING-SOURCE" : "G6-STAGING-NONRESTRICTED-SOURCE"},
+        ${isRestricted ? 100 : null}, '51',
+        ${isRestricted ? "G6-STAGING-IFRA" : "G6-STAGING-NONRESTRICTED-IFRA"},
+        ${isRestricted}, '{}'::jsonb, '[]'::jsonb
+      ) on conflict (material_id) do update set
+        source_reference = excluded.source_reference,
+        ifra_cat4_max_pct = excluded.ifra_cat4_max_pct,
+        ifra_amendment = excluded.ifra_amendment,
+        ifra_source_reference = excluded.ifra_source_reference,
+        ifra_restricted = excluded.ifra_restricted,
+        ifra_limits = excluded.ifra_limits,
+        eu_allergens = excluded.eu_allergens,
+        updated_at = now()
+    `;
+  }
+
+  const availability = await api<{
+    moduleAvailability: Array<{ moduleId: string; state: string }>;
+    authorization: { modulePermissions: string[] };
+  }>(actor, "/context", { tenantId: tenantA });
+  expectStatus(availability, 200, "G6 tenant context");
+  if (
+    availability.body.moduleAvailability.find((item) => item.moduleId === "release-readiness")
+      ?.state !== "AVAILABLE" ||
+    !availability.body.authorization.modulePermissions.includes(
+      "module.release-readiness.assessment.run"
+    )
+  )
+    throw new Error("Release Readiness is not AVAILABLE with server-derived run permission.");
+
+  expectError(
+    await api(token("A"), "/release-readiness/assessments", {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        formulaVersionId: formula.formulaVersionId,
+        applicationKey: "fine-fragrance",
+        dosagePct: 10,
+        policyKey: "g6-known-limit-v1"
+      }
+    }),
+    403,
+    "PERMISSION_DENIED",
+    "G6 unauthorized assessment"
+  );
+  expectError(
+    await api(token("E"), "/release-readiness/assessments", {
+      method: "POST",
+      tenantId: tenantB,
+      body: {
+        formulaVersionId: formula.formulaVersionId,
+        applicationKey: "fine-fragrance",
+        dosagePct: 10,
+        policyKey: "g6-known-limit-v1"
+      }
+    }),
+    404,
+    "NOT_FOUND",
+    "G6 cross-tenant Formula non-disclosure"
+  );
+  expectError(
+    await api(actor, "/release-readiness/assessments", {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        formulaVersionId: accord.formulaVersionId,
+        applicationKey: "fine-fragrance",
+        dosagePct: 10,
+        policyKey: "g6-known-limit-v1"
+      }
+    }),
+    409,
+    "UNSUPPORTED_COMPOSITION_KIND",
+    "G6 Accord rejection"
+  );
+
+  type AssessmentResult = {
+    assessment: { id: string; decision: string; supersedesAssessmentId: string | null };
+  };
+  const ready = await api<AssessmentResult>(actor, "/release-readiness/assessments", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      formulaVersionId: formula.formulaVersionId,
+      applicationKey: "fine-fragrance",
+      dosagePct: 10,
+      policyKey: "g6-known-limit-v1"
+    }
+  });
+  expectStatus(ready, 201, "G6 READY assessment");
+  if (ready.body.assessment.decision !== "READY") throw new Error("G6 READY path failed.");
+
+  await maintenance`
+    update material_intelligence.material_properties
+    set ifra_amendment = null, updated_at = now()
+    where material_id = ${regulatoryMaterialId}
+  `;
+  const review = await api<AssessmentResult>(
+    actor,
+    `/release-readiness/assessments/${ready.body.assessment.id}/reassess`,
+    { method: "POST", tenantId: tenantA }
+  );
+  expectStatus(review, 201, "G6 REVIEW_REQUIRED reassessment");
+  if (
+    review.body.assessment.decision !== "REVIEW_REQUIRED" ||
+    review.body.assessment.supersedesAssessmentId !== ready.body.assessment.id
+  )
+    throw new Error("G6 REVIEW_REQUIRED lineage failed.");
+
+  await maintenance`
+    update material_intelligence.material_properties
+    set ifra_cat4_max_pct = 0,
+        ifra_amendment = '51', updated_at = now()
+    where material_id = ${regulatoryMaterialId}
+  `;
+  const blocked = await api<AssessmentResult>(
+    actor,
+    `/release-readiness/assessments/${review.body.assessment.id}/reassess`,
+    { method: "POST", tenantId: tenantA }
+  );
+  expectStatus(blocked, 201, "G6 BLOCKED reassessment");
+  if (
+    blocked.body.assessment.decision !== "BLOCKED" ||
+    blocked.body.assessment.supersedesAssessmentId !== review.body.assessment.id
+  )
+    throw new Error("G6 BLOCKED lineage failed.");
+
+  for (const [id, decision] of [
+    [ready.body.assessment.id, "READY"],
+    [review.body.assessment.id, "REVIEW_REQUIRED"],
+    [blocked.body.assessment.id, "BLOCKED"]
+  ] as const) {
+    const current = await api<AssessmentResult>(actor, `/release-readiness/assessments/${id}`, {
+      tenantId: tenantA
+    });
+    expectStatus(current, 200, `G6 immutable ${decision} history`);
+    if (current.body.assessment.decision !== decision)
+      throw new Error(`G6 historical ${decision} assessment changed.`);
+  }
+
+  let assessmentMutationRejected = false;
+  try {
+    await maintenance`
+      update release_readiness.assessments set decision = 'READY'
+      where tenant_id = ${tenantA} and id = ${blocked.body.assessment.id}
+    `;
+  } catch {
+    assessmentMutationRejected = true;
+  }
+  if (!assessmentMutationRejected) throw new Error("G6 final assessment was mutable.");
+  let checkMutationRejected = false;
+  try {
+    await maintenance`
+      update release_readiness.checks set result = 'PASS'
+      where tenant_id = ${tenantA} and assessment_id = ${blocked.body.assessment.id}
+    `;
+  } catch {
+    checkMutationRejected = true;
+  }
+  if (!checkMutationRejected) throw new Error("G6 final checks were mutable.");
+
+  const audit = await maintenance<{ action: string }[]>`
+    select action from platform.audit_events
+    where tenant_id = ${tenantA} and resource_type = 'ReleaseAssessment'
+      and action in ('release-readiness.assessed', 'release-readiness.reassessed')
+  `;
+  if (
+    !audit.some((item) => item.action === "release-readiness.assessed") ||
+    !audit.some((item) => item.action === "release-readiness.reassessed")
+  )
+    throw new Error("G6 assessment AuditEvent evidence is incomplete.");
+
+  await signInInBrowser(page, fixture("B"));
+  await page.goto(new URL("/release-readiness", stagingUrl).toString(), {
+    waitUntil: "networkidle"
+  });
+  await page.getByRole("heading", { name: "Release Assessments" }).waitFor({ state: "visible" });
+  await captureG6(page, "release-readiness-registry", "/release-readiness");
+  await page.goto(
+    new URL(`/release-readiness/${blocked.body.assessment.id}`, stagingUrl).toString(),
+    { waitUntil: "networkidle" }
+  );
+  await page.getByRole("heading", { name: "BLOCKED" }).waitFor({ state: "visible" });
+  await captureG6(
+    page,
+    "release-readiness-detail",
+    `/release-readiness/${blocked.body.assessment.id}`
+  );
+  await signOutInBrowser(page);
+
+  console.log("G6_STAGING_READY_PATH=PASS");
+  console.log("G6_STAGING_REVIEW_REQUIRED_PATH=PASS");
+  console.log("G6_STAGING_BLOCKED_PATH=PASS");
+  console.log("G6_STAGING_IMMUTABILITY=PASS");
+  console.log("G6_STAGING_TENANT_SECURITY=PASS");
+}
+
+async function captureG6(page: Page, name: string, route: string): Promise<void> {
+  if (!g6VisualCaptureDirectory) return;
+  await mkdir(g6VisualCaptureDirectory, { recursive: true });
+  await page.screenshot({ path: resolve(g6VisualCaptureDirectory, `${name}.png`), fullPage: true });
+  await writeFile(
+    resolve(g6VisualCaptureDirectory, `${name}.json`),
+    JSON.stringify(
+      { route, viewport: page.viewportSize(), sha: expectedSourceSha, environment: "staging" },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
 }
 
 async function runG5AccordAcceptance(
@@ -1606,6 +1862,8 @@ async function cleanupFixtures(): Promise<void> {
       // composition triggers for the explicitly enumerated disposable acceptance identities.
       await transaction`set local session_replication_role = replica`;
       for (const tenantId of tenantIds) {
+        await transaction`delete from release_readiness.checks where tenant_id = ${tenantId}`;
+        await transaction`delete from release_readiness.assessments where tenant_id = ${tenantId}`;
         await transaction`
           delete from trial_sensory.sensory_deltas where tenant_id = ${tenantId}
         `;

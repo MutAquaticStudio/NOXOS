@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium, type Page } from "@playwright/test";
+import { createRuntimeDatabase } from "@nox-os/database";
 
 type ApiResult<T = unknown> = { status: number; body: T };
 type Candidate = { generationStrategy: string };
@@ -12,11 +13,18 @@ const email = required("NOX_PREVIEW_MATERIAL_USER_EMAIL");
 const password = required("NOX_PREVIEW_MATERIAL_USER_PASSWORD");
 const protectionBypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 const captureDirectory = process.env.G5_VISUAL_CAPTURE_DIR;
+const g6CaptureDirectory = process.env.G6_VISUAL_CAPTURE_DIR;
+const runtimeDatabaseUrl = required("NOX_PREVIEW_RUNTIME_DATABASE_URL");
 const suffix = randomUUID().slice(0, 8);
 
 if (!/^[0-9a-f]{40}$/i.test(expectedSha))
   throw new Error("G5 Preview acceptance requires a full immutable source SHA.");
 
+const runtime = createRuntimeDatabase({
+  connectionUrl: runtimeDatabaseUrl,
+  applicationName: "nox-os-g6-preview-acceptance",
+  expectedRole: "nox_app_runtime"
+});
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({
@@ -99,6 +107,18 @@ try {
     "G4 Accord approval with G5 evidence"
   );
 
+  await page.goto(url(`/design-studio/formula-versions/${formulaVersionId}`), {
+    waitUntil: "networkidle"
+  });
+  await visible(page, page.getByRole("button", { name: "Assess Release Readiness" }));
+  await page.goto(url(`/design-studio/formula-versions/${accordVersionId}`), {
+    waitUntil: "networkidle"
+  });
+  if (await page.getByRole("button", { name: "Assess Release Readiness" }).count())
+    throw new Error("G4 displayed the G6 entry action for an ACCORD_FORMULATION.");
+
+  await runG6PreviewAcceptance(page, tenantId, formulaVersionId, accordVersionId);
+
   await page.goto(url("/trials"), { waitUntil: "networkidle" });
   await visible(page, page.getByRole("heading", { name: "Trial Registry" }));
   await capture(page, "trial-registry-desktop", "/trials");
@@ -125,12 +145,20 @@ try {
   }
 } finally {
   await browser.close();
+  await runtime.end({ timeout: 5 });
 }
 
 console.log("G5_AUTHENTICATED_PREVIEW_ACCEPTANCE=PASS");
 console.log("G5_TRIAL_SCALING=PASS");
 console.log("G5_SENSORY_REVISION=PASS");
 console.log("G5_APPROVAL_EVIDENCE=PASS");
+console.log("G6_AUTHENTICATED_PREVIEW_ACCEPTANCE=PASS");
+console.log("G6_PREVIEW_READY_PATH=PASS");
+console.log("G6_PREVIEW_REVIEW_REQUIRED_PATH=PASS");
+console.log("G6_PREVIEW_BLOCKED_PATH=PASS");
+console.log("G6_PREVIEW_ACCORD_REJECTION=PASS");
+console.log("G6_PREVIEW_TENANT_DENIAL=PASS");
+console.log("G6_PREVIEW_IMMUTABLE_HISTORY=PASS");
 
 function required(name: string): string {
   const value = process.env[name];
@@ -244,6 +272,178 @@ async function assertAvailability(page: Page, tenantId: string) {
   });
   if (denied.status() !== 401)
     throw new Error("Forged authority headers affected an unauthenticated G5 request.");
+}
+
+async function runG6PreviewAcceptance(
+  page: Page,
+  tenantId: string,
+  formulaVersionId: string,
+  accordVersionId: string
+): Promise<void> {
+  const lines = await runtime<Array<{ material_id: string; active_aromatic_mass_mg: string }>>`
+    select material_id::text, active_aromatic_mass_mg::text
+    from design_studio.formula_lines
+    where tenant_id = ${tenantId} and formula_version_id = ${formulaVersionId}
+    order by line_order
+  `;
+  const restricted = lines.find((line) => BigInt(line.active_aromatic_mass_mg) > 0n);
+  if (!restricted) throw new Error("G6 Preview requires an active aromatic Formula line.");
+  for (const line of lines) {
+    const isRestricted = line.material_id === restricted.material_id;
+    await runtime`
+      insert into material_intelligence.material_properties (
+        material_id, source_reference, ifra_cat4_max_pct, ifra_amendment,
+        ifra_source_reference, ifra_restricted, ifra_limits, eu_allergens
+      ) values (
+        ${line.material_id},
+        ${isRestricted ? "G6-PREVIEW-SOURCE" : "G6-PREVIEW-NONRESTRICTED-SOURCE"},
+        ${isRestricted ? 100 : null}, '51',
+        ${isRestricted ? "G6-PREVIEW-IFRA" : "G6-PREVIEW-NONRESTRICTED-IFRA"},
+        ${isRestricted},
+        '{}'::jsonb, '[]'::jsonb
+      ) on conflict (material_id) do update set
+        source_reference = excluded.source_reference,
+        ifra_cat4_max_pct = excluded.ifra_cat4_max_pct,
+        ifra_amendment = excluded.ifra_amendment,
+        ifra_source_reference = excluded.ifra_source_reference,
+        ifra_restricted = excluded.ifra_restricted,
+        ifra_limits = excluded.ifra_limits,
+        eu_allergens = excluded.eu_allergens,
+        updated_at = now()
+    `;
+  }
+
+  const context = expectStatus(
+    await api<{
+      moduleAvailability?: Array<{ moduleId: string; state: string }>;
+      authorization?: { modulePermissions?: string[] };
+    }>(page, tenantId, "/context"),
+    200,
+    "Release Readiness context"
+  );
+  if (
+    context.moduleAvailability?.find((item) => item.moduleId === "release-readiness")?.state !==
+      "AVAILABLE" ||
+    !context.authorization?.modulePermissions?.includes("module.release-readiness.assessment.run")
+  )
+    throw new Error("G6 Preview module availability or permission is incomplete.");
+
+  await page.goto(url(`/release-readiness/new?formulaVersionId=${formulaVersionId}`), {
+    waitUntil: "networkidle"
+  });
+  await visible(page, page.getByRole("heading", { name: "Assess Release Readiness" }));
+  await captureG6(
+    page,
+    "release-readiness-profile",
+    `/release-readiness/new?formulaVersionId=${formulaVersionId}`
+  );
+
+  const accord = await api<{ error?: { code?: string } }>(
+    page,
+    tenantId,
+    "/release-readiness/assessments",
+    "POST",
+    {
+      formulaVersionId: accordVersionId,
+      applicationKey: "fine-fragrance",
+      dosagePct: 10,
+      policyKey: "g6-known-limit-v1"
+    }
+  );
+  if (accord.status !== 409 || accord.body.error?.code !== "UNSUPPORTED_COMPOSITION_KIND")
+    throw new Error(`G6 Accord rejection failed: ${JSON.stringify(accord)}`);
+
+  const crossTenant = await api(page, randomUUID(), "/release-readiness/assessments", "POST", {
+    formulaVersionId,
+    applicationKey: "fine-fragrance",
+    dosagePct: 10,
+    policyKey: "g6-known-limit-v1"
+  });
+  if (![403, 404].includes(crossTenant.status))
+    throw new Error("G6 forged cross-tenant context was not denied.");
+
+  type Result = {
+    assessment: { id: string; decision: string; supersedesAssessmentId: string | null };
+  };
+  const ready = expectStatus(
+    await api<Result>(page, tenantId, "/release-readiness/assessments", "POST", {
+      formulaVersionId,
+      applicationKey: "fine-fragrance",
+      dosagePct: 10,
+      policyKey: "g6-known-limit-v1"
+    }),
+    201,
+    "G6 READY Preview assessment"
+  ).assessment;
+  if (ready.decision !== "READY") throw new Error("G6 Preview READY path failed.");
+
+  await runtime`
+    update material_intelligence.material_properties
+    set ifra_amendment = null, updated_at = now()
+    where material_id = ${restricted.material_id}
+  `;
+  const review = expectStatus(
+    await api<Result>(
+      page,
+      tenantId,
+      `/release-readiness/assessments/${ready.id}/reassess`,
+      "POST"
+    ),
+    201,
+    "G6 REVIEW_REQUIRED Preview reassessment"
+  ).assessment;
+  if (review.decision !== "REVIEW_REQUIRED" || review.supersedesAssessmentId !== ready.id)
+    throw new Error("G6 Preview REVIEW_REQUIRED lineage failed.");
+
+  await runtime`
+    update material_intelligence.material_properties
+    set ifra_cat4_max_pct = 0, ifra_amendment = '51', updated_at = now()
+    where material_id = ${restricted.material_id}
+  `;
+  const blocked = expectStatus(
+    await api<Result>(
+      page,
+      tenantId,
+      `/release-readiness/assessments/${review.id}/reassess`,
+      "POST"
+    ),
+    201,
+    "G6 BLOCKED Preview reassessment"
+  ).assessment;
+  if (blocked.decision !== "BLOCKED" || blocked.supersedesAssessmentId !== review.id)
+    throw new Error("G6 Preview BLOCKED lineage failed.");
+
+  for (const [id, expected] of [
+    [ready.id, "READY"],
+    [review.id, "REVIEW_REQUIRED"],
+    [blocked.id, "BLOCKED"]
+  ] as const) {
+    const historical = expectStatus(
+      await api<Result>(page, tenantId, `/release-readiness/assessments/${id}`),
+      200,
+      `G6 historical ${expected} assessment`
+    ).assessment;
+    if (historical.decision !== expected)
+      throw new Error(`G6 historical ${expected} assessment changed.`);
+  }
+
+  let immutable = false;
+  try {
+    await runtime`
+      update release_readiness.assessments set decision = 'READY'
+      where tenant_id = ${tenantId} and id = ${blocked.id}
+    `;
+  } catch {
+    immutable = true;
+  }
+  if (!immutable) throw new Error("G6 Preview final assessment was mutable.");
+
+  await page.goto(url("/release-readiness"), { waitUntil: "networkidle" });
+  await visible(page, page.getByRole("heading", { name: "Release Assessments" }));
+  await captureG6(page, "release-readiness-registry", "/release-readiness");
+  await page.goto(url(`/release-readiness/${blocked.id}`), { waitUntil: "networkidle" });
+  await visible(page, page.getByRole("heading", { name: "BLOCKED" }));
+  await captureG6(page, "release-readiness-detail", `/release-readiness/${blocked.id}`);
 }
 async function createFrozenFormula(page: Page, tenantId: string): Promise<string> {
   const project = expectStatus(
@@ -575,6 +775,20 @@ async function capture(page: Page, name: string, route: string) {
   await page.screenshot({ path: resolve(captureDirectory, `${name}.png`), fullPage: true });
   await writeFile(
     resolve(captureDirectory, `${name}.json`),
+    JSON.stringify(
+      { route, viewport: page.viewportSize(), sha: expectedSha, environment: "preview" },
+      null,
+      2
+    ) + "\n"
+  );
+}
+
+async function captureG6(page: Page, name: string, route: string) {
+  if (!g6CaptureDirectory) return;
+  await mkdir(g6CaptureDirectory, { recursive: true });
+  await page.screenshot({ path: resolve(g6CaptureDirectory, `${name}.png`), fullPage: true });
+  await writeFile(
+    resolve(g6CaptureDirectory, `${name}.json`),
     JSON.stringify(
       { route, viewport: page.viewportSize(), sha: expectedSha, environment: "preview" },
       null,

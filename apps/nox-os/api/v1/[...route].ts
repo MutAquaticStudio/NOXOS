@@ -8,6 +8,8 @@ import {
   createPostgresDesignStudioStore,
   createPostgresMaterialCandidateRetriever,
   createPostgresTrialSensoryStore,
+  createPostgresReleaseReadinessStore,
+  createPostgresReleaseReadinessSources,
   createRuntimeDatabase,
   probeDatabase
 } from "@nox-os/database";
@@ -18,6 +20,11 @@ import {
   DesignStudioFormulaRevisionPort
 } from "@nox-os/design-studio";
 import { createTrialSensoryApi, TrialSensoryApplication } from "@nox-os/trial-sensory";
+import {
+  createReleaseReadinessApi,
+  KnownLimitV1Policy,
+  ReleaseReadinessApplication
+} from "@nox-os/release-readiness";
 import { createPlatformCoreApi, createRequestContext, createFoundationApi } from "@nox-os/platform";
 import { NoxOeScientificAdapter, UnavailableScientificAdapter } from "@nox-os/scientific";
 import { SupabasePrivateFileStore } from "@nox-os/storage";
@@ -117,6 +124,28 @@ const trialSensory =
           new DesignStudioFormulaRevisionPort(designStudioApplication, designStudioStore, context)
       })
     : undefined;
+const releaseReadinessSources = runtimeDatabase
+  ? createPostgresReleaseReadinessSources(runtimeDatabase)
+  : undefined;
+const releaseReadinessApplication =
+  runtimeDatabase && releaseReadinessSources
+    ? new ReleaseReadinessApplication(
+        createPostgresReleaseReadinessStore(runtimeDatabase),
+        releaseReadinessSources,
+        releaseReadinessSources,
+        releaseReadinessSources,
+        new KnownLimitV1Policy()
+      )
+    : undefined;
+const releaseReadiness =
+  platformCore && releaseReadinessApplication
+    ? createReleaseReadinessApi({
+        application: releaseReadinessApplication,
+        authorization: platformCore,
+        definitions: [...moduleDefinitions, ...acceptanceModules],
+        featureFlags
+      })
+    : undefined;
 const scientificGateway =
   process.env.NOX_OE_URL && process.env.NOX_OE_INTERNAL_TOKEN
     ? new NoxOeScientificAdapter({
@@ -137,7 +166,8 @@ const foundationApi = createFoundationApi({
   additionalRouteRegistrars: [
     ...(materialIntelligence ? [materialIntelligence] : []),
     ...(designStudio ? [designStudio] : []),
-    ...(trialSensory ? [trialSensory] : [])
+    ...(trialSensory ? [trialSensory] : []),
+    ...(releaseReadiness ? [releaseReadiness] : [])
   ]
 });
 

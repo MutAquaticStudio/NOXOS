@@ -1,0 +1,10 @@
+{
+  "masterPrompt": {
+    "sha256": "3a9992733f5dad0ac987de87959e1249ebd7da96c3b6ca3b7cd208b08dec93dc",
+    "version": "1.0-COMPLETE",
+    "beginMarker": "G6_MASTER_PROMPT_BEGIN",
+    "endMarker": "G6_MASTER_PROMPT_END",
+    "endOfFile": true
+  },
+  "g5AcceptedBaselineSha": "a97befac4415662e906c775338d681741daddcfe"
+}

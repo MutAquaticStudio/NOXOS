@@ -85,6 +85,9 @@ importers:
       "@nox-os/platform":
         specifier: workspace:*
         version: link:../../packages/platform
+      "@nox-os/release-readiness":
+        specifier: workspace:*
+        version: link:../../packages/release-readiness
       "@nox-os/scientific":
         specifier: workspace:*
         version: link:../../packages/scientific
@@ -155,6 +158,9 @@ importers:
       "@nox-os/material-intelligence":
         specifier: workspace:*
         version: link:../material-intelligence
+      "@nox-os/release-readiness":
+        specifier: workspace:*
+        version: link:../release-readiness
       "@nox-os/trial-sensory":
         specifier: workspace:*
         version: link:../trial-sensory
@@ -227,6 +233,21 @@ importers:
       zod:
         specifier: 4.3.6
         version: 4.3.6
+
+  packages/release-readiness:
+    dependencies:
+      "@nox-os/contracts":
+        specifier: workspace:*
+        version: link:../contracts
+      "@nox-os/design-studio":
+        specifier: workspace:*
+        version: link:../design-studio
+      "@nox-os/module-registry":
+        specifier: workspace:*
+        version: link:../module-registry
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   packages/scientific:
     dependencies:
