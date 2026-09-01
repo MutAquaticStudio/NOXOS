@@ -38,14 +38,16 @@ function canonicalCat4Values(material: RegulatoryMaterialEvidence): Array<{
   for (const [key, raw] of Object.entries(material.ifraLimits)) {
     const canonical = key.toLowerCase().replace(/[^a-z0-9]/g, "");
     if (!["cat4", "category4", "ifracat4maxpct"].includes(canonical)) continue;
-    if (typeof raw === "number" || (typeof raw === "string" && raw.trim())) {
-      try {
-        exactDecimal(raw);
-        values.push({ source: `ifraLimits.${key}`, value: String(raw) });
-      } catch {
-        // Invalid configured evidence is handled as conflicting/unsupported evidence below.
-        values.push({ source: `ifraLimits.${key}`, value: "INVALID" });
-      }
+    if (typeof raw !== "number" && typeof raw !== "string") {
+      values.push({ source: `ifraLimits.${key}`, value: "INVALID" });
+      continue;
+    }
+    try {
+      exactDecimal(raw);
+      values.push({ source: `ifraLimits.${key}`, value: String(raw) });
+    } catch {
+      // Recognized but malformed Category 4 evidence must fail closed to review.
+      values.push({ source: `ifraLimits.${key}`, value: "INVALID" });
     }
   }
   return values;

@@ -89,6 +89,24 @@ describe("G6 deterministic known-limit policy", () => {
     expect(evaluate(g6MaterialEvidence({ ifraLimits: { CAT_4: "1.0" } })).decision).toBe("READY");
   });
 
+  it("fails closed on recognized nonnumeric Category 4 evidence", () => {
+    for (const value of [true, false, null, ""] as const) {
+      const result = evaluate(
+        g6MaterialEvidence({
+          ifraCat4MaxPct: null,
+          ifraRestricted: false,
+          ifraLimits: { cat4: value }
+        })
+      );
+      expect(result.decision).toBe("REVIEW_REQUIRED");
+      expect(result.checks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ checkKey: "KNOWN_LIMIT", result: "REVIEW" })
+        ])
+      );
+    }
+  });
+
   it("does not treat an unproven default non-restricted flag as complete evidence", () => {
     const result = evaluate(
       g6MaterialEvidence({
