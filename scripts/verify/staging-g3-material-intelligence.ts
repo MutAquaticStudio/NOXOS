@@ -2029,6 +2029,10 @@ async function runG5Acceptance(
   // carrying the now-revoked token captured at G5 entry.
   await refreshToken("B");
   await runG7OperationalAcceptance(page, token("B"), tenantA, tenantB, frozen.formulaVersionId);
+
+  // G7's browser acceptance signs the fixture out and Supabase revokes its API
+  // sessions. Re-authenticate before beginning the API-only G8 acceptance.
+  await refreshToken("B");
   await runG8OperationalAcceptance(page, token("B"), tenantA, tenantB);
 
   console.log("G5_STAGING_TRIAL_SENSORY_ACCEPTANCE=PASS");
