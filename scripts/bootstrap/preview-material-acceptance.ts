@@ -92,6 +92,11 @@ try {
       key: "module.release-readiness",
       enabled: true
     });
+    await store.upsertTenantEntitlement({
+      tenantId: tenant.id,
+      key: "module.inventory",
+      enabled: true
+    });
     return tenant;
   });
 

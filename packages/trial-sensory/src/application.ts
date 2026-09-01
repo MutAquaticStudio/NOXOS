@@ -20,10 +20,14 @@ import {
   type SensoryDeltaDraft,
   type SensoryEvaluation,
   type Trial,
+  type TrialInventoryAvailability,
+  type TrialInventoryReservationSet,
+  type TrialPreparationPlan,
+  type ReserveTrialInventoryRequest,
   type UpdateEvaluationRequest
 } from "./contracts.js";
 import { TrialSensoryProblem } from "./problem.js";
-import type { TrialSensoryStore } from "./persistence.js";
+import type { TrialInventoryPort, TrialSensoryStore } from "./persistence.js";
 
 export type TrialSensoryFormulaSource = {
   findFrozenFormulaVersion(
@@ -99,7 +103,8 @@ export class TrialSensoryApplication
 {
   constructor(
     readonly store: TrialSensoryStore,
-    private readonly formulas: TrialSensoryFormulaSource
+    private readonly formulas: TrialSensoryFormulaSource,
+    private readonly inventory: TrialInventoryPort
   ) {}
 
   async createTrial(
@@ -166,6 +171,97 @@ export class TrialSensoryApplication
     return this.formulas.findFrozenFormulaVersion(tenantId, trial.formulaVersionId);
   }
 
+  async preparationPlan(tenantId: string, trialId: string): Promise<TrialPreparationPlan> {
+    const trial = await this.requireTrial(tenantId, trialId);
+    ensureDraftTrial(trial);
+    const formula = await this.formulas.findFrozenFormulaVersion(tenantId, trial.formulaVersionId);
+    if (!formula || formula.bundleHash !== trial.formulaBundleHash) {
+      throw new TrialSensoryProblem(
+        409,
+        "FORMULA_VERSION_NOT_FROZEN",
+        "Trial lineage no longer matches its FROZEN FormulaVersion."
+      );
+    }
+    const scaled = scaleFormulaMasses(
+      formula.candidate.lines.map((line) => ({
+        materialId: line.materialId,
+        normalizedMassMg: line.normalizedMassMg
+      })),
+      trial.preparation.targetMassMg
+    );
+    const snapshots = new Map(
+      formula.candidate.lines.map((line) => [line.materialId, line.materialSnapshot.snapshotHash])
+    );
+    return {
+      trialId,
+      formulaVersionId: trial.formulaVersionId,
+      targetMassMg: trial.preparation.targetMassMg,
+      requirements: scaled.map((line) => ({
+        materialId: line.materialId,
+        requiredMassMg: line.scaledMassMg,
+        materialSnapshotHash: snapshots.get(line.materialId) ?? ""
+      }))
+    };
+  }
+
+  async inventoryAvailability(
+    tenantId: string,
+    trialId: string
+  ): Promise<TrialInventoryAvailability> {
+    const plan = await this.preparationPlan(tenantId, trialId);
+    return this.inventory.listAvailability({ tenantId, trialId, requirements: plan.requirements });
+  }
+
+  async reserveInventory(
+    context: TrialSensoryCommandContext,
+    trialId: string,
+    input: ReserveTrialInventoryRequest
+  ): Promise<TrialInventoryReservationSet> {
+    const plan = await this.preparationPlan(context.tenantId, trialId);
+    const required = new Map(
+      plan.requirements.map((item) => [item.materialId, BigInt(item.requiredMassMg)])
+    );
+    const allocated = new Map<string, bigint>();
+    for (const allocation of input.allocations) {
+      if (!required.has(allocation.materialId)) {
+        throw new TrialSensoryProblem(
+          409,
+          "TRIAL_INVENTORY_ALLOCATION_MISMATCH",
+          "Allocation includes a Material outside the Trial preparation plan."
+        );
+      }
+      allocated.set(
+        allocation.materialId,
+        (allocated.get(allocation.materialId) ?? 0n) + BigInt(allocation.quantityMg)
+      );
+    }
+    if (
+      required.size !== allocated.size ||
+      [...required].some(([materialId, mass]) => allocated.get(materialId) !== mass)
+    ) {
+      throw new TrialSensoryProblem(
+        409,
+        "TRIAL_INVENTORY_ALLOCATION_MISMATCH",
+        "Trial inventory allocation must exactly match every preparation requirement."
+      );
+    }
+    return this.inventory.reserve({
+      ...context,
+      trialId,
+      allocations: input.allocations,
+      operationKey: input.operationKey
+    });
+  }
+
+  async releaseInventory(
+    context: TrialSensoryCommandContext,
+    trialId: string,
+    operationKey: string
+  ): Promise<void> {
+    await this.preparationPlan(context.tenantId, trialId);
+    await this.inventory.releaseDraftTrialReservations({ ...context, trialId, operationKey });
+  }
+
   async prepareTrial(context: TrialSensoryCommandContext, trialId: string): Promise<Trial> {
     const trial = await this.requireTrial(context.tenantId, trialId);
     ensureDraftTrial(trial);
@@ -184,13 +280,11 @@ export class TrialSensoryApplication
         "Trial lineage no longer matches its FROZEN FormulaVersion."
       );
     }
-    const scaled = scaleFormulaMasses(
-      formula.candidate.lines.map((line) => ({
-        materialId: line.materialId,
-        normalizedMassMg: line.normalizedMassMg
-      })),
-      trial.preparation.targetMassMg
-    );
+    const plan = await this.preparationPlan(context.tenantId, trialId);
+    const scaled = plan.requirements.map((line) => ({
+      materialId: line.materialId,
+      scaledMassMg: line.requiredMassMg
+    }));
     const belowResolution = findBelowWeighableResolution(scaled);
     if (belowResolution.length > 0) {
       throw new TrialSensoryProblem(
@@ -199,14 +293,13 @@ export class TrialSensoryApplication
         "At least one Formula line is below the 1 mg balance resolution."
       );
     }
-    const snapshots = new Map(
-      formula.candidate.lines.map((line) => [line.materialId, line.materialSnapshot.snapshotHash])
-    );
     const lines = scaled.map((line, index) => ({
       materialId: line.materialId,
       lineOrder: index + 1,
       scaledMassMg: line.scaledMassMg,
-      materialSnapshotHash: snapshots.get(line.materialId) ?? ""
+      materialSnapshotHash:
+        plan.requirements.find((item) => item.materialId === line.materialId)
+          ?.materialSnapshotHash ?? ""
     }));
     const total = lines.reduce((sum, line) => sum + BigInt(line.scaledMassMg), 0n);
     if (total !== BigInt(trial.preparation.targetMassMg)) {

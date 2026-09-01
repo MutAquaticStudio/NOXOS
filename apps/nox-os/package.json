@@ -14,6 +14,7 @@
     "@nox-os/contracts": "workspace:*",
     "@nox-os/database": "workspace:*",
     "@nox-os/design-studio": "workspace:*",
+    "@nox-os/inventory": "workspace:*",
     "@nox-os/material-intelligence": "workspace:*",
     "@nox-os/module-registry": "workspace:*",
     "@nox-os/platform": "workspace:*",

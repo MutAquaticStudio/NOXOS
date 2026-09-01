@@ -343,17 +343,58 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     id: "inventory",
     displayName: "Inventory",
     routeRoot: "/inventory",
-    childRoutes: [],
+    childRoutes: ["/inventory/lots/:lotId"],
     apiNamespace: "inventory",
     navigationGroup: "Operations",
-    lifecycle: "DISABLED",
+    lifecycle: "ACTIVE",
     dependencies: ["platform", "material-intelligence"],
-    permissions: ["inventory.read"],
+    permissions: ["module.inventory.read"],
     entitlement: "module.inventory",
     featureFlag: "module.inventory",
     uxProfile: moduleProfiles.inventory,
     owner: "Inventory owner",
-    icon: "box"
+    icon: "box",
+    authorization: {
+      permissions: [
+        "module.inventory.read",
+        "module.inventory.location.manage",
+        "module.inventory.lot.create",
+        "module.inventory.lot.manage",
+        "module.inventory.stock.receive",
+        "module.inventory.stock.transfer",
+        "module.inventory.stock.consume",
+        "module.inventory.stock.adjust",
+        "module.inventory.stock.dispose",
+        "module.inventory.reservation.manage"
+      ],
+      defaultRoleGrants: {
+        TENANT_OWNER: [
+          "module.inventory.read",
+          "module.inventory.location.manage",
+          "module.inventory.lot.create",
+          "module.inventory.lot.manage",
+          "module.inventory.stock.receive",
+          "module.inventory.stock.transfer",
+          "module.inventory.stock.consume",
+          "module.inventory.stock.adjust",
+          "module.inventory.stock.dispose",
+          "module.inventory.reservation.manage"
+        ],
+        TENANT_ADMIN: [
+          "module.inventory.read",
+          "module.inventory.location.manage",
+          "module.inventory.lot.create",
+          "module.inventory.lot.manage",
+          "module.inventory.stock.receive",
+          "module.inventory.stock.transfer",
+          "module.inventory.stock.consume",
+          "module.inventory.stock.adjust",
+          "module.inventory.stock.dispose",
+          "module.inventory.reservation.manage"
+        ],
+        TENANT_MEMBER: ["module.inventory.read"]
+      }
+    }
   }),
   defineModule({
     id: "procurement",

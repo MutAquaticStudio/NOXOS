@@ -99,7 +99,7 @@ describe("API foundation", () => {
       scientificGateway: new UnavailableScientificAdapter(),
       environment: { NOX_ENV: "test", VERCEL_GIT_COMMIT_SHA: "test-sha" }
     });
-    const response = await api.dispatch(request(api, "/inventory/foundation"));
+    const response = await api.dispatch(request(api, "/procurement/foundation"));
 
     expect(response.status).toBe(404);
     expect(response.body).toMatchObject({ error: { code: "NOT_FOUND" } });

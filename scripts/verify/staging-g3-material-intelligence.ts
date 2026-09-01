@@ -35,6 +35,7 @@ const expectedSourceSha = required("EXPECTED_SOURCE_SHA");
 const visualCaptureDirectory = process.env.G3_VISUAL_CAPTURE_DIR;
 const g5VisualCaptureDirectory = process.env.G5_VISUAL_CAPTURE_DIR;
 const g6VisualCaptureDirectory = process.env.G6_VISUAL_CAPTURE_DIR;
+const g7VisualCaptureDirectory = process.env.G7_VISUAL_CAPTURE_DIR;
 
 if (raw.NOX_EXPECTED_ENV !== "staging" || stagingProjectRef === productionProjectRef) {
   throw new Error("G3 fixture acceptance may target only the isolated Staging project.");
@@ -49,6 +50,7 @@ const fixtures = new Map<FixtureKey, FixtureUser>();
 const tokens = new Map<FixtureKey, string>();
 const tenantIds: string[] = [];
 const materialIds: string[] = [];
+const inventoryStock = new Map<string, { locationId: string; lots: Map<string, string> }>();
 const runtime = createRuntimeDatabase({
   connectionUrl: runtimeDatabaseUrl,
   applicationName: "nox-os-g3-staging-fixture",
@@ -141,6 +143,16 @@ try {
       ),
       200,
       "Release Readiness entitlement"
+    );
+  }
+  for (const tenantId of [tenantA, tenantB]) {
+    expectStatus(
+      await api(platformOwnerToken, `/platform/tenants/${tenantId}/entitlements/module.inventory`, {
+        method: "PUT",
+        body: { enabled: true }
+      }),
+      200,
+      "Inventory entitlement"
     );
   }
   const materialContext = await api<{
@@ -1353,6 +1365,11 @@ async function runG5AccordAcceptance(
   )
     throw new Error("G5 Accord Trial did not preserve frozen Accord lineage.");
   expectStatus(
+    await allocateTrialInventory(actor, tenantId, created.body.trial.id),
+    201,
+    "G7 Accord exact reservation"
+  );
+  expectStatus(
     await api(actor, `/trials/${created.body.trial.id}/prepare`, {
       method: "POST",
       tenantId
@@ -1360,6 +1377,7 @@ async function runG5AccordAcceptance(
     200,
     "G5 Accord exact preparation"
   );
+  await assertTrialConsumption(actor, tenantId, created.body.trial.id, 20_000n);
   const evaluation = await api<{ evaluation: { id: string } }>(
     actor,
     `/trials/${created.body.trial.id}/evaluations`,
@@ -1417,6 +1435,119 @@ async function runG5AccordAcceptance(
   console.log("G5_STAGING_ACCORD_TRIAL=PASS");
 }
 
+async function allocateTrialInventory(
+  actor: string,
+  tenantId: string,
+  trialId: string
+): Promise<ApiResult> {
+  const plan = await api<{
+    plan: { requirements: Array<{ materialId: string; requiredMassMg: string }> };
+  }>(actor, `/trials/${trialId}/preparation-plan`, { tenantId });
+  expectStatus(plan, 200, "G7 Trial preparation plan");
+  let stock = inventoryStock.get(tenantId);
+  if (!stock) {
+    const created = await api<{ location: { id: string } }>(actor, "/inventory/locations", {
+      method: "POST",
+      tenantId,
+      body: {
+        locationCode: `STAGING-${suffix.slice(0, 12).toUpperCase()}`,
+        name: "Staging Trial Lab",
+        description: "Gate 7 isolated acceptance"
+      }
+    });
+    expectStatus(created, 201, "G7 Staging Location");
+    stock = { locationId: created.body.location.id, lots: new Map() };
+    inventoryStock.set(tenantId, stock);
+  }
+  const allocations: Array<{
+    materialId: string;
+    lotId: string;
+    locationId: string;
+    quantityMg: string;
+  }> = [];
+  for (const requirement of plan.body.plan.requirements) {
+    let lotId = stock.lots.get(requirement.materialId);
+    if (!lotId) {
+      const created = await api<{ lot: { id: string } }>(actor, "/inventory/lots", {
+        method: "POST",
+        tenantId,
+        body: {
+          materialId: requirement.materialId,
+          lotCode: `STG-${suffix.slice(0, 8)}-${requirement.materialId.slice(0, 8)}`,
+          supplierLotCode: null,
+          manufacturedAt: null,
+          expiresAt: null,
+          retestAt: null,
+          notes: "Gate 7 isolated acceptance"
+        }
+      });
+      expectStatus(created, 201, "G7 Staging Lot");
+      lotId = created.body.lot.id;
+      stock.lots.set(requirement.materialId, lotId);
+      expectStatus(
+        await api(actor, `/inventory/lots/${lotId}/receive`, {
+          method: "POST",
+          tenantId,
+          body: {
+            quantityMg: "10000000",
+            toLocationId: stock.locationId,
+            reasonCode: "G7_STAGING_ACCEPTANCE",
+            operationKey: `staging:${suffix}:lot:${lotId}:opening`
+          }
+        }),
+        201,
+        "G7 Staging opening stock"
+      );
+    }
+    allocations.push({
+      materialId: requirement.materialId,
+      lotId,
+      locationId: stock.locationId,
+      quantityMg: requirement.requiredMassMg
+    });
+  }
+  if ((await trialTraceTotal(actor, tenantId, trialId)) !== 0n)
+    throw new Error("DRAFT Trial consumed Inventory before PREPARED.");
+  return api(actor, `/trials/${trialId}/inventory/reservations`, {
+    method: "POST",
+    tenantId,
+    body: {
+      allocations,
+      operationKey: `staging:${suffix}:trial:${trialId}:reserve`
+    }
+  });
+}
+
+async function trialTraceTotal(actor: string, tenantId: string, trialId: string): Promise<bigint> {
+  const trace = await api<{
+    trace: {
+      movements: Array<{
+        quantityMg: string;
+        sourceModule: string;
+        sourceReferenceId: string;
+      }>;
+    };
+  }>(actor, `/inventory/trials/${trialId}/trace`, { tenantId });
+  expectStatus(trace, 200, "G7 Trial inventory trace");
+  if (
+    trace.body.trace.movements.some(
+      (item) => item.sourceModule !== "TRIAL" || item.sourceReferenceId !== trialId
+    )
+  )
+    throw new Error("G7 Trial trace contains forged or mismatched provenance.");
+  return trace.body.trace.movements.reduce((sum, item) => sum + BigInt(item.quantityMg), 0n);
+}
+
+async function assertTrialConsumption(
+  actor: string,
+  tenantId: string,
+  trialId: string,
+  expected: bigint
+): Promise<void> {
+  if ((await trialTraceTotal(actor, tenantId, trialId)) !== expected)
+    throw new Error("PREPARED Trial did not consume its exact Inventory reservation set.");
+}
+
 async function runG5Acceptance(
   page: Page,
   tenantA: string,
@@ -1458,6 +1589,11 @@ async function runG5Acceptance(
       created.body.trial.formulaBundleHash !== frozen.bundleHash
     )
       throw new Error("G5 Trial did not preserve exact G4 frozen lineage.");
+    expectStatus(
+      await allocateTrialInventory(actor, tenantA, created.body.trial.id),
+      201,
+      `G7 ${purpose} exact reservation`
+    );
     const prepared = await api<TrialBody>(actor, `/trials/${created.body.trial.id}/prepare`, {
       method: "POST",
       tenantId: tenantA
@@ -1475,6 +1611,7 @@ async function runG5Acceptance(
       )
     )
       throw new Error("G5 exact scaling or snapshot lineage is invalid.");
+    await assertTrialConsumption(actor, tenantA, created.body.trial.id, 20_000n);
     return created.body.trial.id;
   };
   const createFinalEvaluation = async (
@@ -1482,6 +1619,7 @@ async function runG5Acceptance(
     decision: "REVISION_REQUIRED" | "READY_FOR_APPROVAL",
     deltas: unknown[]
   ) => {
+    const inventoryBefore = await trialTraceTotal(actor, tenantA, trialId);
     const evaluationText =
       decision === "REVISION_REQUIRED"
         ? "The full composition needs a clearer jasminy mid-phase lift."
@@ -1550,6 +1688,8 @@ async function runG5Acceptance(
       "EVALUATION_ALREADY_FINAL",
       "G5 FINAL evidence immutability"
     );
+    if ((await trialTraceTotal(actor, tenantA, trialId)) !== inventoryBefore)
+      throw new Error("Sensory evaluation changed physical Inventory.");
     return created.body.evaluation.id;
   };
 
@@ -1737,6 +1877,44 @@ async function runG5Acceptance(
     "G5 foreign Formula line probe cleanup"
   );
 
+  const draftCancellation = await api<{ trial: { id: string } }>(actor, "/trials", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      formulaVersionId: frozen.formulaVersionId,
+      preparationMode: "CONCENTRATE",
+      applicationKey: "draft-reservation-cancellation",
+      dosagePct: 20,
+      targetMassMg: "20000"
+    }
+  });
+  expectStatus(draftCancellation, 201, "G7 DRAFT cancellation Trial");
+  expectStatus(
+    await allocateTrialInventory(actor, tenantA, draftCancellation.body.trial.id),
+    201,
+    "G7 DRAFT cancellation reservation"
+  );
+  expectStatus(
+    await api(actor, `/trials/${draftCancellation.body.trial.id}/cancel`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G7 DRAFT Trial cancellation"
+  );
+  if ((await trialTraceTotal(actor, tenantA, draftCancellation.body.trial.id)) !== 0n)
+    throw new Error("DRAFT Trial cancellation created a stock Movement.");
+  const cancellationReservations = await maintenance<{ status: string }[]>`
+    select status from inventory.stock_reservations
+    where tenant_id = ${tenantA} and source_module = 'TRIAL'
+      and source_reference_id = ${draftCancellation.body.trial.id}
+  `;
+  if (
+    cancellationReservations.length === 0 ||
+    cancellationReservations.some((item) => item.status !== "CANCELLED")
+  )
+    throw new Error("DRAFT Trial cancellation did not cancel every active reservation.");
+
   const cancelledTrialId = await createPreparedTrial("cancelled-evidence-lock");
   const cancelledEvaluation = await api<{ evaluation: { id: string } }>(
     actor,
@@ -1763,6 +1941,7 @@ async function runG5Acceptance(
     200,
     "G5 prepared Trial cancellation"
   );
+  await assertTrialConsumption(actor, tenantA, cancelledTrialId, 20_000n);
   expectError(
     await api(
       actor,
@@ -1830,10 +2009,785 @@ async function runG5Acceptance(
   ])
     if (!observed.has(action)) throw new Error(`G5 AuditEvent ${action} is missing.`);
 
+  await runG7OperationalAcceptance(page, actor, tenantA, tenantB, frozen.formulaVersionId);
+
   console.log("G5_STAGING_TRIAL_SENSORY_ACCEPTANCE=PASS");
   console.log("G5_STAGING_REVISION_PATH=PASS");
   console.log("G5_STAGING_APPROVAL_PATH=PASS");
   console.log("G5_CANCELLED_TRIAL_EVIDENCE_LOCK=PASS");
+}
+
+async function runG7OperationalAcceptance(
+  page: Page,
+  actor: string,
+  tenantA: string,
+  tenantB: string,
+  formulaVersionId: string
+): Promise<void> {
+  type LotDetail = {
+    lot: {
+      id: string;
+      materialId: string;
+      lotCode: string;
+      balances: Array<{
+        locationId: string;
+        onHandMg: string;
+        reservedMg: string;
+        availableMg: string;
+      }>;
+    };
+    movements: Array<{ id: string; operationKey: string; quantityMg: string }>;
+    reservations: Array<{ id: string; status: string; quantityMg: string }>;
+  };
+  const context = await api<{
+    moduleAvailability: Array<{ moduleId: string; state: string }>;
+    authorization: { modulePermissions: string[] };
+  }>(actor, "/context", { tenantId: tenantA });
+  expectStatus(context, 200, "G7 tenant context");
+  if (
+    context.body.moduleAvailability.find((item) => item.moduleId === "inventory")?.state !==
+      "AVAILABLE" ||
+    !context.body.authorization.modulePermissions.includes("module.inventory.stock.consume")
+  )
+    throw new Error("Inventory module availability or permissions are incomplete.");
+
+  const stock = inventoryStock.get(tenantA);
+  const first = stock ? [...stock.lots.entries()][0] : undefined;
+  if (!stock || !first) throw new Error("G7 acceptance stock was not reconciled.");
+  const [materialId, lotId] = first;
+  const secondLocation = await api<{ location: { id: string } }>(actor, "/inventory/locations", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      locationCode: `SECOND-${suffix.slice(0, 10).toUpperCase()}`,
+      name: "Staging Secondary Lab",
+      description: "Gate 7 transfer acceptance"
+    }
+  });
+  expectStatus(secondLocation, 201, "G7 secondary Location");
+
+  const manualReservation = await api<{ reservation: { id: string } }>(
+    actor,
+    `/inventory/lots/${lotId}/reservations`,
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        locationId: stock.locationId,
+        quantityMg: "1000",
+        sourceReferenceId: "G7-MANUAL-ACCEPTANCE",
+        operationKey: `staging:${suffix}:manual-reservation`
+      }
+    }
+  );
+  expectStatus(manualReservation, 201, "G7 manual reservation");
+  const afterReservation = await api<LotDetail>(actor, `/inventory/lots/${lotId}`, {
+    tenantId: tenantA
+  });
+  expectStatus(afterReservation, 200, "G7 reservation balance");
+  const balance = afterReservation.body.lot.balances.find(
+    (item) => item.locationId === stock.locationId
+  );
+  if (
+    !balance ||
+    BigInt(balance.onHandMg) - BigInt(balance.reservedMg) !== BigInt(balance.availableMg)
+  )
+    throw new Error("G7 derived Available balance is invalid.");
+  expectError(
+    await api(actor, `/inventory/lots/${lotId}/consume`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        quantityMg: (BigInt(balance.availableMg) + 1n).toString(),
+        fromLocationId: stock.locationId,
+        reasonCode: "RESERVED_STOCK_PROBE",
+        operationKey: `staging:${suffix}:reserved-stock-probe`
+      }
+    }),
+    409,
+    "INSUFFICIENT_AVAILABLE_STOCK",
+    "G7 reserved stock protection"
+  );
+  expectStatus(
+    await api(actor, `/inventory/reservations/${manualReservation.body.reservation.id}/consume`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: { operationKey: `staging:${suffix}:manual-reservation-consume` }
+    }),
+    200,
+    "G7 reservation consumption"
+  );
+
+  for (const transition of ["release", "cancel"] as const) {
+    const created = await api<{ reservation: { id: string } }>(
+      actor,
+      `/inventory/lots/${lotId}/reservations`,
+      {
+        method: "POST",
+        tenantId: tenantA,
+        body: {
+          locationId: stock.locationId,
+          quantityMg: "100",
+          sourceReferenceId: `G7-MANUAL-${transition.toUpperCase()}`,
+          operationKey: `staging:${suffix}:manual-reservation-${transition}`
+        }
+      }
+    );
+    expectStatus(created, 201, `G7 manual reservation ${transition}`);
+    expectStatus(
+      await api(actor, `/inventory/reservations/${created.body.reservation.id}/${transition}`, {
+        method: "POST",
+        tenantId: tenantA,
+        body: { operationKey: `staging:${suffix}:manual-${transition}` }
+      }),
+      200,
+      `G7 reservation ${transition}`
+    );
+    expectError(
+      await api(actor, `/inventory/reservations/${created.body.reservation.id}/${transition}`, {
+        method: "POST",
+        tenantId: tenantA,
+        body: { operationKey: `staging:${suffix}:manual-${transition}:again` }
+      }),
+      409,
+      "RESERVATION_ALREADY_TERMINAL",
+      `G7 terminal reservation ${transition}`
+    );
+  }
+
+  const transferKey = `staging:${suffix}:transfer`;
+  const transferBody = {
+    quantityMg: "1000",
+    fromLocationId: stock.locationId,
+    toLocationId: secondLocation.body.location.id,
+    reasonCode: "G7_TRANSFER_ACCEPTANCE",
+    operationKey: transferKey
+  };
+  expectStatus(
+    await api(actor, `/inventory/lots/${lotId}/transfer`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: transferBody
+    }),
+    201,
+    "G7 atomic transfer"
+  );
+  expectStatus(
+    await api(actor, `/inventory/lots/${lotId}/transfer`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: transferBody
+    }),
+    201,
+    "G7 idempotent transfer retry"
+  );
+  expectError(
+    await api(actor, `/inventory/lots/${lotId}/transfer`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: { ...transferBody, quantityMg: "999" }
+    }),
+    409,
+    "IDEMPOTENCY_CONFLICT",
+    "G7 conflicting operation key"
+  );
+  const afterTransfer = await api<LotDetail>(actor, `/inventory/lots/${lotId}`, {
+    tenantId: tenantA
+  });
+  expectStatus(afterTransfer, 200, "G7 transfer ledger");
+  if (afterTransfer.body.movements.filter((item) => item.operationKey === transferKey).length !== 1)
+    throw new Error("Idempotent transfer retry appended duplicate Movement truth.");
+  expectError(
+    await api(actor, `/inventory/locations/${secondLocation.body.location.id}/archive`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "LOCATION_NOT_EMPTY",
+    "G7 Location archive guard"
+  );
+  expectError(
+    await api(actor, `/inventory/lots/${lotId}/close`, { method: "POST", tenantId: tenantA }),
+    409,
+    "LOT_NOT_EMPTY",
+    "G7 Lot close guard"
+  );
+  expectError(
+    await api(actor, `/inventory/lots/${lotId}`, {
+      method: "PUT",
+      tenantId: tenantA,
+      body: { lotCode: `${afterTransfer.body.lot.lotCode}-MUTATED` }
+    }),
+    409,
+    "LOT_IDENTITY_IMMUTABLE",
+    "G7 Lot identity immutability"
+  );
+
+  const emptyLocation = await api<{ location: { id: string } }>(actor, "/inventory/locations", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      locationCode: `EMPTY-${suffix.slice(0, 10).toUpperCase()}`,
+      name: "Staging Empty Archive Probe",
+      description: null
+    }
+  });
+  expectStatus(emptyLocation, 201, "G7 empty Location");
+  expectStatus(
+    await api(actor, `/inventory/locations/${emptyLocation.body.location.id}/archive`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G7 empty Location archive"
+  );
+
+  const lifecycleLot = await createG7Lot(actor, tenantA, materialId, stock.locationId, {
+    lotCode: `LIFE-${suffix.slice(0, 8)}`,
+    quantityMg: "100",
+    expiresAt: null,
+    retestAt: null
+  });
+  expectStatus(
+    await api(actor, `/inventory/lots/${lifecycleLot}/adjust`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        direction: "IN",
+        quantityMg: "100",
+        locationId: stock.locationId,
+        reasonCode: "G7_ADJUSTMENT_IN_ACCEPTANCE",
+        operationKey: `staging:${suffix}:adjustment-in`
+      }
+    }),
+    201,
+    "G7 adjustment in"
+  );
+  expectStatus(
+    await api(actor, `/inventory/lots/${lifecycleLot}/adjust`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        direction: "OUT",
+        quantityMg: "50",
+        locationId: stock.locationId,
+        reasonCode: "G7_ADJUSTMENT_OUT_ACCEPTANCE",
+        operationKey: `staging:${suffix}:adjustment-out`
+      }
+    }),
+    201,
+    "G7 adjustment out"
+  );
+  expectStatus(
+    await api(actor, `/inventory/lots/${lifecycleLot}/dispose`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        quantityMg: "150",
+        fromLocationId: stock.locationId,
+        reasonCode: "G7_DISPOSAL_ACCEPTANCE",
+        operationKey: `staging:${suffix}:disposal`
+      }
+    }),
+    201,
+    "G7 disposal"
+  );
+  expectStatus(
+    await api(actor, `/inventory/lots/${lifecycleLot}/close`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G7 zero-balance Lot close"
+  );
+
+  expectStatus(
+    await api(actor, `/inventory/lots/${lotId}/hold`, { method: "POST", tenantId: tenantA }),
+    200,
+    "G7 Lot HOLD"
+  );
+  expectError(
+    await api(actor, `/inventory/lots/${lotId}/reservations`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        locationId: stock.locationId,
+        quantityMg: "1",
+        operationKey: `staging:${suffix}:hold-reservation`
+      }
+    }),
+    409,
+    "LOT_ON_HOLD",
+    "G7 HOLD reservation denial"
+  );
+  expectStatus(
+    await api(actor, `/inventory/lots/${lotId}/release-hold`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G7 Lot HOLD release"
+  );
+
+  const expired = await createG7Lot(actor, tenantA, materialId, stock.locationId, {
+    lotCode: `EXP-${suffix.slice(0, 8)}`,
+    quantityMg: "1000",
+    expiresAt: new Date(Date.now() - 86_400_000).toISOString(),
+    retestAt: null
+  });
+  expectError(
+    await api(actor, `/inventory/lots/${expired}/reservations`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        locationId: stock.locationId,
+        quantityMg: "1",
+        operationKey: `staging:${suffix}:expired-reservation`
+      }
+    }),
+    409,
+    "LOT_EXPIRED",
+    "G7 expiry reservation denial"
+  );
+  const retest = await createG7Lot(actor, tenantA, materialId, stock.locationId, {
+    lotCode: `RETEST-${suffix.slice(0, 8)}`,
+    quantityMg: "1000",
+    expiresAt: null,
+    retestAt: new Date(Date.now() - 86_400_000).toISOString()
+  });
+  const retestDetail = await api<{ lot: { retestAt: string | null } }>(
+    actor,
+    `/inventory/lots/${retest}`,
+    { tenantId: tenantA }
+  );
+  expectStatus(retestDetail, 200, "G7 retest warning source");
+  if (!retestDetail.body.lot.retestAt) throw new Error("G7 retest warning metadata was lost.");
+
+  const reservationRace = await createG7Lot(actor, tenantA, materialId, stock.locationId, {
+    lotCode: `RRACE-${suffix.slice(0, 8)}`,
+    quantityMg: "1000",
+    expiresAt: null,
+    retestAt: null
+  });
+  const reservationResults = await Promise.all([
+    api(actor, `/inventory/lots/${reservationRace}/reservations`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        locationId: stock.locationId,
+        quantityMg: "700",
+        operationKey: `staging:${suffix}:rrace:a`
+      }
+    }),
+    api(actor, `/inventory/lots/${reservationRace}/reservations`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        locationId: stock.locationId,
+        quantityMg: "700",
+        operationKey: `staging:${suffix}:rrace:b`
+      }
+    })
+  ]);
+  if (
+    reservationResults.filter((item) => item.status === 201).length !== 1 ||
+    reservationResults.filter((item) => item.status === 409).length !== 1
+  )
+    throw new Error("Concurrent reservations oversubscribed stock or both failed.");
+
+  const consumptionRace = await createG7Lot(actor, tenantA, materialId, stock.locationId, {
+    lotCode: `CRACE-${suffix.slice(0, 8)}`,
+    quantityMg: "1000",
+    expiresAt: null,
+    retestAt: null
+  });
+  const consumptionResults = await Promise.all([
+    api(actor, `/inventory/lots/${consumptionRace}/consume`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        quantityMg: "700",
+        fromLocationId: stock.locationId,
+        operationKey: `staging:${suffix}:crace:a`
+      }
+    }),
+    api(actor, `/inventory/lots/${consumptionRace}/consume`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        quantityMg: "700",
+        fromLocationId: stock.locationId,
+        operationKey: `staging:${suffix}:crace:b`
+      }
+    })
+  ]);
+  if (
+    consumptionResults.filter((item) => item.status === 201).length !== 1 ||
+    consumptionResults.filter((item) => item.status === 409).length !== 1
+  )
+    throw new Error("Concurrent consumption made stock negative or both failed.");
+
+  const rollbackTrial = await api<{ trial: { id: string } }>(actor, "/trials", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      formulaVersionId,
+      preparationMode: "CONCENTRATE",
+      applicationKey: "g7-atomic-rollback",
+      dosagePct: 20,
+      targetMassMg: "20000"
+    }
+  });
+  expectStatus(rollbackTrial, 201, "G7 rollback Trial");
+  expectStatus(
+    await allocateTrialInventory(actor, tenantA, rollbackTrial.body.trial.id),
+    201,
+    "G7 rollback Trial reservation"
+  );
+  const rollbackInventory = await api<{
+    availability: {
+      activeReservations: Array<{
+        lotId: string;
+        locationId: string;
+        quantityMg: string;
+        status: string;
+      }>;
+    };
+  }>(actor, `/trials/${rollbackTrial.body.trial.id}/inventory`, { tenantId: tenantA });
+  expectStatus(rollbackInventory, 200, "G7 rollback Trial Inventory");
+  const protectedReservation = rollbackInventory.body.availability.activeReservations[0];
+  if (!protectedReservation) throw new Error("G7 rollback Trial has no ACTIVE reservation.");
+  const protectedLot = await api<LotDetail>(
+    actor,
+    `/inventory/lots/${protectedReservation.lotId}`,
+    { tenantId: tenantA }
+  );
+  expectStatus(protectedLot, 200, "G7 Trial-reserved Lot");
+  const protectedBalance = protectedLot.body.lot.balances.find(
+    (item) => item.locationId === protectedReservation.locationId
+  );
+  if (!protectedBalance) throw new Error("G7 Trial-reserved balance is missing.");
+  expectError(
+    await api(actor, `/inventory/lots/${protectedReservation.lotId}/consume`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        quantityMg: (BigInt(protectedBalance.availableMg) + 1n).toString(),
+        fromLocationId: protectedReservation.locationId,
+        reasonCode: "G7_TRIAL_RESERVATION_PROTECTION",
+        operationKey: `staging:${suffix}:trial-reservation-protection`
+      }
+    }),
+    409,
+    "INSUFFICIENT_AVAILABLE_STOCK",
+    "G7 Trial allocation vs manual consumption"
+  );
+  expectStatus(
+    await api(actor, `/inventory/lots/${protectedReservation.lotId}/hold`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G7 rollback Lot HOLD"
+  );
+  expectError(
+    await api(actor, `/trials/${rollbackTrial.body.trial.id}/prepare`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "TRIAL_INVENTORY_NOT_READY",
+    "G7 multi-material prepare rollback"
+  );
+  const rollbackState = await api<{
+    trial: { status: string };
+  }>(actor, `/trials/${rollbackTrial.body.trial.id}`, { tenantId: tenantA });
+  expectStatus(rollbackState, 200, "G7 rollback Trial state");
+  const rollbackTrace = await api<{ trace: { movements: unknown[] } }>(
+    actor,
+    `/inventory/trials/${rollbackTrial.body.trial.id}/trace`,
+    { tenantId: tenantA }
+  );
+  expectStatus(rollbackTrace, 200, "G7 rollback Trial trace");
+  if (
+    rollbackState.body.trial.status !== "DRAFT" ||
+    rollbackTrace.body.trace.movements.length !== 0
+  )
+    throw new Error("G7 failed prepare partially committed Trial or Inventory truth.");
+  expectStatus(
+    await api(actor, `/inventory/lots/${protectedReservation.lotId}/release-hold`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G7 rollback Lot HOLD release"
+  );
+  expectStatus(
+    await api(actor, `/trials/${rollbackTrial.body.trial.id}/cancel`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G7 rollback Trial cleanup"
+  );
+
+  const concurrentTrial = await api<{ trial: { id: string } }>(actor, "/trials", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      formulaVersionId,
+      preparationMode: "CONCENTRATE",
+      applicationKey: "g7-concurrent-prepare",
+      dosagePct: 20,
+      targetMassMg: "20000"
+    }
+  });
+  expectStatus(concurrentTrial, 201, "G7 concurrent Trial");
+  const splitPlan = await api<{
+    plan: { requirements: Array<{ materialId: string; requiredMassMg: string }> };
+  }>(actor, `/trials/${concurrentTrial.body.trial.id}/preparation-plan`, { tenantId: tenantA });
+  expectStatus(splitPlan, 200, "G7 split-lot Trial preparation plan");
+  const splitRequirement = splitPlan.body.plan.requirements.find(
+    (item) => BigInt(item.requiredMassMg) > 1n
+  );
+  if (!splitRequirement) throw new Error("G7 split-lot acceptance requires a splittable line.");
+  const splitStock = inventoryStock.get(tenantA);
+  const primarySplitLot = splitStock?.lots.get(splitRequirement.materialId);
+  if (!splitStock || !primarySplitLot) throw new Error("G7 split-lot stock is unavailable.");
+  const secondarySplitLot = await createG7Lot(
+    actor,
+    tenantA,
+    splitRequirement.materialId,
+    splitStock.locationId,
+    {
+      lotCode: `SPLIT-${suffix.slice(0, 8)}`,
+      quantityMg: "1000000",
+      expiresAt: null,
+      retestAt: null
+    }
+  );
+  const allocations = splitPlan.body.plan.requirements.flatMap((requirement) => {
+    const primaryLot = splitStock.lots.get(requirement.materialId);
+    if (!primaryLot) throw new Error("G7 Trial preparation stock is incomplete.");
+    if (requirement.materialId !== splitRequirement.materialId)
+      return [
+        {
+          materialId: requirement.materialId,
+          lotId: primaryLot,
+          locationId: splitStock.locationId,
+          quantityMg: requirement.requiredMassMg
+        }
+      ];
+    const required = BigInt(requirement.requiredMassMg);
+    return [
+      {
+        materialId: requirement.materialId,
+        lotId: primarySplitLot,
+        locationId: splitStock.locationId,
+        quantityMg: (required - 1n).toString()
+      },
+      {
+        materialId: requirement.materialId,
+        lotId: secondarySplitLot,
+        locationId: splitStock.locationId,
+        quantityMg: "1"
+      }
+    ];
+  });
+  const splitReservationBody = {
+    allocations,
+    operationKey: `staging:${suffix}:split-trial:${concurrentTrial.body.trial.id}`
+  };
+  for (const label of ["reservation", "reservation idempotent retry"]) {
+    expectStatus(
+      await api(actor, `/trials/${concurrentTrial.body.trial.id}/inventory/reservations`, {
+        method: "POST",
+        tenantId: tenantA,
+        body: splitReservationBody
+      }),
+      201,
+      `G7 split-lot concurrent Trial ${label}`
+    );
+  }
+  const splitInventory = await api<{
+    availability: { activeReservations: unknown[] };
+  }>(actor, `/trials/${concurrentTrial.body.trial.id}/inventory`, { tenantId: tenantA });
+  expectStatus(splitInventory, 200, "G7 split-lot reservation trace");
+  if (splitInventory.body.availability.activeReservations.length !== allocations.length)
+    throw new Error("G7 Trial reservation retry created duplicate Reservation truth.");
+  const prepareResults = await Promise.all([
+    api(actor, `/trials/${concurrentTrial.body.trial.id}/prepare`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    api(actor, `/trials/${concurrentTrial.body.trial.id}/prepare`, {
+      method: "POST",
+      tenantId: tenantA
+    })
+  ]);
+  if (
+    prepareResults.filter((item) => item.status === 200).length !== 1 ||
+    prepareResults.filter((item) => item.status === 409).length !== 1
+  )
+    throw new Error("Concurrent Trial prepare was not serialized exactly once.");
+  await assertTrialConsumption(actor, tenantA, concurrentTrial.body.trial.id, 20_000n);
+  const splitTrace = await api<{
+    trace: { movements: Array<{ materialId: string; lotId: string; sourceModule: string }> };
+  }>(actor, `/inventory/trials/${concurrentTrial.body.trial.id}/trace`, { tenantId: tenantA });
+  expectStatus(splitTrace, 200, "G7 split-lot Trial trace");
+  const splitMovements = splitTrace.body.trace.movements.filter(
+    (item) => item.materialId === splitRequirement.materialId
+  );
+  if (
+    splitMovements.length !== 2 ||
+    new Set(splitMovements.map((item) => item.lotId)).size !== 2 ||
+    splitMovements.some((item) => item.sourceModule !== "TRIAL")
+  )
+    throw new Error("G7 split-lot Trial did not persist two exact TRIAL consumptions.");
+
+  expectError(
+    await api(token("A"), `/inventory/lots/${lotId}/consume`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        quantityMg: "1",
+        fromLocationId: stock.locationId,
+        operationKey: `staging:${suffix}:member-forbidden`
+      }
+    }),
+    403,
+    "PERMISSION_DENIED",
+    "G7 RBAC fail closed"
+  );
+  expectError(
+    await api(token("E"), `/inventory/lots/${lotId}`, { tenantId: tenantB }),
+    404,
+    "LOT_NOT_FOUND",
+    "G7 cross-tenant Lot read"
+  );
+  for (const sourceModule of ["TRIAL", "PROCUREMENT", "PRODUCTION"] as const) {
+    const forged = await api(actor, `/inventory/lots/${lotId}/receive`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        quantityMg: "1",
+        toLocationId: stock.locationId,
+        operationKey: `staging:${suffix}:forged-provenance:${sourceModule}`,
+        sourceModule
+      }
+    });
+    if (forged.status !== 400)
+      throw new Error(`Browser forged ${sourceModule} provenance was accepted.`);
+  }
+
+  const movementId = afterTransfer.body.movements.find(
+    (item) => item.operationKey === transferKey
+  )?.id;
+  if (!movementId) throw new Error("G7 append-only movement probe is missing its target.");
+  for (const operation of ["update", "delete"] as const) {
+    let rejected = false;
+    try {
+      if (operation === "update")
+        await maintenance`update inventory.stock_movements set reason_code = 'FORBIDDEN' where tenant_id = ${tenantA} and id = ${movementId}`;
+      else
+        await maintenance`delete from inventory.stock_movements where tenant_id = ${tenantA} and id = ${movementId}`;
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) throw new Error(`G7 Movement append-only ${operation} guard did not reject.`);
+  }
+
+  const actorAudit = await maintenance<{ actor_user_id: string | null }[]>`
+    select actor_user_id::text from platform.audit_events
+    where tenant_id = ${tenantA} and action = 'inventory.stock.transferred'
+      and metadata->>'operationKey' = ${transferKey}
+  `;
+  if (actorAudit.length === 0 || actorAudit.some((item) => item.actor_user_id !== fixture("B").id))
+    throw new Error("G7 AuditEvent actor provenance is missing or forged.");
+
+  await signInInBrowser(page, fixture("B"));
+  await page.goto(new URL("/inventory", stagingUrl).toString(), { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "Inventory Registry" }).waitFor({ state: "visible" });
+  await captureG7(page, "inventory-registry-desktop", "/inventory");
+  await page.goto(new URL(`/inventory/lots/${lotId}`, stagingUrl).toString(), {
+    waitUntil: "networkidle"
+  });
+  await page
+    .getByRole("heading", { name: new RegExp(afterTransfer.body.lot.lotCode) })
+    .waitFor({ state: "visible" });
+  await captureG7(page, "inventory-lot-detail-desktop", `/inventory/lots/${lotId}`);
+  await signOutInBrowser(page);
+
+  console.log("G7_STAGING_INVENTORY_ACCEPTANCE=PASS");
+  console.log("G7_STAGING_LEDGER_AND_RESERVATION=PASS");
+  console.log("G7_STAGING_TRIAL_ATOMICITY=PASS");
+  console.log("G7_STAGING_CONCURRENCY=PASS");
+  console.log("G7_STAGING_TENANT_RBAC=PASS");
+}
+
+async function captureG7(page: Page, name: string, route: string): Promise<void> {
+  if (!g7VisualCaptureDirectory) return;
+  await mkdir(g7VisualCaptureDirectory, { recursive: true });
+  await page.screenshot({ path: resolve(g7VisualCaptureDirectory, `${name}.png`), fullPage: true });
+  await writeFile(
+    resolve(g7VisualCaptureDirectory, `${name}.json`),
+    JSON.stringify(
+      { route, viewport: page.viewportSize(), sha: expectedSourceSha, environment: "staging" },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
+}
+
+async function createG7Lot(
+  actor: string,
+  tenantId: string,
+  materialId: string,
+  locationId: string,
+  input: { lotCode: string; quantityMg: string; expiresAt: string | null; retestAt: string | null }
+): Promise<string> {
+  const created = await api<{ lot: { id: string } }>(actor, "/inventory/lots", {
+    method: "POST",
+    tenantId,
+    body: {
+      materialId,
+      lotCode: input.lotCode,
+      supplierLotCode: null,
+      manufacturedAt: null,
+      expiresAt: input.expiresAt,
+      retestAt: input.retestAt,
+      notes: "Gate 7 Staging acceptance"
+    }
+  });
+  expectStatus(created, 201, `G7 Lot ${input.lotCode}`);
+  const operationKey = `staging:${suffix}:lot:${created.body.lot.id}:opening`;
+  const openingBody = {
+    quantityMg: input.quantityMg,
+    toLocationId: locationId,
+    reasonCode: "G7_STAGING_ACCEPTANCE",
+    operationKey
+  };
+  for (const label of ["opening stock", "idempotent opening-stock retry"]) {
+    expectStatus(
+      await api(actor, `/inventory/lots/${created.body.lot.id}/receive`, {
+        method: "POST",
+        tenantId,
+        body: openingBody
+      }),
+      201,
+      `G7 ${label} ${input.lotCode}`
+    );
+  }
+  const detail = await api<{ movements: Array<{ operationKey: string }> }>(
+    actor,
+    `/inventory/lots/${created.body.lot.id}`,
+    { tenantId }
+  );
+  expectStatus(detail, 200, `G7 idempotent receipt trace ${input.lotCode}`);
+  if (detail.body.movements.filter((item) => item.operationKey === operationKey).length !== 1)
+    throw new Error("G7 idempotent RECEIPT appended duplicate Movement truth.");
+  return created.body.lot.id;
 }
 
 async function captureG5(page: Page, name: string, route: string): Promise<void> {
@@ -1862,6 +2816,10 @@ async function cleanupFixtures(): Promise<void> {
       // composition triggers for the explicitly enumerated disposable acceptance identities.
       await transaction`set local session_replication_role = replica`;
       for (const tenantId of tenantIds) {
+        await transaction`delete from inventory.stock_reservations where tenant_id = ${tenantId}`;
+        await transaction`delete from inventory.stock_movements where tenant_id = ${tenantId}`;
+        await transaction`delete from inventory.material_lots where tenant_id = ${tenantId}`;
+        await transaction`delete from inventory.locations where tenant_id = ${tenantId}`;
         await transaction`delete from release_readiness.checks where tenant_id = ${tenantId}`;
         await transaction`delete from release_readiness.assessments where tenant_id = ${tenantId}`;
         await transaction`

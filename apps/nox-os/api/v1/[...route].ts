@@ -10,6 +10,9 @@ import {
   createPostgresTrialSensoryStore,
   createPostgresReleaseReadinessStore,
   createPostgresReleaseReadinessSources,
+  PostgresInventoryMaterialSource,
+  PostgresInventoryStore,
+  PostgresTrialInventoryPort,
   createRuntimeDatabase,
   probeDatabase
 } from "@nox-os/database";
@@ -20,6 +23,7 @@ import {
   DesignStudioFormulaRevisionPort
 } from "@nox-os/design-studio";
 import { createTrialSensoryApi, TrialSensoryApplication } from "@nox-os/trial-sensory";
+import { createInventoryApi, InventoryApplication } from "@nox-os/inventory";
 import {
   createReleaseReadinessApi,
   KnownLimitV1Policy,
@@ -95,8 +99,21 @@ const trialSensoryApplication =
   runtimeDatabase && designStudioStore
     ? new TrialSensoryApplication(
         createPostgresTrialSensoryStore(runtimeDatabase),
-        designStudioStore
+        designStudioStore,
+        new PostgresTrialInventoryPort(runtimeDatabase)
       )
+    : undefined;
+const inventory =
+  runtimeDatabase && platformCore
+    ? createInventoryApi({
+        application: new InventoryApplication(
+          new PostgresInventoryStore(runtimeDatabase),
+          new PostgresInventoryMaterialSource(runtimeDatabase)
+        ),
+        authorization: platformCore,
+        definitions: [...moduleDefinitions, ...acceptanceModules],
+        featureFlags
+      })
     : undefined;
 const designStudio =
   platformCore && designStudioStore && designStudioApplication
@@ -167,7 +184,8 @@ const foundationApi = createFoundationApi({
     ...(materialIntelligence ? [materialIntelligence] : []),
     ...(designStudio ? [designStudio] : []),
     ...(trialSensory ? [trialSensory] : []),
-    ...(releaseReadiness ? [releaseReadiness] : [])
+    ...(releaseReadiness ? [releaseReadiness] : []),
+    ...(inventory ? [inventory] : [])
   ]
 });
 

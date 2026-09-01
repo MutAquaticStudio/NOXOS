@@ -21,6 +21,8 @@
       "@nox-os/database": ["./packages/database/src/index.ts"],
       "@nox-os/design-studio": ["./packages/design-studio/src/index.ts"],
       "@nox-os/design-studio/browser": ["./packages/design-studio/src/browser.ts"],
+      "@nox-os/inventory": ["./packages/inventory/src/index.ts"],
+      "@nox-os/inventory/browser": ["./packages/inventory/src/browser.ts"],
       "@nox-os/material-intelligence": ["./packages/material-intelligence/src/index.ts"],
       "@nox-os/module-registry": ["./packages/module-registry/src/index.ts"],
       "@nox-os/observability": ["./packages/observability/src/index.ts"],

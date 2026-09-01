@@ -26,7 +26,7 @@ const expectedModuleIds = [
 ];
 
 describe("canonical Module Registry", () => {
-  it("preserves Gate 0 declarations and appends the bounded Gate 5 and Gate 6 modules", () => {
+  it("preserves Gate 0 declarations and appends the bounded Gate 5 through Gate 7 modules", () => {
     expect(moduleDefinitions).toHaveLength(14);
     expect(moduleDefinitions.map((definition) => definition.descriptor.id)).toEqual(
       expectedModuleIds
@@ -55,6 +55,7 @@ describe("canonical Module Registry", () => {
     expect(rail.map((item) => item.moduleId)).toEqual([
       "platform",
       "material-intelligence",
+      "inventory",
       "settings",
       "support",
       "design-studio",
@@ -77,18 +78,18 @@ describe("canonical Module Registry", () => {
   });
 
   it("keeps disabled future modules unavailable even when a UI caller presents flags", () => {
-    const inventory = moduleDefinitions.find(
-      (definition) => definition.descriptor.id === "inventory"
+    const procurement = moduleDefinitions.find(
+      (definition) => definition.descriptor.id === "procurement"
     );
-    if (!inventory) {
-      throw new Error("Expected inventory declaration.");
+    if (!procurement) {
+      throw new Error("Expected procurement declaration.");
     }
 
     expect(
-      resolveModuleAvailability(inventory.descriptor, {
-        featureFlags: new Set(["module.inventory"]),
-        entitlements: new Set(["module.inventory"]),
-        permissions: new Set(["inventory.read"])
+      resolveModuleAvailability(procurement.descriptor, {
+        featureFlags: new Set(["module.procurement"]),
+        entitlements: new Set(["module.procurement"]),
+        permissions: new Set(procurement.descriptor.permissions)
       }).state
     ).toBe("DISABLED");
   });
@@ -187,6 +188,7 @@ describe("canonical Module Registry", () => {
     });
 
     expect(registeredPaths).toContain("/materials/foundation");
-    expect(registeredPaths).not.toContain("/inventory/foundation");
+    expect(registeredPaths).toContain("/inventory/foundation");
+    expect(registeredPaths).not.toContain("/procurement/foundation");
   });
 });
