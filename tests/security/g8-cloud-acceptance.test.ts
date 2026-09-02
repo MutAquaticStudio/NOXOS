@@ -37,6 +37,7 @@ describe("G8 cloud-only exact-SHA closure contract", () => {
     );
     expect(stagingAcceptance).toContain("await Promise.all([");
     expect(stagingAcceptance).toContain("source_module = 'PROCUREMENT'");
+    expect(stagingAcceptance).toContain('"GOODS_RECEIPT_ALREADY_POSTED"');
   });
 
   it("requires matching merged, Preview, and Staging evidence before an immutable tag", () => {

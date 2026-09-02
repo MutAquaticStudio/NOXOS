@@ -3082,7 +3082,7 @@ async function runG8OperationalAcceptance(
       tenantId: tenantA
     }),
     409,
-    "GOODS_RECEIPT_NOT_EDITABLE",
+    "GOODS_RECEIPT_ALREADY_POSTED",
     "G8 POSTED Receipt cancellation"
   );
 
