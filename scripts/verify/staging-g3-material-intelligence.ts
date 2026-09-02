@@ -1064,9 +1064,28 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
     await runG5AccordAcceptance(page, tenantA, frozenAccord.body.formulaVersion);
     await refreshToken("B");
     actor = token("B");
-    await runG6Acceptance(page, tenantA, tenantB, frozen, frozenAccord.body.formulaVersion);
+    const g6CurrentAssessmentId = await runG6Acceptance(
+      page,
+      tenantA,
+      tenantB,
+      frozen,
+      frozenAccord.body.formulaVersion
+    );
     await refreshToken("B");
     actor = token("B");
+    await runG9OperationalAcceptance(
+      page,
+      actor,
+      tenantA,
+      frozen.formulaVersionId,
+      g6CurrentAssessmentId
+    );
+    console.log("G9_STAGING_PRODUCTION_ACCEPTANCE=PASS");
+    console.log("G9_STAGING_RELEASE_RESERVATION=PASS");
+    console.log("G9_STAGING_START_CONSUMPTION=PASS");
+    console.log("G9_STAGING_READINESS_REVALIDATION=PASS");
+    console.log("G9_STAGING_IDEMPOTENCY=PASS");
+    console.log("G9_STAGING_PROVENANCE=PASS");
     expectStatus(
       await api(actor, `/design-studio/briefs/${accordBriefId}/generate`, {
         method: "POST",
@@ -1129,7 +1148,7 @@ async function runG6Acceptance(
   tenantB: string,
   formula: { formulaVersionId: string; bundleHash: string },
   accord: { formulaVersionId: string }
-): Promise<void> {
+): Promise<string> {
   const actor = token("B");
   const formulaLines = await maintenance<
     { material_id: string; active_aromatic_mass_mg: string }[]
@@ -1347,6 +1366,7 @@ async function runG6Acceptance(
   console.log("G6_STAGING_BLOCKED_PATH=PASS");
   console.log("G6_STAGING_IMMUTABILITY=PASS");
   console.log("G6_STAGING_TENANT_SECURITY=PASS");
+  return blocked.body.assessment.id;
 }
 
 async function captureG6(page: Page, name: string, route: string): Promise<void> {
@@ -2046,8 +2066,7 @@ async function runG5Acceptance(
   await refreshToken("B");
   await runG8OperationalAcceptance(page, token("B"), tenantA, tenantB);
 
-  await refreshToken("B");
-  await runG9OperationalAcceptance(page, token("B"), tenantA, frozen.formulaVersionId);
+
 
   console.log("G5_STAGING_TRIAL_SENSORY_ACCEPTANCE=PASS");
   console.log("G5_STAGING_REVISION_PATH=PASS");
@@ -2057,19 +2076,14 @@ async function runG5Acceptance(
   console.log("G8_STAGING_RECEIPT_ATOMICITY=PASS");
   console.log("G8_STAGING_CONCURRENT_OVER_RECEIPT=PASS");
   console.log("G8_STAGING_TRACEABILITY=PASS");
-  console.log("G9_STAGING_PRODUCTION_ACCEPTANCE=PASS");
-  console.log("G9_STAGING_RELEASE_RESERVATION=PASS");
-  console.log("G9_STAGING_START_CONSUMPTION=PASS");
-  console.log("G9_STAGING_READINESS_REVALIDATION=PASS");
-  console.log("G9_STAGING_IDEMPOTENCY=PASS");
-  console.log("G9_STAGING_PROVENANCE=PASS");
 }
 
 async function runG9OperationalAcceptance(
   page: Page,
   actor: string,
   tenantId: string,
-  formulaVersionId: string
+  formulaVersionId: string,
+  currentAssessmentId: string
 ): Promise<void> {
   type Order = {
     id: string;
@@ -2123,17 +2137,8 @@ async function runG9OperationalAcceptance(
     `;
   const ready = await api<{ assessment: { id: string; decision: string } }>(
     actor,
-    "/release-readiness/assessments",
-    {
-      method: "POST",
-      tenantId,
-      body: {
-        formulaVersionId,
-        applicationKey: "fine-fragrance",
-        dosagePct: 10,
-        policyKey: "g6-known-limit-v1"
-      }
-    }
+    `/release-readiness/assessments/${currentAssessmentId}/reassess`,
+    { method: "POST", tenantId }
   );
   expectStatus(ready, 201, "G9 READY assessment");
   if (ready.body.assessment?.decision !== "READY") throw new Error("G9 READY assessment failed.");
