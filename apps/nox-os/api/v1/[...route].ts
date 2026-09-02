@@ -214,7 +214,11 @@ const foundationApi = createFoundationApi({
     ...(inventory ? [inventory] : []),
     ...(procurement ? [procurement] : []),
     ...(production ? [production] : [])
-  ]
+  ],
+  // Production release/start are bounded, multi-lot PostgreSQL transactions.
+  // Keep the foundation timeout fail-safe while allowing the cloud runtime
+  // enough time to complete the atomic G7 reservation/consumption protocol.
+  apiTimeoutMs: 30_000
 });
 
 export default async function handler(
