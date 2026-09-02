@@ -75,7 +75,9 @@ begin
     ('RELEASED','RELEASED'), ('RELEASED','IN_PROGRESS'), ('RELEASED','CANCELLED'),
     ('IN_PROGRESS','IN_PROGRESS'), ('IN_PROGRESS','COMPLETED'), ('IN_PROGRESS','ABORTED'),
     ('COMPLETED','COMPLETED'), ('CANCELLED','CANCELLED'), ('ABORTED','ABORTED')
-  ) then raise exception 'PRODUCTION_ORDER_INVALID_TRANSITION' using errcode = 'P0001';
+  ) then
+    raise exception 'PRODUCTION_ORDER_INVALID_TRANSITION' using errcode = 'P0001';
+  end if;
   if old.status <> 'DRAFT' and (new.target_mass_mg <> old.target_mass_mg or new.formula_version_id <> old.formula_version_id or new.formula_bundle_hash <> old.formula_bundle_hash) then
     raise exception 'PRODUCTION_ORDER_LINEAGE_IMMUTABLE' using errcode = 'P0001';
   return new;
