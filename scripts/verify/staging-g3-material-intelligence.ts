@@ -170,6 +170,17 @@ try {
       "Procurement entitlement"
     );
   }
+  for (const tenantId of [tenantA, tenantB]) {
+    expectStatus(
+      await api(
+        platformOwnerToken,
+        `/platform/tenants/${tenantId}/entitlements/module.production`,
+        { method: "PUT", body: { enabled: true } }
+      ),
+      200,
+      "Production entitlement"
+    );
+  }
   const materialContext = await api<{
     moduleAvailability: Array<{ moduleId: string; state: string }>;
   }>(token("A"), "/context", { tenantId: tenantA });
@@ -2035,6 +2046,9 @@ async function runG5Acceptance(
   await refreshToken("B");
   await runG8OperationalAcceptance(page, token("B"), tenantA, tenantB);
 
+  await refreshToken("B");
+  await runG9OperationalAcceptance(page, token("B"), tenantA, frozen.formulaVersionId);
+
   console.log("G5_STAGING_TRIAL_SENSORY_ACCEPTANCE=PASS");
   console.log("G5_STAGING_REVISION_PATH=PASS");
   console.log("G5_STAGING_APPROVAL_PATH=PASS");
@@ -2043,6 +2057,329 @@ async function runG5Acceptance(
   console.log("G8_STAGING_RECEIPT_ATOMICITY=PASS");
   console.log("G8_STAGING_CONCURRENT_OVER_RECEIPT=PASS");
   console.log("G8_STAGING_TRACEABILITY=PASS");
+  console.log("G9_STAGING_PRODUCTION_ACCEPTANCE=PASS");
+  console.log("G9_STAGING_RELEASE_RESERVATION=PASS");
+  console.log("G9_STAGING_START_CONSUMPTION=PASS");
+  console.log("G9_STAGING_READINESS_REVALIDATION=PASS");
+  console.log("G9_STAGING_IDEMPOTENCY=PASS");
+  console.log("G9_STAGING_PROVENANCE=PASS");
+}
+
+async function runG9OperationalAcceptance(
+  page: Page,
+  actor: string,
+  tenantId: string,
+  formulaVersionId: string
+): Promise<void> {
+  type Order = {
+    id: string;
+    status: string;
+    releaseReadinessAssessmentId: string | null;
+    lines: Array<{ id: string; materialId: string; requiredMassMg: string }>;
+    allocations: Array<{
+      id: string;
+      productionOrderLineId: string;
+      inventoryLotId: string;
+      allocatedMassMg: string;
+      inventoryConsumptionMovementId: string | null;
+    }>;
+  };
+  type Batch = { id: string; productionOrderId: string; actualOutputMassMg: string | null };
+  type Lot = {
+    lot: { balances: Array<{ locationId: string; onHandMg: string; reservedMg: string }> };
+    movements: Array<{
+      sourceModule: string;
+      sourceReferenceId: string | null;
+      quantityMg: string;
+    }>;
+  };
+  const context = await api<{
+    moduleAvailability: Array<{ moduleId: string; state: string }>;
+    authorization: { modulePermissions: string[] };
+  }>(actor, "/context", { tenantId });
+  expectStatus(context, 200, "G9 Production context");
+  if (
+    context.body.moduleAvailability.find((item) => item.moduleId === "production")?.state !==
+      "AVAILABLE" ||
+    !context.body.authorization.modulePermissions.includes("module.production.order.create") ||
+    !context.body.authorization.modulePermissions.includes("module.production.order.release") ||
+    !context.body.authorization.modulePermissions.includes("module.production.batch.start")
+  )
+    throw new Error("G9 Production is not available with the expected Staging permissions.");
+  const lines = await runtime<{ material_id: string }[]>`
+    select material_id::text
+    from design_studio.formula_lines
+    where tenant_id = ${tenantId} and formula_version_id = ${formulaVersionId}
+    order by line_order
+  `;
+  if (!lines.length) throw new Error("G9 Staging formula has no production lines.");
+  const stock = inventoryStock.get(tenantId);
+  if (!stock) throw new Error("G9 Staging inventory fixture is missing.");
+  for (const line of lines)
+    await runtime`
+      update material_intelligence.material_properties
+      set ifra_restricted = false, ifra_cat4_max_pct = 100, ifra_amendment = '51', updated_at = now()
+      where material_id = ${line.material_id}
+    `;
+  const ready = await api<{ assessment: { id: string; decision: string } }>(
+    actor,
+    "/release-readiness/assessments",
+    {
+      method: "POST",
+      tenantId,
+      body: {
+        formulaVersionId,
+        applicationKey: "fine-fragrance",
+        dosagePct: 10,
+        policyKey: "g6-known-limit-v1"
+      }
+    }
+  );
+  expectStatus(ready, 201, "G9 READY assessment");
+  if (ready.body.assessment?.decision !== "READY") throw new Error("G9 READY assessment failed.");
+  const create = async (label: string): Promise<Order> => {
+    const result = await api<{ order: Order }>(actor, "/production/orders", {
+      method: "POST",
+      tenantId,
+      body: {
+        orderNumber: `G9-${label}-${suffix}`,
+        formulaVersionId,
+        targetMassMg: "1000000",
+        notes: "G9 exact-SHA Staging acceptance fixture"
+      }
+    });
+    expectStatus(result, 201, `G9 ${label} order`);
+    return result.body.order;
+  };
+  const ensureLot = async (materialId: string, label: string): Promise<string> => {
+    const existing = stock.lots.get(materialId);
+    if (existing) return existing;
+    const result = await api<{ lot: { id: string } }>(actor, "/inventory/lots", {
+      method: "POST",
+      tenantId,
+      body: {
+        materialId,
+        lotCode: `G9-${label}-${suffix}-${materialId.slice(0, 8)}`,
+        supplierLotCode: null,
+        manufacturedAt: null,
+        expiresAt: null,
+        retestAt: null,
+        notes: "G9 exact-SHA Staging acceptance fixture"
+      }
+    });
+    expectStatus(result, 201, "G9 lot");
+    stock.lots.set(materialId, result.body.lot.id);
+    expectStatus(
+      await api(actor, `/inventory/lots/${result.body.lot.id}/receive`, {
+        method: "POST",
+        tenantId,
+        body: {
+          quantityMg: "10000000",
+          toLocationId: stock.locationId,
+          reasonCode: "G9_STAGING_ACCEPTANCE",
+          operationKey: `g9:${suffix}:opening:${result.body.lot.id}`
+        }
+      }),
+      201,
+      "G9 opening stock"
+    );
+    return result.body.lot.id;
+  };
+  const allocate = async (order: Order, split: boolean): Promise<Order> => {
+    const allocations: Array<{
+      productionOrderLineId: string;
+      lotId: string;
+      locationId: string;
+      allocatedMassMg: string;
+    }> = [];
+    for (const [index, line] of order.lines.entries()) {
+      const lotId = await ensureLot(line.materialId, `LOT-${index}`);
+      const quantity = BigInt(line.requiredMassMg);
+      if (split && index === 0 && quantity > 1n) {
+        const second = await api<{ lot: { id: string } }>(actor, "/inventory/lots", {
+          method: "POST",
+          tenantId,
+          body: {
+            materialId: line.materialId,
+            lotCode: `G9-SPLIT-${suffix}-${line.materialId.slice(0, 8)}`,
+            supplierLotCode: null,
+            manufacturedAt: null,
+            expiresAt: null,
+            retestAt: null,
+            notes: "G9 split-lot acceptance fixture"
+          }
+        });
+        expectStatus(second, 201, "G9 split lot");
+        expectStatus(
+          await api(actor, `/inventory/lots/${second.body.lot.id}/receive`, {
+            method: "POST",
+            tenantId,
+            body: {
+              quantityMg: "10000000",
+              toLocationId: stock.locationId,
+              reasonCode: "G9_STAGING_ACCEPTANCE",
+              operationKey: `g9:${suffix}:split:${second.body.lot.id}`
+            }
+          }),
+          201,
+          "G9 split stock"
+        );
+        const first = quantity / 2n;
+        allocations.push({
+          productionOrderLineId: line.id,
+          lotId,
+          locationId: stock.locationId,
+          allocatedMassMg: String(first)
+        });
+        allocations.push({
+          productionOrderLineId: line.id,
+          lotId: second.body.lot.id,
+          locationId: stock.locationId,
+          allocatedMassMg: String(quantity - first)
+        });
+      } else {
+        allocations.push({
+          productionOrderLineId: line.id,
+          lotId,
+          locationId: stock.locationId,
+          allocatedMassMg: line.requiredMassMg
+        });
+      }
+    }
+    const result = await api<{ order: Order }>(
+      actor,
+      `/production/orders/${order.id}/allocations`,
+      {
+        method: "PUT",
+        tenantId,
+        body: { allocations }
+      }
+    );
+    expectStatus(result, 200, "G9 exact allocation");
+    return result.body.order;
+  };
+  const main = await allocate(await create("MAIN"), true);
+  const released = await api<{ order: Order }>(actor, `/production/orders/${main.id}/release`, {
+    method: "POST",
+    tenantId
+  });
+  expectStatus(released, 200, "G9 release");
+  if (released.body.order.status !== "RELEASED") throw new Error("G9 release did not complete.");
+  await runtime`
+    update material_intelligence.material_properties
+    set ifra_restricted = true, ifra_cat4_max_pct = 0, ifra_amendment = '51', updated_at = now()
+    where material_id = ${lines[0].material_id}
+  `;
+  const blocked = await api<{ assessment: { id: string; decision: string } }>(
+    actor,
+    `/release-readiness/assessments/${ready.body.assessment.id}/reassess`,
+    { method: "POST", tenantId }
+  );
+  expectStatus(blocked, 201, "G9 BLOCKED revalidation");
+  if (blocked.body.assessment.decision !== "BLOCKED")
+    throw new Error("G9 blocked revalidation failed.");
+  const denied = await api(actor, `/production/orders/${main.id}/start`, {
+    method: "POST",
+    tenantId
+  });
+  if (denied.status !== 409) throw new Error("G9 start ignored blocked readiness.");
+  await runtime`
+    update material_intelligence.material_properties
+    set ifra_restricted = false, ifra_cat4_max_pct = 100, ifra_amendment = '51', updated_at = now()
+    where material_id = ${lines[0].material_id}
+  `;
+  const restored = await api<{ assessment: { id: string; decision: string } }>(
+    actor,
+    `/release-readiness/assessments/${blocked.body.assessment.id}/reassess`,
+    { method: "POST", tenantId }
+  );
+  expectStatus(restored, 201, "G9 READY revalidation");
+  if (restored.body.assessment.decision !== "READY")
+    throw new Error("G9 READY revalidation failed.");
+  const started = await api<{ batch: Batch }>(actor, `/production/orders/${main.id}/start`, {
+    method: "POST",
+    tenantId
+  });
+  expectStatus(started, 200, "G9 start");
+  const duplicate = await api<{ batch: Batch }>(actor, `/production/orders/${main.id}/start`, {
+    method: "POST",
+    tenantId
+  });
+  expectStatus(duplicate, 200, "G9 duplicate start");
+  if (duplicate.body.batch.id !== started.body.batch.id)
+    throw new Error("G9 duplicate start created a batch.");
+  const batchDetail = await api<{ batch: Batch & { allocations: Order["allocations"] } }>(
+    actor,
+    `/production/batches/${started.body.batch.id}`,
+    { tenantId }
+  );
+  expectStatus(batchDetail, 200, "G9 batch detail");
+  if (batchDetail.body.batch.allocations.some((item) => !item.inventoryConsumptionMovementId))
+    throw new Error("G9 batch is missing consumption provenance.");
+  for (const allocation of batchDetail.body.batch.allocations) {
+    const trace = await api<Lot>(actor, `/inventory/lots/${allocation.inventoryLotId}`, {
+      tenantId
+    });
+    expectStatus(trace, 200, "G9 production lot trace");
+    if (
+      !trace.body.movements.some(
+        (movement) =>
+          movement.sourceModule === "PRODUCTION" && movement.sourceReferenceId === allocation.id
+      )
+    )
+      throw new Error("G9 production lot trace is incomplete.");
+  }
+  const completed = await api<{ batch: Batch }>(
+    actor,
+    `/production/batches/${started.body.batch.id}/complete`,
+    {
+      method: "POST",
+      tenantId,
+      body: { actualOutputMassMg: "980000", processNotes: "G9 acceptance completion" }
+    }
+  );
+  expectStatus(completed, 200, "G9 completion");
+  if (completed.body.batch.actualOutputMassMg !== "980000")
+    throw new Error("G9 actual output missing.");
+  const cancel = await allocate(await create("CANCEL"), false);
+  expectStatus(
+    await api(actor, `/production/orders/${cancel.id}/release`, { method: "POST", tenantId }),
+    200,
+    "G9 cancel release"
+  );
+  const cancelled = await api<{ order: Order }>(actor, `/production/orders/${cancel.id}/cancel`, {
+    method: "POST",
+    tenantId
+  });
+  expectStatus(cancelled, 200, "G9 cancel");
+  if (cancelled.body.order.status !== "CANCELLED") throw new Error("G9 released cancel failed.");
+  const abortOrder = await allocate(await create("ABORT"), false);
+  expectStatus(
+    await api(actor, `/production/orders/${abortOrder.id}/release`, { method: "POST", tenantId }),
+    200,
+    "G9 abort release"
+  );
+  const abortBatch = await api<{ batch: Batch }>(
+    actor,
+    `/production/orders/${abortOrder.id}/start`,
+    { method: "POST", tenantId }
+  );
+  expectStatus(abortBatch, 200, "G9 abort start");
+  const aborted = await api<{ batch: Batch }>(
+    actor,
+    `/production/batches/${abortBatch.body.batch.id}/abort`,
+    { method: "POST", tenantId, body: { reason: "G9 controlled abort" } }
+  );
+  expectStatus(aborted, 200, "G9 abort");
+  const crossTenant = await api(actor, `/production/orders/${main.id}`, { tenantId: randomUUID() });
+  if (![403, 404].includes(crossTenant.status))
+    throw new Error("G9 cross-tenant production access was not denied.");
+  await page.goto(new URL("/production", stagingUrl).toString(), { waitUntil: "networkidle" });
+  await expectVisible(page, "Production");
+  await page.goto(new URL(`/production/batches/${started.body.batch.id}`, stagingUrl).toString(), {
+    waitUntil: "networkidle"
+  });
+  await expectVisible(page, "QC NOT ASSESSED");
 }
 
 async function runG7OperationalAcceptance(
@@ -3498,6 +3835,10 @@ async function cleanupFixtures(): Promise<void> {
         await transaction`delete from procurement.purchase_orders where tenant_id = ${tenantId}`;
         await transaction`delete from procurement.supplier_material_offers where tenant_id = ${tenantId}`;
         await transaction`delete from procurement.suppliers where tenant_id = ${tenantId}`;
+        await transaction`delete from production.production_material_allocations where tenant_id = ${tenantId}`;
+        await transaction`delete from production.production_order_lines where tenant_id = ${tenantId}`;
+        await transaction`delete from production.production_batches where tenant_id = ${tenantId}`;
+        await transaction`delete from production.production_orders where tenant_id = ${tenantId}`;
         await transaction`delete from inventory.stock_reservations where tenant_id = ${tenantId}`;
         await transaction`delete from inventory.stock_movements where tenant_id = ${tenantId}`;
         await transaction`delete from inventory.material_lots where tenant_id = ${tenantId}`;
