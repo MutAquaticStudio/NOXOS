@@ -2379,7 +2379,7 @@ async function runG9OperationalAcceptance(
     throw new Error("G9 cross-tenant production access was not denied.");
   await signInInBrowser(page, fixture("B"));
   await page.goto(new URL("/production", stagingUrl).toString(), { waitUntil: "networkidle" });
-  await expectVisible(page, "Production");
+  await expectHeading(page, "Production");
   await page.goto(new URL(`/production/batches/${started.body.batch.id}`, stagingUrl).toString(), {
     waitUntil: "networkidle"
   });
