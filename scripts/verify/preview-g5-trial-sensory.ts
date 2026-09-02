@@ -1531,6 +1531,11 @@ async function runG9PreviewAcceptance(
   };
 
   // Ensure a current READY assessment exists for release.
+  // Preview uses a stable acceptance tenant across runs. Remove its prior
+  // readiness fixture chain so the G6 current-assessment resolver cannot
+  // observe multiple unsuperseded roots from an earlier failed run.
+  await runtime`delete from release_readiness.checks where tenant_id = ${tenantId}`;
+  await runtime`delete from release_readiness.assessments where tenant_id = ${tenantId}`;
   for (const line of formulaLines)
     await runtime`
       update material_intelligence.material_properties
