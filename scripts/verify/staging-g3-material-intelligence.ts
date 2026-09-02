@@ -2066,8 +2066,6 @@ async function runG5Acceptance(
   await refreshToken("B");
   await runG8OperationalAcceptance(page, token("B"), tenantA, tenantB);
 
-
-
   console.log("G5_STAGING_TRIAL_SENSORY_ACCEPTANCE=PASS");
   console.log("G5_STAGING_REVISION_PATH=PASS");
   console.log("G5_STAGING_APPROVAL_PATH=PASS");
