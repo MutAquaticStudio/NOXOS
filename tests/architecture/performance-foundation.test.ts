@@ -10,7 +10,7 @@ describe("performance foundation", () => {
   it("keeps bundle warnings and the Vercel function limit aligned with the documented policy", () => {
     expect(viteConfig).toContain("chunkSizeWarningLimit: 350");
     expect(vercelConfig.functions?.["api/v1/[...route].ts"]).toEqual({
-      maxDuration: 10,
+      maxDuration: 60,
       supportsCancellation: true
     });
   });
