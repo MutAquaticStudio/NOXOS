@@ -52,7 +52,7 @@ type CoreProblemCode = Exclude<
   | "INTERNAL_ERROR"
 >;
 
-class CoreProblem extends Error {
+export class CoreProblem extends Error {
   constructor(
     readonly status: number,
     readonly code: CoreProblemCode,
