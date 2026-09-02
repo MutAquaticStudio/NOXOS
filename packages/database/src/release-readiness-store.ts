@@ -197,9 +197,30 @@ export class PostgresProductionReadinessSource implements ProductionReadinessSou
     formulaVersionId: string;
     formulaBundleHash: string;
   }): Promise<ProductionReadinessResolution> {
-    const rows = await this.sql<
-      { id: string; decision: "READY" | "REVIEW_REQUIRED" | "BLOCKED" }[]
-    >`
+    return this.resolveWith(this.sql, input);
+  }
+
+  /** Resolve through the caller's transaction when Production is already in one. */
+  resolveCurrentForFormulaInTransaction(
+    sql: TransactionSql,
+    input: {
+      tenantId: string;
+      formulaVersionId: string;
+      formulaBundleHash: string;
+    }
+  ): Promise<ProductionReadinessResolution> {
+    return this.resolveWith(sql, input);
+  }
+
+  private async resolveWith(
+    sql: SqlExecutor,
+    input: {
+      tenantId: string;
+      formulaVersionId: string;
+      formulaBundleHash: string;
+    }
+  ): Promise<ProductionReadinessResolution> {
+    const rows = await sql<{ id: string; decision: "READY" | "REVIEW_REQUIRED" | "BLOCKED" }[]>`
       select assessment.id, assessment.decision
       from release_readiness.assessments assessment
       where assessment.tenant_id = ${input.tenantId}

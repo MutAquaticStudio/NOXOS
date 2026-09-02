@@ -24,7 +24,10 @@ import {
   consumeProductionReservationInTransaction
 } from "./inventory-store.js";
 import { createPostgresDesignStudioStore } from "./design-studio-store.js";
-import { createPostgresProductionReadinessSource } from "./release-readiness-store.js";
+import {
+  createPostgresProductionReadinessSource,
+  PostgresProductionReadinessSource
+} from "./release-readiness-store.js";
 
 type OrderRow = {
   id: string;
@@ -221,6 +224,23 @@ export class PostgresProductionStore implements ProductionStore {
   ) {
     this.readiness = readiness ?? createPostgresProductionReadinessSource(sql);
   }
+
+  private resolveReadiness(
+    executor: Sql | TransactionSql,
+    input: {
+      tenantId: string;
+      formulaVersionId: string;
+      formulaBundleHash: string;
+    }
+  ) {
+    if (executor !== this.sql && this.readiness instanceof PostgresProductionReadinessSource) {
+      return this.readiness.resolveCurrentForFormulaInTransaction(
+        executor as TransactionSql,
+        input
+      );
+    }
+    return this.readiness.resolveCurrentForFormula(input);
+  }
   async listOrders(tenantId: string) {
     const rows = await this.sql<
       { id: string }[]
@@ -337,7 +357,7 @@ export class PostgresProductionStore implements ProductionStore {
           "Only DRAFT orders may be released."
         );
       const readiness = this.requireReady(
-        await this.readiness.resolveCurrentForFormula({
+        await this.resolveReadiness(tx, {
           tenantId: c.tenantId,
           formulaVersionId: order.formula_version_id,
           formulaBundleHash: order.formula_bundle_hash
@@ -421,7 +441,7 @@ export class PostgresProductionStore implements ProductionStore {
           "Only RELEASED orders may start."
         );
       const readiness = this.requireReady(
-        await this.readiness.resolveCurrentForFormula({
+        await this.resolveReadiness(tx, {
           tenantId: c.tenantId,
           formulaVersionId: order.formula_version_id,
           formulaBundleHash: order.formula_bundle_hash
