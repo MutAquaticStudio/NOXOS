@@ -80,6 +80,7 @@ begin
   end if;
   if old.status <> 'DRAFT' and (new.target_mass_mg <> old.target_mass_mg or new.formula_version_id <> old.formula_version_id or new.formula_bundle_hash <> old.formula_bundle_hash) then
     raise exception 'PRODUCTION_ORDER_LINEAGE_IMMUTABLE' using errcode = 'P0001';
+  end if;
   return new;
 end $$;
 drop trigger if exists production_order_transition on production.production_orders;
