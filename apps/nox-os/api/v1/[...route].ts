@@ -14,6 +14,7 @@ import {
   PostgresInventoryStore,
   PostgresProcurementMaterialSource,
   PostgresProcurementStore,
+  PostgresProductionStore,
   PostgresTrialInventoryPort,
   createRuntimeDatabase,
   probeDatabase
@@ -27,6 +28,7 @@ import {
 import { createTrialSensoryApi, TrialSensoryApplication } from "@nox-os/trial-sensory";
 import { createInventoryApi, InventoryApplication } from "@nox-os/inventory";
 import { createProcurementApi, ProcurementApplication } from "@nox-os/procurement";
+import { createProductionApi, ProductionApplication } from "@nox-os/production";
 import {
   createReleaseReadinessApi,
   KnownLimitV1Policy,
@@ -130,6 +132,15 @@ const procurement =
         featureFlags
       })
     : undefined;
+const production =
+  runtimeDatabase && platformCore
+    ? createProductionApi({
+        application: new ProductionApplication(new PostgresProductionStore(runtimeDatabase)),
+        authorization: platformCore,
+        definitions: [...moduleDefinitions, ...acceptanceModules],
+        featureFlags
+      })
+    : undefined;
 const designStudio =
   platformCore && designStudioStore && designStudioApplication
     ? createDesignStudioApi({
@@ -201,8 +212,13 @@ const foundationApi = createFoundationApi({
     ...(trialSensory ? [trialSensory] : []),
     ...(releaseReadiness ? [releaseReadiness] : []),
     ...(inventory ? [inventory] : []),
-    ...(procurement ? [procurement] : [])
-  ]
+    ...(procurement ? [procurement] : []),
+    ...(production ? [production] : [])
+  ],
+  // Production release/start are bounded, multi-lot PostgreSQL transactions.
+  // Keep the foundation timeout fail-safe while allowing the cloud runtime
+  // enough time to complete the atomic G7 reservation/consumption protocol.
+  apiTimeoutMs: 30_000
 });
 
 export default async function handler(

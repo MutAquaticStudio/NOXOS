@@ -57,6 +57,7 @@ describe("canonical Module Registry", () => {
       "material-intelligence",
       "inventory",
       "procurement",
+      "production",
       "settings",
       "support",
       "design-studio",
@@ -79,18 +80,18 @@ describe("canonical Module Registry", () => {
   });
 
   it("keeps disabled future modules unavailable even when a UI caller presents flags", () => {
-    const production = moduleDefinitions.find(
-      (definition) => definition.descriptor.id === "production"
+    const commercial = moduleDefinitions.find(
+      (definition) => definition.descriptor.id === "commercial"
     );
-    if (!production) {
-      throw new Error("Expected production declaration.");
+    if (!commercial) {
+      throw new Error("Expected commercial declaration.");
     }
 
     expect(
-      resolveModuleAvailability(production.descriptor, {
+      resolveModuleAvailability(commercial.descriptor, {
         featureFlags: new Set(["module.production"]),
-        entitlements: new Set(["module.production"]),
-        permissions: new Set(production.descriptor.permissions)
+        entitlements: new Set(["module.commercial"]),
+        permissions: new Set(commercial.descriptor.permissions)
       }).state
     ).toBe("DISABLED");
   });
@@ -191,6 +192,6 @@ describe("canonical Module Registry", () => {
     expect(registeredPaths).toContain("/materials/foundation");
     expect(registeredPaths).toContain("/inventory/foundation");
     expect(registeredPaths).toContain("/procurement/foundation");
-    expect(registeredPaths).not.toContain("/production/foundation");
+    expect(registeredPaths).not.toContain("/commercial/foundation");
   });
 });

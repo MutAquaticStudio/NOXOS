@@ -77,6 +77,10 @@ const LazyProcurementExperience = lazy(async () => {
   const module = await import("./procurement");
   return { default: module.ProcurementExperience };
 });
+const LazyProductionExperience = lazy(async () => {
+  const module = await import("./production");
+  return { default: module.ProductionExperience };
+});
 
 const publicIdentity = publicEnvironment({
   VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
@@ -390,7 +394,8 @@ function AuthenticatedApplication({
             definition.descriptor.id !== "trial-sensory" &&
             definition.descriptor.id !== "release-readiness" &&
             definition.descriptor.id !== "inventory" &&
-            definition.descriptor.id !== "procurement"
+            definition.descriptor.id !== "procurement" &&
+            definition.descriptor.id !== "production"
         )
         .flatMap((definition) => [
           { path: definition.descriptor.routeRoot, definition },
@@ -411,7 +416,9 @@ function AuthenticatedApplication({
             ? moduleDefinitions.find((definition) => definition.descriptor.id === "inventory")
             : location.pathname.startsWith("/procurement")
               ? moduleDefinitions.find((definition) => definition.descriptor.id === "procurement")
-              : undefined);
+              : location.pathname.startsWith("/production")
+                ? moduleDefinitions.find((definition) => definition.descriptor.id === "production")
+                : undefined);
   const density = activeDefinition ? toShellDensity(activeDefinition.uxProfile.density) : "DEFAULT";
   const isPlatformOwner = platformIdentity.identity?.platformRoleKey === "PLATFORM_OWNER";
   const hasNoWorkspace = tenantSelection.state === "ready" && tenantSelection.choices.length === 0;
@@ -587,6 +594,26 @@ function AuthenticatedApplication({
               </Suspense>
             }
           />
+          {[
+            "/production",
+            "/production/new",
+            "/production/orders/:orderId",
+            "/production/batches/:batchId"
+          ].map((path) => (
+            <Route
+              key={path}
+              path={path}
+              element={
+                <Suspense fallback={<p className="nox-ai-context">Loading Production…</p>}>
+                  <LazyProductionExperience
+                    api={api}
+                    tenantId={activeTenant?.tenantId}
+                    modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                  />
+                </Suspense>
+              }
+            />
+          ))}
           <Route
             path="/release-readiness/*"
             element={

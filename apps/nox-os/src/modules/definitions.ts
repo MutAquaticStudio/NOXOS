@@ -466,14 +466,62 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
     childRoutes: [],
     apiNamespace: "production",
     navigationGroup: "Operations",
-    lifecycle: "DISABLED",
-    dependencies: ["platform", "material-intelligence", "inventory", "procurement"],
-    permissions: ["production.read"],
+    lifecycle: "ACTIVE",
+    dependencies: ["platform", "material-intelligence", "inventory"],
+    permissions: [
+      "module.production.read",
+      "module.production.order.create",
+      "module.production.order.edit",
+      "module.production.allocation.manage",
+      "module.production.order.release",
+      "module.production.order.cancel",
+      "module.production.batch.start",
+      "module.production.batch.complete",
+      "module.production.batch.abort"
+    ],
     entitlement: "module.production",
     featureFlag: "module.production",
     uxProfile: moduleProfiles.production,
     owner: "Production owner",
-    icon: "factory"
+    icon: "factory",
+    authorization: {
+      permissions: [
+        "module.production.read",
+        "module.production.order.create",
+        "module.production.order.edit",
+        "module.production.allocation.manage",
+        "module.production.order.release",
+        "module.production.order.cancel",
+        "module.production.batch.start",
+        "module.production.batch.complete",
+        "module.production.batch.abort"
+      ],
+      defaultRoleGrants: {
+        TENANT_OWNER: [
+          "module.production.read",
+          "module.production.order.create",
+          "module.production.order.edit",
+          "module.production.allocation.manage",
+          "module.production.order.release",
+          "module.production.order.cancel",
+          "module.production.batch.start",
+          "module.production.batch.complete",
+          "module.production.batch.abort"
+        ],
+        TENANT_ADMIN: [
+          "module.production.read",
+          "module.production.order.create",
+          "module.production.order.edit",
+          "module.production.allocation.manage",
+          "module.production.order.release",
+          "module.production.order.cancel",
+          "module.production.batch.start",
+          "module.production.batch.complete",
+          "module.production.batch.abort"
+        ],
+        TENANT_MEMBER: ["module.production.read"]
+      }
+    }
   }),
   defineModule({
     id: "sensory-intelligence",

@@ -2,6 +2,7 @@ import type { Sql, TransactionSql } from "postgres";
 import type { FrozenFormulaVersion } from "@nox-os/design-studio";
 import { createPostgresDesignStudioStore } from "./design-studio-store.js";
 import { createPostgresMaterialStore } from "./material-store.js";
+import type { ProductionReadinessResolution, ProductionReadinessSource } from "@nox-os/production";
 import { canReadMaterial } from "@nox-os/material-intelligence";
 import {
   RELEASE_READINESS_POLICY_KEY,
@@ -185,6 +186,61 @@ class PostgresReleaseReadinessStore implements ReleaseReadinessStore {
     `;
     return assessment(row, rows.map(check));
   }
+}
+
+/** Narrow, read-only bridge for Production. It never creates or mutates a readiness assessment. */
+export class PostgresProductionReadinessSource implements ProductionReadinessSource {
+  constructor(private readonly sql: SqlExecutor) {}
+
+  async resolveCurrentForFormula(input: {
+    tenantId: string;
+    formulaVersionId: string;
+    formulaBundleHash: string;
+  }): Promise<ProductionReadinessResolution> {
+    return this.resolveWith(this.sql, input);
+  }
+
+  /** Resolve through the caller's transaction when Production is already in one. */
+  resolveCurrentForFormulaInTransaction(
+    sql: TransactionSql,
+    input: {
+      tenantId: string;
+      formulaVersionId: string;
+      formulaBundleHash: string;
+    }
+  ): Promise<ProductionReadinessResolution> {
+    return this.resolveWith(sql, input);
+  }
+
+  private async resolveWith(
+    sql: SqlExecutor,
+    input: {
+      tenantId: string;
+      formulaVersionId: string;
+      formulaBundleHash: string;
+    }
+  ): Promise<ProductionReadinessResolution> {
+    const rows = await sql<{ id: string; decision: "READY" | "REVIEW_REQUIRED" | "BLOCKED" }[]>`
+      select assessment.id, assessment.decision
+      from release_readiness.assessments assessment
+      where assessment.tenant_id = ${input.tenantId}
+        and assessment.formula_version_id = ${input.formulaVersionId}
+        and assessment.formula_bundle_hash = ${input.formulaBundleHash}
+        and not exists (
+          select 1 from release_readiness.assessments successor
+          where successor.tenant_id = assessment.tenant_id
+            and successor.supersedes_assessment_id = assessment.id
+        )
+      order by assessment.assessed_at desc, assessment.id
+    `;
+    if (rows.length === 0) return { status: "MISSING" };
+    if (rows.length !== 1) return { status: "AMBIGUOUS" };
+    return { status: "RESOLVED", assessmentId: rows[0].id, decision: rows[0].decision };
+  }
+}
+
+export function createPostgresProductionReadinessSource(sql: Sql): ProductionReadinessSource {
+  return new PostgresProductionReadinessSource(sql);
 }
 
 class PostgresReleaseReadinessSources

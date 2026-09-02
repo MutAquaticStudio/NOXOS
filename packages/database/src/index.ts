@@ -7,6 +7,7 @@ export * from "./trial-sensory-store.js";
 export * from "./inventory-store.js";
 export * from "./procurement-store.js";
 export * from "./release-readiness-store.js";
+export * from "./production-store.js";
 export * from "./staging-fixture-maintenance.js";
 
 export type RuntimeDatabaseOptions = {

@@ -20,6 +20,8 @@ export default defineConfig({
       "@nox-os/platform": source("./packages/platform/src/index.ts"),
       "@nox-os/procurement": source("./packages/procurement/src/index.ts"),
       "@nox-os/procurement/browser": source("./packages/procurement/src/browser.ts"),
+      "@nox-os/production": source("./packages/production/src/index.ts"),
+      "@nox-os/production/browser": source("./packages/production/src/browser.ts"),
       "@nox-os/release-readiness": source("./packages/release-readiness/src/index.ts"),
       "@nox-os/release-readiness/browser": source("./packages/release-readiness/src/browser.ts"),
       "@nox-os/scientific": source("./packages/scientific/src/index.ts"),

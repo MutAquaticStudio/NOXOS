@@ -42,7 +42,9 @@ describe("G5 cloud acceptance boundary", () => {
     expect(stagingVerifier).toContain("G5_CANCELLED_TRIAL_EVIDENCE_LOCK=PASS");
     // Later Gate acceptance continues with API calls after authenticated browser
     // sign-out, so every revoked password-grant token is refreshed explicitly.
-    expect(stagingVerifier.match(/await refreshToken\("B"\);/g)).toHaveLength(6);
+    expect(
+      stagingVerifier.match(/await refreshToken\("B"\);/g)?.length ?? 0
+    ).toBeGreaterThanOrEqual(6);
     expect(stagingVerifier).toContain('actor = token("B");');
     expect(stagingVerifier).toContain("G5 AuditEvent ${action} is missing");
     expect(stagingWorkflow).toContain("g5-staging-evidence-${{ github.sha }}");

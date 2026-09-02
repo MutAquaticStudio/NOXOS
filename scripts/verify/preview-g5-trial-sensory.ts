@@ -123,11 +123,18 @@ try {
   if (await page.getByRole("button", { name: "Assess Release Readiness" }).count())
     throw new Error("G4 displayed the G6 entry action for an ACCORD_FORMULATION.");
 
-  await runG6PreviewAcceptance(page, tenantId, formulaVersionId, accordVersionId);
+  const g6CurrentAssessmentId = await runG6PreviewAcceptance(
+    page,
+    tenantId,
+    formulaVersionId,
+    accordVersionId
+  );
 
   await runG7PreviewAcceptance(page, tenantId);
 
   await runG8PreviewAcceptance(page, tenantId);
+
+  await runG9PreviewAcceptance(page, tenantId, formulaVersionId, g6CurrentAssessmentId);
 
   await page.goto(url("/trials"), { waitUntil: "networkidle" });
   await visible(page, page.getByRole("heading", { name: "Trial Registry" }));
@@ -175,6 +182,12 @@ console.log("G7_PREVIEW_TRIAL_CONSUMPTION=PASS");
 console.log("G8_PREVIEW_PROCUREMENT_ACCEPTANCE=PASS");
 console.log("G8_PREVIEW_RECEIPT_ATOMICITY=PASS");
 console.log("G8_PREVIEW_TRACEABILITY=PASS");
+console.log("G9_PREVIEW_PRODUCTION_ACCEPTANCE=PASS");
+console.log("G9_PREVIEW_RELEASE_RESERVATION=PASS");
+console.log("G9_PREVIEW_START_CONSUMPTION=PASS");
+console.log("G9_PREVIEW_READINESS_REVALIDATION=PASS");
+console.log("G9_PREVIEW_IDEMPOTENCY=PASS");
+console.log("G9_PREVIEW_PROVENANCE=PASS");
 
 function required(name: string): string {
   const value = process.env[name];
@@ -301,7 +314,7 @@ async function runG6PreviewAcceptance(
   tenantId: string,
   formulaVersionId: string,
   accordVersionId: string
-): Promise<void> {
+): Promise<string> {
   const lines = await runtime<Array<{ material_id: string; active_aromatic_mass_mg: string }>>`
     select material_id::text, active_aromatic_mass_mg::text
     from design_studio.formula_lines
@@ -466,6 +479,7 @@ async function runG6PreviewAcceptance(
   await page.goto(url(`/release-readiness/${blocked.id}`), { waitUntil: "networkidle" });
   await visible(page, page.getByRole("heading", { name: "BLOCKED" }));
   await captureG6(page, "release-readiness-detail", `/release-readiness/${blocked.id}`);
+  return blocked.id;
 }
 async function createFrozenFormula(page: Page, tenantId: string): Promise<string> {
   const project = expectStatus(
@@ -1327,6 +1341,394 @@ async function runG8PreviewAcceptance(page: Page, tenantId: string): Promise<voi
   await visible(page, page.getByRole("heading", { name: "Purchase Orders" }));
   await visible(page, page.getByText(`G8-PO-${suffix}`));
   await captureG8(page, "procurement-purchase-orders-desktop", "/procurement");
+}
+
+async function runG9PreviewAcceptance(
+  page: Page,
+  tenantId: string,
+  formulaVersionId: string,
+  currentAssessmentId: string
+): Promise<void> {
+  type ProductionOrder = {
+    id: string;
+    status: string;
+    formulaVersionId: string;
+    targetMassMg: string;
+    releaseReadinessAssessmentId: string | null;
+    lines: Array<{ id: string; materialId: string; requiredMassMg: string }>;
+    allocations: Array<{
+      id: string;
+      productionOrderLineId: string;
+      inventoryLotId: string;
+      allocatedMassMg: string;
+      inventoryConsumptionMovementId: string | null;
+    }>;
+  };
+  type ProductionBatch = {
+    id: string;
+    productionOrderId: string;
+    actualOutputMassMg: string | null;
+    allocations: ProductionOrder["allocations"];
+  };
+  type LotDetail = {
+    lot: {
+      balances: Array<{
+        locationId: string;
+        onHandMg: string;
+        reservedMg: string;
+        availableMg: string;
+      }>;
+    };
+    movements: Array<{
+      sourceModule: string;
+      sourceReferenceId: string | null;
+      quantityMg: string;
+    }>;
+  };
+
+  const context = expectStatus(
+    await api<{
+      moduleAvailability: Array<{ moduleId: string; state: string }>;
+      authorization: { modulePermissions: string[] };
+    }>(page, tenantId, "/context"),
+    200,
+    "G9 Preview tenant context"
+  );
+  const production = context.moduleAvailability.find((item) => item.moduleId === "production");
+  if (
+    production?.state !== "AVAILABLE" ||
+    !context.authorization.modulePermissions.includes("module.production.order.create") ||
+    !context.authorization.modulePermissions.includes("module.production.order.release") ||
+    !context.authorization.modulePermissions.includes("module.production.batch.start")
+  )
+    throw new Error("Production is not AVAILABLE with the expected permissions in Preview.");
+
+  const formulaLines = await runtime<
+    {
+      material_id: string;
+    }[]
+  >`
+    select material_id::text
+    from design_studio.formula_lines
+    where tenant_id = ${tenantId} and formula_version_id = ${formulaVersionId}
+    order by line_order
+  `;
+  if (!formulaLines.length) throw new Error("G9 Preview formula has no production requirements.");
+  const stock = inventoryStock.get(tenantId);
+  if (!stock) throw new Error("G9 Preview requires the reconciled G7 inventory location.");
+
+  const ensureLot = async (materialId: string, label: string): Promise<string> => {
+    const existing = stock.lots.get(materialId);
+    if (existing) return existing;
+    const created = expectStatus(
+      await api<{ lot: { id: string } }>(page, tenantId, "/inventory/lots", "POST", {
+        materialId,
+        lotCode: `G9-${label}-${suffix}-${materialId.slice(0, 8)}`,
+        supplierLotCode: null,
+        manufacturedAt: null,
+        expiresAt: null,
+        retestAt: null,
+        notes: "G9 production acceptance fixture"
+      }),
+      201,
+      "G9 Preview lot"
+    ).lot.id;
+    stock.lots.set(materialId, created);
+    expectStatus(
+      await api(page, tenantId, `/inventory/lots/${created}/receive`, "POST", {
+        quantityMg: "10000000",
+        toLocationId: stock.locationId,
+        reasonCode: "G9_PREVIEW_ACCEPTANCE",
+        operationKey: `g9:${suffix}:opening:${created}`
+      }),
+      201,
+      "G9 Preview opening stock"
+    );
+    return created;
+  };
+  const targetMassMg = "1000000";
+  const createOrder = async (label: string) =>
+    expectStatus(
+      await api<{ order: ProductionOrder }>(page, tenantId, "/production/orders", "POST", {
+        orderNumber: `G9-${label}-${suffix}`,
+        formulaVersionId,
+        targetMassMg,
+        notes: "G9 exact-SHA production acceptance fixture"
+      }),
+      201,
+      `G9 ${label} order creation`
+    ).order;
+  const allocationFor = async (order: ProductionOrder, split: boolean) => {
+    const allocations: Array<{
+      productionOrderLineId: string;
+      lotId: string;
+      locationId: string;
+      allocatedMassMg: string;
+    }> = [];
+    for (const [index, line] of order.lines.entries()) {
+      const lotId = await ensureLot(line.materialId, `LOT-${index}`);
+      const required = BigInt(line.requiredMassMg);
+      if (split && index === 0 && required > 1n) {
+        const second = expectStatus(
+          await api<{ lot: { id: string } }>(page, tenantId, "/inventory/lots", "POST", {
+            materialId: line.materialId,
+            lotCode: `G9-SPLIT-${suffix}-${line.materialId.slice(0, 8)}`,
+            supplierLotCode: null,
+            manufacturedAt: null,
+            expiresAt: null,
+            retestAt: null,
+            notes: "G9 split-lot acceptance fixture"
+          }),
+          201,
+          "G9 split lot"
+        ).lot.id;
+        expectStatus(
+          await api(page, tenantId, `/inventory/lots/${second}/receive`, "POST", {
+            quantityMg: "10000000",
+            toLocationId: stock.locationId,
+            reasonCode: "G9_PREVIEW_ACCEPTANCE",
+            operationKey: `g9:${suffix}:split-opening:${second}`
+          }),
+          201,
+          "G9 split opening stock"
+        );
+        const firstMass = required / 2n;
+        allocations.push({
+          productionOrderLineId: line.id,
+          lotId,
+          locationId: stock.locationId,
+          allocatedMassMg: String(firstMass)
+        });
+        allocations.push({
+          productionOrderLineId: line.id,
+          lotId: second,
+          locationId: stock.locationId,
+          allocatedMassMg: String(required - firstMass)
+        });
+      } else {
+        allocations.push({
+          productionOrderLineId: line.id,
+          lotId,
+          locationId: stock.locationId,
+          allocatedMassMg: line.requiredMassMg
+        });
+      }
+    }
+    return expectStatus(
+      await api<{ order: ProductionOrder }>(
+        page,
+        tenantId,
+        `/production/orders/${order.id}/allocations`,
+        "PUT",
+        { allocations }
+      ),
+      200,
+      "G9 exact allocations"
+    ).order;
+  };
+  const balance = async (lotId: string) => {
+    const detail = expectStatus(
+      await api<LotDetail>(page, tenantId, `/inventory/lots/${lotId}`),
+      200,
+      "G9 lot balance"
+    );
+    const value = detail.lot.balances.find((item) => item.locationId === stock.locationId);
+    if (!value) throw new Error("G9 lot balance is missing at the acceptance location.");
+    return { detail, onHand: BigInt(value.onHandMg), reserved: BigInt(value.reservedMg) };
+  };
+
+  // Ensure a current READY assessment exists for release.
+  for (const line of formulaLines)
+    await runtime`
+      update material_intelligence.material_properties
+      set ifra_restricted = false, ifra_cat4_max_pct = 100, ifra_amendment = '51', updated_at = now()
+      where material_id = ${line.material_id}
+    `;
+  const ready = expectStatus(
+    await api<{ assessment: { id: string; decision: string } }>(
+      page,
+      tenantId,
+      `/release-readiness/assessments/${currentAssessmentId}/reassess`,
+      "POST"
+    ),
+    201,
+    "G9 current READY revalidation"
+  ).assessment;
+  if (ready.decision !== "READY") throw new Error("G9 could not establish a READY assessment.");
+
+  const order = await allocationFor(await createOrder("MAIN"), true);
+  const before = new Map<string, { onHand: bigint; reserved: bigint }>();
+  for (const allocation of order.allocations)
+    before.set(allocation.inventoryLotId, await balance(allocation.inventoryLotId));
+  const released = expectStatus(
+    await api<{ order: ProductionOrder }>(
+      page,
+      tenantId,
+      `/production/orders/${order.id}/release`,
+      "POST"
+    ),
+    200,
+    "G9 release"
+  ).order;
+  if (released.status !== "RELEASED" || !released.releaseReadinessAssessmentId)
+    throw new Error("G9 release did not reserve the complete order.");
+  for (const allocation of order.allocations) {
+    const after = await balance(allocation.inventoryLotId);
+    const initial = before.get(allocation.inventoryLotId)!;
+    if (after.onHand !== initial.onHand || after.reserved < initial.reserved)
+      throw new Error("G9 release changed On Hand or failed to reserve stock atomically.");
+  }
+
+  // A newer BLOCKED assessment must prevent START, then a newer READY assessment permits it.
+  const restricted = formulaLines[0].material_id;
+  await runtime`
+    update material_intelligence.material_properties
+    set ifra_restricted = true, ifra_cat4_max_pct = 0, ifra_amendment = '51', updated_at = now()
+    where material_id = ${restricted}
+  `;
+  const blocked = expectStatus(
+    await api<{ assessment: { id: string; decision: string } }>(
+      page,
+      tenantId,
+      `/release-readiness/assessments/${ready.id}/reassess`,
+      "POST"
+    ),
+    201,
+    "G9 blocked revalidation"
+  ).assessment;
+  if (blocked.decision !== "BLOCKED") throw new Error("G9 BLOCKED revalidation did not occur.");
+  const deniedStart = await api(page, tenantId, `/production/orders/${order.id}/start`, "POST");
+  if (deniedStart.status !== 409)
+    throw new Error("G9 START ignored a newer BLOCKED readiness assessment.");
+  await runtime`
+    update material_intelligence.material_properties
+    set ifra_restricted = false, ifra_cat4_max_pct = 100, ifra_amendment = '51', updated_at = now()
+    where material_id = ${restricted}
+  `;
+  const currentReady = expectStatus(
+    await api<{ assessment: { id: string; decision: string } }>(
+      page,
+      tenantId,
+      `/release-readiness/assessments/${blocked.id}/reassess`,
+      "POST"
+    ),
+    201,
+    "G9 READY revalidation"
+  ).assessment;
+  if (currentReady.decision !== "READY") throw new Error("G9 READY revalidation did not occur.");
+
+  const batch = expectStatus(
+    await api<{ batch: ProductionBatch }>(
+      page,
+      tenantId,
+      `/production/orders/${order.id}/start`,
+      "POST"
+    ),
+    200,
+    "G9 start"
+  ).batch;
+  if (
+    batch.productionOrderId !== order.id ||
+    batch.allocations.some((a) => !a.inventoryConsumptionMovementId)
+  )
+    throw new Error("G9 START did not consume every reserved allocation atomically.");
+  const duplicate = expectStatus(
+    await api<{ batch: ProductionBatch }>(
+      page,
+      tenantId,
+      `/production/orders/${order.id}/start`,
+      "POST"
+    ),
+    200,
+    "G9 idempotent start"
+  ).batch;
+  if (duplicate.id !== batch.id) throw new Error("G9 duplicate START created a second batch.");
+  for (const allocation of batch.allocations) {
+    const trace = (await balance(allocation.inventoryLotId)).detail;
+    if (
+      !trace.movements.some(
+        (movement) =>
+          movement.sourceModule === "PRODUCTION" &&
+          movement.sourceReferenceId === allocation.id &&
+          movement.quantityMg === allocation.allocatedMassMg
+      )
+    )
+      throw new Error("G9 PRODUCTION inventory provenance is incomplete.");
+  }
+  const completed = expectStatus(
+    await api<{ batch: ProductionBatch }>(
+      page,
+      tenantId,
+      `/production/batches/${batch.id}/complete`,
+      "POST",
+      {
+        actualOutputMassMg: "980000",
+        processNotes: "G9 acceptance completion"
+      }
+    ),
+    200,
+    "G9 complete"
+  ).batch;
+  if (completed.actualOutputMassMg !== "980000")
+    throw new Error("G9 actual output was not recorded.");
+
+  const cancel = await allocationFor(await createOrder("CANCEL"), false);
+  expectStatus(
+    await api(page, tenantId, `/production/orders/${cancel.id}/release`, "POST"),
+    200,
+    "G9 released cancel"
+  );
+  const cancelled = expectStatus(
+    await api<{ order: ProductionOrder }>(
+      page,
+      tenantId,
+      `/production/orders/${cancel.id}/cancel`,
+      "POST"
+    ),
+    200,
+    "G9 cancel"
+  ).order;
+  if (cancelled.status !== "CANCELLED")
+    throw new Error("G9 RELEASED cancellation did not release reservations.");
+
+  const abortOrder = await allocationFor(await createOrder("ABORT"), false);
+  await expectStatus(
+    await api(page, tenantId, `/production/orders/${abortOrder.id}/release`, "POST"),
+    200,
+    "G9 abort release"
+  );
+  const abortBatch = expectStatus(
+    await api<{ batch: ProductionBatch }>(
+      page,
+      tenantId,
+      `/production/orders/${abortOrder.id}/start`,
+      "POST"
+    ),
+    200,
+    "G9 abort start"
+  ).batch;
+  const aborted = expectStatus(
+    await api<{ batch: ProductionBatch }>(
+      page,
+      tenantId,
+      `/production/batches/${abortBatch.id}/abort`,
+      "POST",
+      {
+        reason: "G9 controlled abort"
+      }
+    ),
+    200,
+    "G9 abort"
+  ).batch;
+  if (!aborted.id) throw new Error("G9 abort did not persist the batch terminal state.");
+
+  const crossTenant = await api(page, randomUUID(), `/production/orders/${order.id}`);
+  if (![403, 404].includes(crossTenant.status))
+    throw new Error("G9 cross-tenant order access was not denied.");
+  await page.goto(url("/production"), { waitUntil: "networkidle" });
+  await visible(page, page.getByRole("heading", { name: "Production" }));
+  await page.goto(url(`/production/batches/${batch.id}`), { waitUntil: "networkidle" });
+  await visible(page, page.getByText("QC NOT ASSESSED"));
 }
 
 async function assertTrialConsumption(

@@ -13,6 +13,8 @@ import {
   type MovementSourceModule,
   type MovementType,
   type ProductionInventoryPort,
+  type ProductionReservationInput,
+  type ProductionReservationTransitionInput,
   type QuantityMg,
   type StockMovement,
   type StockReservation
@@ -1406,4 +1408,200 @@ export async function receiveProcurementLotInTransaction(
   return value;
 }
 
-export type PostgresProductionInventoryPort = ProductionInventoryPort;
+/** Production's typed inventory adapter. All writes are guarded by the G7
+ * reservation state machine and use PRODUCTION provenance; callers cannot
+ * select another source module. */
+export class PostgresProductionInventoryPort implements ProductionInventoryPort {
+  constructor(private readonly sql: Sql) {}
+
+  async getLotAvailability(input: {
+    tenantId: string;
+    materialId: string;
+  }): Promise<MaterialLot[]> {
+    const rows = await this.sql<{ id: string }[]>`
+      select id from inventory.material_lots
+      where tenant_id = ${input.tenantId} and material_id = ${input.materialId}
+      order by id
+    `;
+    return (await Promise.all(rows.map((row) => loadLot(this.sql, input.tenantId, row.id)))).filter(
+      (value): value is MaterialLot => Boolean(value)
+    );
+  }
+
+  reserveLot(input: ProductionReservationInput): Promise<StockReservation> {
+    return this.sql.begin((tx) => reserveProductionLotInTransaction(tx, input));
+  }
+
+  releaseReservation(input: ProductionReservationTransitionInput): Promise<StockReservation> {
+    return this.sql.begin((tx) => releaseProductionReservationInTransaction(tx, input));
+  }
+
+  consumeReservation(input: ProductionReservationTransitionInput): Promise<StockReservation> {
+    return this.sql.begin((tx) => consumeProductionReservationInTransaction(tx, input));
+  }
+}
+
+export async function reserveProductionLotInTransaction(
+  tx: TransactionSql,
+  input: ProductionReservationInput
+): Promise<StockReservation> {
+  const existing = await tx<ReservationRow[]>`
+    select * from inventory.stock_reservations
+    where tenant_id = ${input.tenantId} and operation_key = ${input.operationKey}
+    for update
+  `;
+  if (existing[0]) {
+    const current = existing[0];
+    if (
+      current.source_module !== "PRODUCTION" ||
+      current.source_reference_id !== input.sourceReferenceId ||
+      current.lot_id !== input.lotId ||
+      current.location_id !== input.locationId ||
+      String(current.quantity_mg) !== input.quantityMg
+    )
+      throw new InventoryProblem(
+        409,
+        "IDEMPOTENCY_CONFLICT",
+        "Production reservation operation key conflicts."
+      );
+    return reservation(current);
+  }
+  const lot = await requireLockedLot(tx, input.tenantId, input.lotId);
+  if (lot.material_id !== input.materialId)
+    throw new InventoryProblem(
+      409,
+      "INVALID_MOVEMENT",
+      "Production allocation material does not match the lot."
+    );
+  if (lot.lifecycle_status !== "OPEN")
+    throw new InventoryProblem(409, "LOT_CLOSED", "Material Lot is closed.");
+  if (lot.availability_status !== "AVAILABLE")
+    throw new InventoryProblem(409, "LOT_ON_HOLD", "Material Lot is on hold.");
+  if (lot.expires_at && lot.expires_at <= new Date())
+    throw new InventoryProblem(409, "LOT_EXPIRED", "Material Lot is expired.");
+  await requireActiveLocation(tx, input.tenantId, input.locationId);
+  const available = await balanceAt(tx, input.tenantId, input.lotId, input.locationId);
+  if (BigInt(input.quantityMg) > available.available)
+    throw new InventoryProblem(
+      409,
+      "RESERVATION_EXCEEDS_AVAILABLE_STOCK",
+      "Production reservation exceeds available stock."
+    );
+  const rows = await tx<ReservationRow[]>`
+    insert into inventory.stock_reservations (
+      tenant_id, lot_id, material_id, location_id, quantity_mg, source_module,
+      source_reference_id, operation_key, created_by_user_id
+    ) values (
+      ${input.tenantId}, ${input.lotId}, ${input.materialId}, ${input.locationId}, ${input.quantityMg},
+      'PRODUCTION', ${input.sourceReferenceId}, ${input.operationKey}, ${input.actorUserId}
+    ) returning *
+  `;
+  await audit(tx, {
+    ...input,
+    action: "inventory.reservation.created",
+    resourceType: "StockReservation",
+    resourceId: rows[0].id,
+    metadata: {
+      lotId: input.lotId,
+      materialId: input.materialId,
+      locationId: input.locationId,
+      quantityMg: input.quantityMg,
+      sourceModule: "PRODUCTION",
+      sourceReferenceId: input.sourceReferenceId
+    }
+  });
+  return reservation(rows[0]);
+}
+
+export async function releaseProductionReservationInTransaction(
+  tx: TransactionSql,
+  input: ProductionReservationTransitionInput
+): Promise<StockReservation> {
+  const rows = await tx<ReservationRow[]>`
+    select * from inventory.stock_reservations where tenant_id = ${input.tenantId} and id = ${input.reservationId} for update
+  `;
+  const current = rows[0];
+  if (!current)
+    throw new InventoryProblem(404, "RESERVATION_NOT_FOUND", "Reservation was not found.");
+  if (current.source_module !== "PRODUCTION")
+    throw new InventoryProblem(
+      403,
+      "PERMISSION_DENIED",
+      "Reservation provenance is not Production."
+    );
+  if (current.status === "RELEASED" || current.status === "CANCELLED") return reservation(current);
+  if (current.status !== "ACTIVE")
+    throw new InventoryProblem(
+      409,
+      "RESERVATION_ALREADY_TERMINAL",
+      "Reservation is already consumed."
+    );
+  const updated = await tx<ReservationRow[]>`
+    update inventory.stock_reservations set status = 'RELEASED', released_at = now()
+    where tenant_id = ${input.tenantId} and id = ${input.reservationId} returning *
+  `;
+  await audit(tx, {
+    ...input,
+    action: "inventory.reservation.released",
+    resourceType: "StockReservation",
+    resourceId: input.reservationId
+  });
+  return reservation(updated[0]);
+}
+
+export async function consumeProductionReservationInTransaction(
+  tx: TransactionSql,
+  input: ProductionReservationTransitionInput
+): Promise<StockReservation> {
+  const rows = await tx<ReservationRow[]>`
+    select * from inventory.stock_reservations where tenant_id = ${input.tenantId} and id = ${input.reservationId} for update
+  `;
+  const current = rows[0];
+  if (!current)
+    throw new InventoryProblem(404, "RESERVATION_NOT_FOUND", "Reservation was not found.");
+  if (current.source_module !== "PRODUCTION")
+    throw new InventoryProblem(
+      403,
+      "PERMISSION_DENIED",
+      "Reservation provenance is not Production."
+    );
+  if (current.status === "CONSUMED") return reservation(current);
+  if (current.status !== "ACTIVE")
+    throw new InventoryProblem(409, "RESERVATION_ALREADY_TERMINAL", "Reservation is not active.");
+  const movement = await insertMovement(tx, {
+    ...input,
+    lotId: current.lot_id,
+    movementType: "CONSUMPTION",
+    quantityMg: String(current.quantity_mg),
+    fromLocationId: current.location_id,
+    toLocationId: null,
+    sourceModule: "PRODUCTION",
+    sourceReferenceId: current.source_reference_id,
+    reasonCode: "PRODUCTION_START",
+    operationKey: input.operationKey,
+    protectedReservationMg: String(current.quantity_mg)
+  });
+  const updated = await tx<ReservationRow[]>`
+    update inventory.stock_reservations set status = 'CONSUMED', consumed_at = now(), consumed_movement_id = ${movement.id}
+    where tenant_id = ${input.tenantId} and id = ${input.reservationId} returning *
+  `;
+  await audit(tx, {
+    ...input,
+    action: "inventory.reservation.consumed",
+    resourceType: "StockReservation",
+    resourceId: input.reservationId,
+    metadata: { movementId: movement.id, sourceModule: "PRODUCTION" }
+  });
+  await audit(tx, {
+    ...input,
+    action: "inventory.stock.consumed",
+    resourceType: "StockMovement",
+    resourceId: movement.id,
+    metadata: {
+      reservationId: input.reservationId,
+      sourceModule: "PRODUCTION",
+      sourceReferenceId: current.source_reference_id
+    }
+  });
+  return reservation(updated[0]);
+}

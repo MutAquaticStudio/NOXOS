@@ -15,6 +15,7 @@ import type {
 import { serverIdentity, type ServerIdentity } from "@nox-os/config";
 import { createLogger, type LogSink } from "@nox-os/observability";
 import { createOpaqueId } from "@nox-os/shared";
+import { CoreProblem } from "./platform-core.js";
 
 export * from "./platform-core.js";
 export * from "./module-access.js";
@@ -377,10 +378,31 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
             }
           };
         }
+        if (error instanceof CoreProblem) {
+          return {
+            status: error.status,
+            body: toErrorEnvelope(error.code, error.message, request.context.requestId),
+            headers: {
+              "x-request-id": request.context.requestId,
+              "x-correlation-id": request.context.correlationId
+            }
+          };
+        }
         logger.log("error", "API request failed.", {
           requestId: request.context.requestId,
           correlationId: request.context.correlationId,
-          moduleId: router.moduleIdFor(request)
+          moduleId: router.moduleIdFor(request),
+          // Keep diagnostics useful without recording provider/SQL messages or payloads.
+          details: {
+            errorType: error instanceof Error ? error.name : typeof error,
+            errorCode:
+              error &&
+              typeof error === "object" &&
+              "code" in error &&
+              typeof error.code === "string"
+                ? error.code
+                : undefined
+          }
         });
         return {
           status: 500,

@@ -69,7 +69,7 @@ const output = String(
       "--env",
       "NOX_RUNTIME_DATABASE_URL=" + runtimeDatabaseUrl,
       "--env",
-      "NOX_FEATURE_FLAGS=module.material-intelligence,module.design-studio,module.trial-sensory,module.release-readiness,module.inventory,module.procurement",
+      "NOX_FEATURE_FLAGS=module.material-intelligence,module.design-studio,module.trial-sensory,module.release-readiness,module.inventory,module.procurement,module.production",
       "--meta",
       "githubDeployment=1",
       "--meta",

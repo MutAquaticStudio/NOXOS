@@ -1,5 +1,5 @@
 {
-  "name": "@nox-os/database",
+  "name": "@nox-os/production",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,17 +8,18 @@
       "types": "./src/index.ts",
       "development": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./src/browser.ts",
+      "development": "./src/browser.ts",
+      "default": "./dist/browser.js"
     }
   },
   "dependencies": {
     "@nox-os/contracts": "workspace:*",
     "@nox-os/design-studio": "workspace:*",
     "@nox-os/inventory": "workspace:*",
-    "@nox-os/material-intelligence": "workspace:*",
-    "@nox-os/procurement": "workspace:*",
-    "@nox-os/production": "workspace:*",
-    "@nox-os/release-readiness": "workspace:*",
-    "@nox-os/trial-sensory": "workspace:*",
-    "postgres": "3.4.9"
+    "@nox-os/module-registry": "workspace:*",
+    "zod": "4.4.3"
   }
 }

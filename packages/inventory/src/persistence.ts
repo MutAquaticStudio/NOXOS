@@ -119,7 +119,22 @@ export interface InventoryReceiptPort {
 
 export interface ProductionInventoryPort {
   getLotAvailability(input: { tenantId: string; materialId: string }): Promise<MaterialLot[]>;
-  reserveLot(input: unknown): Promise<StockReservation>;
-  releaseReservation(input: unknown): Promise<StockReservation>;
-  consumeReservation(input: unknown): Promise<StockReservation>;
+  reserveLot(input: ProductionReservationInput): Promise<StockReservation>;
+  releaseReservation(input: ProductionReservationTransitionInput): Promise<StockReservation>;
+  consumeReservation(input: ProductionReservationTransitionInput): Promise<StockReservation>;
 }
+
+/** Typed boundary used by Production. The browser cannot select sourceModule. */
+export type ProductionReservationInput = InventoryCommandContext & {
+  lotId: string;
+  materialId: string;
+  locationId: string;
+  quantityMg: QuantityMg;
+  sourceReferenceId: string;
+  operationKey: string;
+};
+
+export type ProductionReservationTransitionInput = InventoryCommandContext & {
+  reservationId: string;
+  operationKey: string;
+};

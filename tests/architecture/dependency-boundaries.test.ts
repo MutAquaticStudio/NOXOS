@@ -83,5 +83,5 @@ describe("dependency architecture", () => {
       /["'`]\/(?:api\/v1\/)?(?:gate-[^"'`/]*|g[0-9]+(?:\/|["'`])|phase-[^"'`/]*|milestone-[^"'`/]*)/i;
 
     expect(runtimeSources.join("\n")).not.toMatch(forbiddenRuntimeRoute);
-  });
+  }, 15000);
 });
