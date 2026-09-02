@@ -41,15 +41,15 @@ jobs:
     env:
       # Push-triggered closure uses the immutable accepted evidence IDs; manual dispatch
       # may provide the same values explicitly for a deterministic rerun.
-      TARGET_SHA: \${{ inputs.target_sha || '2bbc57722c0d03e4fede6393622e5d4ab4abf52b' }}
-      STAGING_EVIDENCE_RUN_ID: \${{ inputs.staging_evidence_run_id || '33622943328' }}
-      PREVIEW_EVIDENCE_RUN_ID: \${{ inputs.preview_evidence_run_id || '33622498341' }}
-      PR_NUMBER: \${{ inputs.pr_number || '69' }}
+      TARGET_SHA: ${{ inputs.target_sha || '2bbc57722c0d03e4fede6393622e5d4ab4abf52b' }}
+      STAGING_EVIDENCE_RUN_ID: ${{ inputs.staging_evidence_run_id || '33622943328' }}
+      PREVIEW_EVIDENCE_RUN_ID: ${{ inputs.preview_evidence_run_id || '33622498341' }}
+      PR_NUMBER: ${{ inputs.pr_number || '69' }}
     steps:
       - name: Validate immutable G9 Preview and Staging evidence
         id: evidence
         env:
-          GITHUB_TOKEN: \${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           EXPECTED_TARGET_SHA="2bbc57722c0d03e4fede6393622e5d4ab4abf52b"
@@ -67,7 +67,6 @@ jobs:
           }
 
           pull_json="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
-          test "$(printf '%s' "$pull_json" | jq -r '.merged')"
           test "$(printf '%s' "$pull_json" | jq -r '.merged')"
           test "$(printf '%s' "$pull_json" | jq -r '.merge_commit_sha')" = "$TARGET_SHA"
           preview_sha="$(printf '%s' "$pull_json" | jq -r '.head.sha')"
@@ -124,13 +123,13 @@ jobs:
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: \${{ env.TARGET_SHA }}
+          ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
           persist-credentials: true
 
       - name: Create immutable annotated Gate 9 acceptance tag
         env:
-          TAG_NAME: \${{ steps.evidence.outputs.tag_name }}
+          TAG_NAME: ${{ steps.evidence.outputs.tag_name }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
