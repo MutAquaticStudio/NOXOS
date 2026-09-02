@@ -380,7 +380,18 @@ export function createFoundationApi(options: FoundationApiOptions): FoundationAp
         logger.log("error", "API request failed.", {
           requestId: request.context.requestId,
           correlationId: request.context.correlationId,
-          moduleId: router.moduleIdFor(request)
+          moduleId: router.moduleIdFor(request),
+          // Keep diagnostics useful without recording provider/SQL messages or payloads.
+          details: {
+            errorType: error instanceof Error ? error.name : typeof error,
+            errorCode:
+              error &&
+              typeof error === "object" &&
+              "code" in error &&
+              typeof error.code === "string"
+                ? error.code
+                : undefined
+          }
         });
         return {
           status: 500,
