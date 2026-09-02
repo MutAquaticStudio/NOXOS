@@ -1,0 +1,154 @@
+name: g9-acceptance-tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact accepted G9 main SHA from the successful G9 Staging run
+        required: true
+        type: string
+      staging_evidence_run_id:
+        description: Successful Staging run containing exact-SHA G9 evidence
+        required: true
+        type: string
+      preview_evidence_run_id:
+        description: Successful final PR Preview run containing G9 evidence
+        required: true
+        type: string
+      pr_number:
+        description: Merged Gate 9 pull request number
+        required: true
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/g9-acceptance-tag.yml
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: nox-os-g9-acceptance-tag
+  cancel-in-progress: false
+
+jobs:
+  create-annotated-tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # Push-triggered closure uses the immutable accepted evidence IDs; manual dispatch
+      # may provide the same values explicitly for a deterministic rerun.
+      TARGET_SHA: \${{ inputs.target_sha || '2bbc57722c0d03e4fede6393622e5d4ab4abf52b' }}
+      STAGING_EVIDENCE_RUN_ID: \${{ inputs.staging_evidence_run_id || '33622943328' }}
+      PREVIEW_EVIDENCE_RUN_ID: \${{ inputs.preview_evidence_run_id || '33622498341' }}
+      PR_NUMBER: \${{ inputs.pr_number || '69' }}
+    steps:
+      - name: Validate immutable G9 Preview and Staging evidence
+        id: evidence
+        env:
+          GITHUB_TOKEN: \${{ github.token }}
+        run: |
+          set -euo pipefail
+          EXPECTED_TARGET_SHA="2bbc57722c0d03e4fede6393622e5d4ab4abf52b"
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$STAGING_EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$PREVIEW_EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          test "$TARGET_SHA" = "$EXPECTED_TARGET_SHA"
+
+          api() {
+            curl -fsS \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$1"
+          }
+
+          pull_json="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          test "$(printf '%s' "$pull_json" | jq -r '.merged')"
+          test "$(printf '%s' "$pull_json" | jq -r '.merged')"
+          test "$(printf '%s' "$pull_json" | jq -r '.merge_commit_sha')" = "$TARGET_SHA"
+          preview_sha="$(printf '%s' "$pull_json" | jq -r '.head.sha')"
+          [[ "$preview_sha" =~ ^[0-9a-f]{40}$ ]]
+
+          staging_run="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$STAGING_EVIDENCE_RUN_ID")"
+          test "$(printf '%s' "$staging_run" | jq -r '.conclusion')" = "success"
+          test "$(printf '%s' "$staging_run" | jq -r '.head_branch')" = "main"
+          test "$(printf '%s' "$staging_run" | jq -r '.head_sha')" = "$TARGET_SHA"
+          staging_artifacts="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$STAGING_EVIDENCE_RUN_ID/artifacts")"
+          staging_artifact_id="$(printf '%s' "$staging_artifacts" | jq -r --arg name "g9-staging-evidence-$TARGET_SHA" \
+            '.artifacts[] | select(.name == $name and .expired == false) | .id' | head -n 1)"
+          [[ "$staging_artifact_id" =~ ^[0-9]+$ ]]
+          curl -fsSL \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$staging_artifact_id/zip" \
+            -o "$RUNNER_TEMP/g9-staging.zip"
+          unzip -p "$RUNNER_TEMP/g9-staging.zip" > "$RUNNER_TEMP/g9-staging.env"
+          test -s "$RUNNER_TEMP/g9-staging.env"
+          grep -Fx "STAGING_SOURCE_SHA=$TARGET_SHA" "$RUNNER_TEMP/g9-staging.env"
+          grep -Fx "EXPECTED_STAGING_SHA=$TARGET_SHA" "$RUNNER_TEMP/g9-staging.env"
+          grep -Fx "DEPLOYED_STAGING_SHA=$TARGET_SHA" "$RUNNER_TEMP/g9-staging.env"
+          grep -Fx "STAGING_EXACT_SHA=PASS" "$RUNNER_TEMP/g9-staging.env"
+          grep -Fx "G9_SCHEMA=PASS" "$RUNNER_TEMP/g9-staging.env"
+          grep -Fx "PRODUCTION_PROMOTION_PERFORMED=NO" "$RUNNER_TEMP/g9-staging.env"
+          grep -Fx "PRODUCTION_MIGRATION_PERFORMED=NO" "$RUNNER_TEMP/g9-staging.env"
+          grep -Fx "PRODUCTION_DATA_MUTATED=NO" "$RUNNER_TEMP/g9-staging.env"
+
+          # Preview evidence is bound to the merged PR source SHA, while Staging
+          # evidence is bound to the accepted merged main SHA.
+          preview_run="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PREVIEW_EVIDENCE_RUN_ID")"
+          test "$(printf '%s' "$preview_run" | jq -r '.conclusion')" = "success"
+          test "$(printf '%s' "$preview_run" | jq -r '.head_sha')" = "$preview_sha"
+          preview_artifacts="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PREVIEW_EVIDENCE_RUN_ID/artifacts")"
+          preview_artifact_id="$(printf '%s' "$preview_artifacts" | jq -r --arg name "g9-preview-evidence-$preview_sha" \
+            '.artifacts[] | select(.name == $name and .expired == false) | .id' | head -n 1)"
+          [[ "$preview_artifact_id" =~ ^[0-9]+$ ]]
+          curl -fsSL \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$preview_artifact_id/zip" \
+            -o "$RUNNER_TEMP/g9-preview.zip"
+          unzip -p "$RUNNER_TEMP/g9-preview.zip" > "$RUNNER_TEMP/g9-preview.env"
+          test -s "$RUNNER_TEMP/g9-preview.env"
+          grep -Fx "PR_SOURCE_SHA=$preview_sha" "$RUNNER_TEMP/g9-preview.env"
+          grep -Fx "PREVIEW_DEPLOYED_SHA=$preview_sha" "$RUNNER_TEMP/g9-preview.env"
+          grep -Fx "PREVIEW_EXACT_SHA=PASS" "$RUNNER_TEMP/g9-preview.env"
+          grep -Fx "AUTHENTICATED_PREVIEW=PASS" "$RUNNER_TEMP/g9-preview.env"
+          grep -Fx "G9_PRODUCTION_ACCEPTANCE=PASS" "$RUNNER_TEMP/g9-preview.env"
+          grep -Fx "PRODUCTION_MUTATED=NO" "$RUNNER_TEMP/g9-preview.env"
+
+          echo "tag_name=g9-v1.0-accepted-\${TARGET_SHA:0:8}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: \${{ env.TARGET_SHA }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Create immutable annotated Gate 9 acceptance tag
+        env:
+          TAG_NAME: \${{ steps.evidence.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$TARGET_SHA" "origin/main"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/$TAG_NAME:refs/tags/$TAG_NAME"
+            test "$(git cat-file -t "refs/tags/$TAG_NAME")" = "tag"
+            test "$(git cat-file -t "refs/tags/$TAG_NAME^{}")" = "commit"
+            test "$(git rev-parse "refs/tags/$TAG_NAME^{}")" = "$TARGET_SHA"
+            echo "Existing immutable acceptance tag verified at $TARGET_SHA."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG_NAME" "$TARGET_SHA" \
+            -m "NØX-OS Gate 9 accepted Staging SHA $TARGET_SHA"
+          git push origin "refs/tags/$TAG_NAME"
+          test "$(git cat-file -t "refs/tags/$TAG_NAME")" = "tag"
+          test "$(git rev-parse "refs/tags/$TAG_NAME^{}")" = "$TARGET_SHA"
