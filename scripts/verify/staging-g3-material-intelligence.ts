@@ -1086,6 +1086,8 @@ async function runG4Acceptance(page: Page, tenantA: string, tenantB: string): Pr
     console.log("G9_STAGING_READINESS_REVALIDATION=PASS");
     console.log("G9_STAGING_IDEMPOTENCY=PASS");
     console.log("G9_STAGING_PROVENANCE=PASS");
+    await refreshToken("B");
+    actor = token("B");
     expectStatus(
       await api(actor, `/design-studio/briefs/${accordBriefId}/generate`, {
         method: "POST",
