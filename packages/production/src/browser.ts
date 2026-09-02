@@ -1,1 +1,4 @@
-m«ëˆ§½©buªàºg§¶–œ‘¨³úk¡Ûœ¶*'þÊÜýºèÂÇ«¶Å,j›jÇºà7an{¦Š)ßŠW¨¢ë_ŠW›n·š‘ºÞjG§r‡^v‹­¦ën¦)í¢X§zÊ•éà¶î˜7]yÊy×œ¡×¢ž›­†¥¥Ø¬¦V²¶¬™ë,j¢Šzn¶)éº×â•ç^}«¥µú+²×bžŠ.¶›­¢ëiº×â•ç^}«¥µú+²×hº
+export type ProductionBrowserClient = {
+  list: () => Promise<unknown>;
+  createOrder: (input: unknown) => Promise<unknown>;
+};

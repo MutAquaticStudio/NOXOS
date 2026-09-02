@@ -1,1 +1,58 @@
-m«ëˆ§½©buªàºg§¶Û¢wâ‚;(KæÚ±î¸Ø[é¢Šwâ•ê(º×â•æÛ­æ¤n·š‘éÜ¡×¢ëiºÛ©Š{h–)Ş²‡åzx-†{¦×^r‡^uç(uè§¦ëa…éiv+)•¬­†+&zËè¢›­Šznµø¥y×Ÿjém~ŠìµØ§¢‹­¦ëhºÚnµø¥y×Ÿjém~ŠìµÚ.
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "useDefineForClassFields": true,
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": false,
+    "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["node", "vitest/globals"],
+    "paths": {
+      "@nox-os/auth": ["./packages/auth/src/index.ts"],
+      "@nox-os/config": ["./packages/config/src/index.ts"],
+      "@nox-os/contracts": ["./packages/contracts/src/index.ts"],
+      "@nox-os/database": ["./packages/database/src/index.ts"],
+      "@nox-os/design-studio": ["./packages/design-studio/src/index.ts"],
+      "@nox-os/design-studio/browser": ["./packages/design-studio/src/browser.ts"],
+      "@nox-os/inventory": ["./packages/inventory/src/index.ts"],
+      "@nox-os/inventory/browser": ["./packages/inventory/src/browser.ts"],
+      "@nox-os/material-intelligence": ["./packages/material-intelligence/src/index.ts"],
+      "@nox-os/module-registry": ["./packages/module-registry/src/index.ts"],
+      "@nox-os/observability": ["./packages/observability/src/index.ts"],
+      "@nox-os/platform": ["./packages/platform/src/index.ts"],
+      "@nox-os/procurement": ["./packages/procurement/src/index.ts"],
+      "@nox-os/procurement/browser": ["./packages/procurement/src/browser.ts"],
+      "@nox-os/production": ["./packages/production/src/index.ts"],
+      "@nox-os/production/browser": ["./packages/production/src/browser.ts"],
+      "@nox-os/release-readiness": ["./packages/release-readiness/src/index.ts"],
+      "@nox-os/release-readiness/browser": ["./packages/release-readiness/src/browser.ts"],
+      "@nox-os/scientific": ["./packages/scientific/src/index.ts"],
+      "@nox-os/shared": ["./packages/shared/src/index.ts"],
+      "@nox-os/storage": ["./packages/storage/src/index.ts"],
+      "@nox-os/tenancy": ["./packages/tenancy/src/index.ts"],
+      "@nox-os/trial-sensory": ["./packages/trial-sensory/src/index.ts"],
+      "@nox-os/trial-sensory/browser": ["./packages/trial-sensory/src/browser.ts"],
+      "@nox-os/ui": ["./packages/ui/src/index.ts"]
+    }
+  },
+  "include": [
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "api/**/*.ts",
+    "scripts/**/*.ts",
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "vite.config.ts",
+    "vitest.config.ts"
+  ],
+  "exclude": ["**/node_modules/**", "**/dist/**", "**/coverage/**"]
+}

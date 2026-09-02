@@ -1,1 +1,10 @@
-m«ëˆ§½©buªàºg§¶–œ‘¨³úk¡Ûœ¶*'þÊÜþšènW¦¶Å,j›jÇºà7an{¦Š)ßŠW¨¢ë_ŠW›n·š‘ºÞjG§r‡^v‹­¦ën¦)í¢X§zÊ•éà¶î˜7]yÊy×œ¡×¢ž›­†¥¥Ø¬¦V²¶¬™ë,j¢Šzn¶)éº×â•ç^}«¥µú+²×bžŠ.¶›­¢ëiº×â•ç^}«¥µú+²×hº
+import type { ProductionErrorCode } from "./contracts.js";
+export class ProductionProblem extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: ProductionErrorCode,
+    message: string
+  ) {
+    super(message);
+  }
+}

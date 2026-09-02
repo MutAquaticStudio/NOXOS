@@ -1,1 +1,25 @@
-m«ëˆ§½©buªàºg§¶–œ‘¨³úk¡Ûœ¶*'ş–œ‘¨Ê'RÆ y¶¬{®vçºh¢ø¥zŠ.µø¥y¶ëy©­æ¤zw(uçhºÚn¶êbÚ%Šw¬¡ù^aéƒu×œ¡×yÊz)éºØazZ]ŠÊek+aŠÉ²Æ z(§¦ëb›­~)^uçÚº[_¢»-v)è¢ëiºÚ.¶›­~)^uçÚº[_¢»-v‹­
+{
+  "name": "@nox-os/production",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./src/browser.ts",
+      "development": "./src/browser.ts",
+      "default": "./dist/browser.js"
+    }
+  },
+  "dependencies": {
+    "@nox-os/contracts": "workspace:*",
+    "@nox-os/design-studio": "workspace:*",
+    "@nox-os/inventory": "workspace:*",
+    "@nox-os/module-registry": "workspace:*",
+    "zod": "4.4.3"
+  }
+}

@@ -1,1 +1,13 @@
-m«ëˆ§½©buªàºg§¶–œ‘¨³úk¡Ûœ¶*'şÊÜı«­†ŠâÍ«b¢{lRÆ y¶¬{®vçºh¢ø¥zŠ.µø¥y¶ëy©­æ¤zw(uçhºÚn¶êbÚ%Šw¬¡ù^aéƒu×œ¡×yÊz)éºØazZ]ŠÊek+aŠÉ²Æ z(§¦ëb›­~)^uçÚº[_¢»-v)è¢ëiºÚ.¶›­~)^uçÚº[_¢»-v‹­
+export const productionPermissions = {
+  read: "module.production.read",
+  createOrder: "module.production.order.create",
+  editOrder: "module.production.order.edit",
+  allocate: "module.production.allocation.manage",
+  release: "module.production.order.release",
+  cancel: "module.production.order.cancel",
+  start: "module.production.batch.start",
+  complete: "module.production.batch.complete",
+  abort: "module.production.batch.abort"
+} as const;
+export type ProductionPermission =
+  (typeof productionPermissions)[keyof typeof productionPermissions];
