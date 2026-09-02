@@ -123,13 +123,18 @@ try {
   if (await page.getByRole("button", { name: "Assess Release Readiness" }).count())
     throw new Error("G4 displayed the G6 entry action for an ACCORD_FORMULATION.");
 
-  await runG6PreviewAcceptance(page, tenantId, formulaVersionId, accordVersionId);
+  const g6CurrentAssessmentId = await runG6PreviewAcceptance(
+    page,
+    tenantId,
+    formulaVersionId,
+    accordVersionId
+  );
 
   await runG7PreviewAcceptance(page, tenantId);
 
   await runG8PreviewAcceptance(page, tenantId);
 
-  await runG9PreviewAcceptance(page, tenantId, formulaVersionId);
+  await runG9PreviewAcceptance(page, tenantId, formulaVersionId, g6CurrentAssessmentId);
 
   await page.goto(url("/trials"), { waitUntil: "networkidle" });
   await visible(page, page.getByRole("heading", { name: "Trial Registry" }));
@@ -309,7 +314,7 @@ async function runG6PreviewAcceptance(
   tenantId: string,
   formulaVersionId: string,
   accordVersionId: string
-): Promise<void> {
+): Promise<string> {
   const lines = await runtime<Array<{ material_id: string; active_aromatic_mass_mg: string }>>`
     select material_id::text, active_aromatic_mass_mg::text
     from design_studio.formula_lines
@@ -474,6 +479,7 @@ async function runG6PreviewAcceptance(
   await page.goto(url(`/release-readiness/${blocked.id}`), { waitUntil: "networkidle" });
   await visible(page, page.getByRole("heading", { name: "BLOCKED" }));
   await captureG6(page, "release-readiness-detail", `/release-readiness/${blocked.id}`);
+  return blocked.id;
 }
 async function createFrozenFormula(page: Page, tenantId: string): Promise<string> {
   const project = expectStatus(
@@ -1340,7 +1346,8 @@ async function runG8PreviewAcceptance(page: Page, tenantId: string): Promise<voi
 async function runG9PreviewAcceptance(
   page: Page,
   tenantId: string,
-  formulaVersionId: string
+  formulaVersionId: string,
+  currentAssessmentId: string
 ): Promise<void> {
   type ProductionOrder = {
     id: string;
@@ -1531,11 +1538,6 @@ async function runG9PreviewAcceptance(
   };
 
   // Ensure a current READY assessment exists for release.
-  // Preview uses a stable acceptance tenant across runs. Remove its prior
-  // readiness fixture chain so the G6 current-assessment resolver cannot
-  // observe multiple unsuperseded roots from an earlier failed run.
-  await runtime`delete from release_readiness.checks where tenant_id = ${tenantId}`;
-  await runtime`delete from release_readiness.assessments where tenant_id = ${tenantId}`;
   for (const line of formulaLines)
     await runtime`
       update material_intelligence.material_properties
@@ -1546,17 +1548,11 @@ async function runG9PreviewAcceptance(
     await api<{ assessment: { id: string; decision: string } }>(
       page,
       tenantId,
-      "/release-readiness/assessments",
-      "POST",
-      {
-        formulaVersionId,
-        applicationKey: "fine-fragrance",
-        dosagePct: 10,
-        policyKey: "g6-known-limit-v1"
-      }
+      `/release-readiness/assessments/${currentAssessmentId}/reassess`,
+      "POST"
     ),
     201,
-    "G9 current READY assessment"
+    "G9 current READY revalidation"
   ).assessment;
   if (ready.decision !== "READY") throw new Error("G9 could not establish a READY assessment.");
 
