@@ -2377,12 +2377,14 @@ async function runG9OperationalAcceptance(
   const crossTenant = await api(actor, `/production/orders/${main.id}`, { tenantId: randomUUID() });
   if (![403, 404].includes(crossTenant.status))
     throw new Error("G9 cross-tenant production access was not denied.");
+  await signInInBrowser(page, fixture("B"));
   await page.goto(new URL("/production", stagingUrl).toString(), { waitUntil: "networkidle" });
   await expectVisible(page, "Production");
   await page.goto(new URL(`/production/batches/${started.body.batch.id}`, stagingUrl).toString(), {
     waitUntil: "networkidle"
   });
   await expectVisible(page, "QC NOT ASSESSED");
+  await signOutInBrowser(page);
 }
 
 async function runG7OperationalAcceptance(
