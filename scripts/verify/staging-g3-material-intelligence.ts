@@ -3130,7 +3130,7 @@ async function runG8OperationalAcceptance(
     from inventory.stock_movements
     where tenant_id = ${tenantA} and source_module = 'PROCUREMENT'
       and source_reference_id in (
-        select id from procurement.goods_receipt_lines
+        select id::text from procurement.goods_receipt_lines
         where tenant_id = ${tenantA} and goods_receipt_id in (${raceA.id}, ${raceB.id})
       )
   `;
