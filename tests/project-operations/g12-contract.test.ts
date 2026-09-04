@@ -92,4 +92,16 @@ describe("G12 Project Operations contract", () => {
     expect(refreshedToken).toBeGreaterThan(g4Acceptance);
     expect(g12Acceptance).toBeGreaterThan(refreshedToken);
   });
+  it("probes immutable G4 FormulaVersion fields without assuming a mutable timestamp", () => {
+    const upstreamAuthorityProbe = stagingAcceptance.slice(
+      stagingAcceptance.indexOf("const upstreamBefore"),
+      stagingAcceptance.indexOf("const created", stagingAcceptance.indexOf("const upstreamBefore"))
+    );
+    expect(upstreamAuthorityProbe).toContain(
+      "select id,status,bundle_hash,frozen_at,created_at\\n      from design_studio.formula_versions"
+    );
+    expect(upstreamAuthorityProbe).not.toContain(
+      "select id,status,updated_at from design_studio.formula_versions"
+    );
+  });
 });
