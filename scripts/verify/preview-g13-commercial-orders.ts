@@ -142,7 +142,7 @@ try {
       const response = await fetch(url(`/api/v1${path}`), {
         method: options.method ?? "GET",
         headers: {
-          ...bypassHeaders(),
+          ...(protectionBypass ? { "x-vercel-protection-bypass": protectionBypass } : {}),
           authorization: `Bearer ${auth}`,
           "x-nox-tenant-id": options.tenantId ?? tenantId,
           "content-type": "application/json"
