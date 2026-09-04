@@ -82,13 +82,33 @@ try {
   await visible(page, page.getByRole("heading", { name: "Create Draft Commercial Order" }));
   await capture(page, "commercial-orders-authoring-desktop", "/commercial-orders/new");
   const suffix = randomUUID().replaceAll("-", "").slice(0, 18);
+  const platformUsers = await api<{
+    users?: Array<{ id?: string; status?: string }>;
+  }>(page, tenantId, "/platform/users");
+  const alternateOwner = platformUsers.body.users?.find(
+    (user) => user.id && user.id !== actorUserId && user.status === "ACTIVE"
+  )?.id;
+  if (!alternateOwner) {
+    throw new Error(
+      "G13 Preview isolation requires an existing active PlatformUser distinct from the acceptance actor."
+    );
+  }
   const other = await api<{ tenant: { id: string } }>(page, tenantId, "/platform/tenants", "POST", {
     name: `G13 Preview Isolation ${suffix}`,
     slug: `g13-preview-${suffix}`,
-    initialOwnerUserId: actorUserId
+    initialOwnerUserId: alternateOwner
   });
   if (other.status !== 201) throw new Error("G13 Preview isolation tenant fixture failed.");
   otherTenantId = other.body.tenant.id;
+  const added = await api(
+    page,
+    otherTenantId,
+    `/platform/tenants/${otherTenantId}/members`,
+    "POST",
+    { userId: actorUserId, roleKey: "TENANT_MEMBER" }
+  );
+  if (added.status !== 201)
+    throw new Error("G13 Preview isolation fixture could not add the acceptance actor.");
   const disabled = await api(
     page,
     otherTenantId,
