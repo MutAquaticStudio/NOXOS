@@ -53,6 +53,27 @@ const json = (value: any): any =>
         ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, json(item)]))
         : value;
 
+/**
+ * Commercial Orders delegates the physical reservation transition to the
+ * established G7 Inventory authority. Preserve its intentional client-safe
+ * 4xx result instead of converting a stock conflict into an opaque 500.
+ */
+const clientSafeProblem = (
+  error: unknown
+): error is { status: number; code: string; message: string } => {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { status?: unknown; code?: unknown; message?: unknown };
+  return (
+    Number.isInteger(value.status) &&
+    typeof value.status === "number" &&
+    value.status >= 400 &&
+    value.status < 500 &&
+    typeof value.code === "string" &&
+    /^[A-Z][A-Z0-9_]*$/.test(value.code) &&
+    typeof value.message === "string"
+  );
+};
+
 export class CommercialOrdersApi {
   constructor(
     private readonly options: {
@@ -547,6 +568,17 @@ export class CommercialOrdersApi {
               error: {
                 code: "VALIDATION_FAILED",
                 message: "Request validation failed.",
+                requestId: request.context.requestId
+              }
+            }
+          };
+        if (clientSafeProblem(error))
+          return {
+            status: error.status,
+            body: {
+              error: {
+                code: error.code,
+                message: error.message,
                 requestId: request.context.requestId
               }
             }
