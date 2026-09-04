@@ -188,6 +188,11 @@ console.log("G9_PREVIEW_START_CONSUMPTION=PASS");
 console.log("G9_PREVIEW_READINESS_REVALIDATION=PASS");
 console.log("G9_PREVIEW_IDEMPOTENCY=PASS");
 console.log("G9_PREVIEW_PROVENANCE=PASS");
+console.log("G10_PREVIEW_QC_BATCH_RELEASE_ACCEPTANCE=PASS");
+console.log("G10_PREVIEW_EXACT_DECIMAL_AND_JUDGEMENT=PASS");
+console.log("G10_PREVIEW_CURRENT_G6_REVALIDATION=PASS");
+console.log("G10_PREVIEW_TERMINAL_DECISION_SERIALIZATION=PASS");
+console.log("G10_PREVIEW_NO_G7_G9_MUTATION=PASS");
 
 function required(name: string): string {
   const value = process.env[name];
@@ -1672,6 +1677,49 @@ async function runG9PreviewAcceptance(
   if (completed.actualOutputMassMg !== "980000")
     throw new Error("G9 actual output was not recorded.");
 
+  const createCompletedBatch = async (label: string): Promise<ProductionBatch> => {
+    const candidate = await allocationFor(await createOrder(label), false);
+    expectStatus(
+      await api(page, tenantId, `/production/orders/${candidate.id}/release`, "POST"),
+      200,
+      `G10 ${label} production release`
+    );
+    const startedCandidate = expectStatus(
+      await api<{ batch: ProductionBatch }>(
+        page,
+        tenantId,
+        `/production/orders/${candidate.id}/start`,
+        "POST"
+      ),
+      200,
+      `G10 ${label} production start`
+    ).batch;
+    return expectStatus(
+      await api<{ batch: ProductionBatch }>(
+        page,
+        tenantId,
+        `/production/batches/${startedCandidate.id}/complete`,
+        "POST",
+        { actualOutputMassMg: "975000", processNotes: "G10 QC acceptance Batch" }
+      ),
+      200,
+      `G10 ${label} production completion`
+    ).batch;
+  };
+  const failedBatch = await createCompletedBatch("QC-FAIL");
+  const reviewBatch = await createCompletedBatch("QC-REVIEW");
+  const concurrentBatch = await createCompletedBatch("QC-CONCURRENT");
+  await runG10PreviewAcceptance(page, {
+    tenantId,
+    formulaVersionId,
+    formulaMaterialId: restricted,
+    initialReadyAssessmentId: currentReady.id,
+    passBatchId: completed.id,
+    failBatchId: failedBatch.id,
+    reviewBatchId: reviewBatch.id,
+    concurrentBatchId: concurrentBatch.id
+  });
+
   const cancel = await allocationFor(await createOrder("CANCEL"), false);
   expectStatus(
     await api(page, tenantId, `/production/orders/${cancel.id}/release`, "POST"),
@@ -1729,6 +1777,396 @@ async function runG9PreviewAcceptance(
   await visible(page, page.getByRole("heading", { name: "Production" }));
   await page.goto(url(`/production/batches/${batch.id}`), { waitUntil: "networkidle" });
   await visible(page, page.getByText("QC NOT ASSESSED"));
+}
+
+async function runG10PreviewAcceptance(
+  page: Page,
+  input: {
+    tenantId: string;
+    formulaVersionId: string;
+    formulaMaterialId: string;
+    initialReadyAssessmentId: string;
+    passBatchId: string;
+    failBatchId: string;
+    reviewBatchId: string;
+    concurrentBatchId: string;
+  }
+): Promise<void> {
+  type Specification = {
+    id: string;
+    status: string;
+    formulaBundleHash: string;
+    items: Array<{ id: string; checkType: string }>;
+  };
+  type Inspection = { id: string; status: string; outcome: string | null; results: unknown[] };
+  type Decision = { id: string; decision: string; releaseReadinessAssessmentId: string | null };
+  type BatchView = {
+    batch: {
+      batch: { formulaBundleHash: string };
+      disposition: string;
+      currentDecision: Decision | null;
+    };
+  };
+  const { tenantId } = input;
+  const context = expectStatus(
+    await api<{
+      moduleAvailability: Array<{ moduleId: string; state: string }>;
+      authorization: { modulePermissions: string[] };
+    }>(page, tenantId, "/context"),
+    200,
+    "G10 Preview tenant context"
+  );
+  if (
+    context.moduleAvailability.find((item) => item.moduleId === "quality-control")?.state !==
+      "AVAILABLE" ||
+    !context.authorization.modulePermissions.includes("module.quality-control.batch.release")
+  )
+    throw new Error("G10 Quality Control is not available with release permission.");
+
+  const passBatch = expectStatus(
+    await api<BatchView>(page, tenantId, `/quality-control/batches/${input.passBatchId}`),
+    200,
+    "G10 completed Batch read"
+  ).batch;
+  const bundleHash = passBatch.batch.formulaBundleHash;
+  const createdSpecification = expectStatus(
+    await api<{ specification: Specification }>(
+      page,
+      tenantId,
+      "/quality-control/specifications",
+      "POST",
+      {
+        specificationCode: `G10-${suffix}`,
+        versionNumber: 1,
+        formulaVersionId: input.formulaVersionId,
+        formulaBundleHash: bundleHash,
+        notes: "Exact-SHA G10 Preview acceptance"
+      }
+    ),
+    201,
+    "G10 DRAFT specification"
+  ).specification;
+  const configured = expectStatus(
+    await api<{ specification: Specification }>(
+      page,
+      tenantId,
+      `/quality-control/specifications/${createdSpecification.id}/items`,
+      "PUT",
+      {
+        items: [
+          {
+            itemOrder: 1,
+            checkKey: "specific-gravity",
+            name: "Specific gravity",
+            checkType: "NUMERIC_RANGE",
+            unitCode: "ratio",
+            minValue: "0.850",
+            maxValue: "0.900"
+          },
+          {
+            itemOrder: 2,
+            checkKey: "appearance-clear",
+            name: "Appearance clear",
+            checkType: "BOOLEAN",
+            expectedBoolean: true
+          },
+          {
+            itemOrder: 3,
+            checkKey: "odor-conformance",
+            name: "Odor conformance",
+            checkType: "QUALITATIVE",
+            acceptanceCriteriaText: "Conforms to approved reference."
+          }
+        ]
+      }
+    ),
+    200,
+    "G10 specification items"
+  ).specification;
+  const active = expectStatus(
+    await api<{ specification: Specification }>(
+      page,
+      tenantId,
+      `/quality-control/specifications/${createdSpecification.id}/activate`,
+      "POST"
+    ),
+    200,
+    "G10 specification activation"
+  ).specification;
+  if (active.status !== "ACTIVE" || active.items.length !== 3)
+    throw new Error("G10 specification activation was incomplete.");
+  const activeMutation = await api(
+    page,
+    tenantId,
+    `/quality-control/specifications/${active.id}`,
+    "PUT",
+    { notes: "must fail" }
+  );
+  if (activeMutation.status !== 409) throw new Error("G10 ACTIVE specification was mutable.");
+
+  const inventoryBefore = (
+    await runtime<
+      { count: number }[]
+    >`select count(*)::int as count from inventory.stock_movements where tenant_id = ${tenantId}`
+  )[0].count;
+  const productionBefore = await runtime<
+    { id: string; status: string; actual_output_mass_mg: string }[]
+  >`
+    select batch.id, production_order.status, batch.actual_output_mass_mg::text
+    from production.production_batches batch
+    join production.production_orders production_order on production_order.tenant_id = batch.tenant_id and production_order.id = batch.production_order_id
+    where batch.tenant_id = ${tenantId} and batch.id in (${input.passBatchId}, ${input.failBatchId}, ${input.reviewBatchId}, ${input.concurrentBatchId})
+    order by batch.id
+  `;
+
+  const createInspection = async (batchId: string) =>
+    expectStatus(
+      await api<{ inspection: Inspection }>(
+        page,
+        tenantId,
+        "/quality-control/inspections",
+        "POST",
+        { batchId, specificationId: active.id, sampleReference: `sample-${batchId.slice(0, 8)}` }
+      ),
+      201,
+      "G10 inspection creation"
+    ).inspection;
+  const saveResults = async (
+    inspectionId: string,
+    numeric: string,
+    qualitative: "PASS" | "REVIEW_REQUIRED" | "FAIL"
+  ) =>
+    expectStatus(
+      await api<{ inspection: Inspection }>(
+        page,
+        tenantId,
+        `/quality-control/inspections/${inspectionId}/results`,
+        "PUT",
+        {
+          results: [
+            {
+              checkType: "NUMERIC_RANGE",
+              specificationItemId: active.items[0].id,
+              observedNumericValue: numeric
+            },
+            {
+              checkType: "BOOLEAN",
+              specificationItemId: active.items[1].id,
+              observedBooleanValue: true
+            },
+            {
+              checkType: "QUALITATIVE",
+              specificationItemId: active.items[2].id,
+              observedText: "Observed against the approved reference.",
+              judgement: qualitative
+            }
+          ]
+        }
+      ),
+      200,
+      "G10 inspection results"
+    ).inspection;
+  const finalize = async (inspectionId: string) =>
+    expectStatus(
+      await api<{ inspection: Inspection }>(
+        page,
+        tenantId,
+        `/quality-control/inspections/${inspectionId}/finalize`,
+        "POST"
+      ),
+      200,
+      "G10 inspection finalization"
+    ).inspection;
+
+  const forged = await api(
+    page,
+    tenantId,
+    `/quality-control/inspections/${(await createInspection(input.passBatchId)).id}/results`,
+    "PUT",
+    {
+      results: [
+        {
+          checkType: "NUMERIC_RANGE",
+          specificationItemId: active.items[0].id,
+          observedNumericValue: "0.875",
+          judgement: "PASS"
+        }
+      ]
+    }
+  );
+  if (forged.status !== 400) throw new Error("G10 accepted browser-authored numeric judgement.");
+  const passInspectionRows = await runtime<
+    { id: string }[]
+  >`select id from quality_control.batch_inspections where tenant_id = ${tenantId} and batch_id = ${input.passBatchId} and status = 'DRAFT' order by created_at desc limit 1`;
+  const passInspectionId = passInspectionRows[0].id;
+  await saveResults(passInspectionId, "0.850", "PASS");
+  const passInspection = await finalize(passInspectionId);
+  if (passInspection.outcome !== "PASS")
+    throw new Error("G10 PASS outcome was not server-derived.");
+
+  await runtime`update material_intelligence.material_properties set ifra_amendment = null, ifra_source_reference = null, updated_at = now() where material_id = ${input.formulaMaterialId}`;
+  const reviewReadiness = expectStatus(
+    await api<{ assessment: { id: string; decision: string } }>(
+      page,
+      tenantId,
+      `/release-readiness/assessments/${input.initialReadyAssessmentId}/reassess`,
+      "POST"
+    ),
+    201,
+    "G10 current REVIEW_REQUIRED readiness"
+  ).assessment;
+  if (reviewReadiness.decision !== "REVIEW_REQUIRED")
+    throw new Error("G10 could not establish current G6 REVIEW_REQUIRED.");
+  const blockedRelease = await api(
+    page,
+    tenantId,
+    `/quality-control/batches/${input.passBatchId}/release`,
+    "POST"
+  );
+  if (blockedRelease.status !== 409)
+    throw new Error("G10 RELEASE ignored current non-READY G6 state.");
+  await runtime`update material_intelligence.material_properties set ifra_restricted = false, ifra_cat4_max_pct = 100, ifra_amendment = '51', ifra_source_reference = 'g10-preview', updated_at = now() where material_id = ${input.formulaMaterialId}`;
+  const ready = expectStatus(
+    await api<{ assessment: { id: string; decision: string } }>(
+      page,
+      tenantId,
+      `/release-readiness/assessments/${reviewReadiness.id}/reassess`,
+      "POST"
+    ),
+    201,
+    "G10 current READY readiness"
+  ).assessment;
+  const released = expectStatus(
+    await api<{ decision: Decision }>(
+      page,
+      tenantId,
+      `/quality-control/batches/${input.passBatchId}/release`,
+      "POST"
+    ),
+    200,
+    "G10 explicit release"
+  ).decision;
+  if (released.decision !== "RELEASED" || released.releaseReadinessAssessmentId !== ready.id)
+    throw new Error("G10 RELEASE did not pin the current READY assessment.");
+  if (
+    (
+      await api(page, tenantId, `/quality-control/batches/${input.passBatchId}/hold`, "POST", {
+        reason: "must fail"
+      })
+    ).status !== 409
+  )
+    throw new Error("G10 RELEASED Batch reopened.");
+
+  const failInspection = await createInspection(input.failBatchId);
+  await saveResults(failInspection.id, "0.900001", "PASS");
+  if ((await finalize(failInspection.id)).outcome !== "FAIL")
+    throw new Error("G10 exact upper boundary failure was not detected.");
+  const rejected = expectStatus(
+    await api<{ decision: Decision }>(
+      page,
+      tenantId,
+      `/quality-control/batches/${input.failBatchId}/reject`,
+      "POST",
+      { reason: "Numeric result exceeded the specification." }
+    ),
+    200,
+    "G10 reject"
+  ).decision;
+  if (rejected.decision !== "REJECTED") throw new Error("G10 REJECT did not become terminal.");
+
+  const reviewInspection = await createInspection(input.reviewBatchId);
+  await saveResults(reviewInspection.id, "0.875", "REVIEW_REQUIRED");
+  if ((await finalize(reviewInspection.id)).outcome !== "REVIEW_REQUIRED")
+    throw new Error("G10 REVIEW_REQUIRED precedence failed.");
+  expectStatus(
+    await api(page, tenantId, `/quality-control/batches/${input.reviewBatchId}/hold`, "POST", {
+      reason: "Retest required."
+    }),
+    200,
+    "G10 HOLD"
+  );
+  const cancelledRetest = expectStatus(
+    await api<{ inspection: Inspection }>(
+      page,
+      tenantId,
+      `/quality-control/inspections/${reviewInspection.id}/reinspect`,
+      "POST",
+      { retestReason: "First retest sample compromised." }
+    ),
+    201,
+    "G10 reinspection"
+  ).inspection;
+  expectStatus(
+    await api(page, tenantId, `/quality-control/inspections/${cancelledRetest.id}/cancel`, "POST"),
+    200,
+    "G10 cancelled reinspection"
+  );
+  const retest = expectStatus(
+    await api<{ inspection: Inspection }>(
+      page,
+      tenantId,
+      `/quality-control/inspections/${reviewInspection.id}/reinspect`,
+      "POST",
+      { retestReason: "Fresh controlled sample." }
+    ),
+    201,
+    "G10 reinspection recovery"
+  ).inspection;
+  await saveResults(retest.id, "0.900", "PASS");
+  if ((await finalize(retest.id)).outcome !== "PASS")
+    throw new Error("G10 reinspection did not become current PASS evidence.");
+  expectStatus(
+    await api(page, tenantId, `/quality-control/batches/${input.reviewBatchId}/release`, "POST"),
+    200,
+    "G10 release after HOLD and reinspection"
+  );
+
+  const concurrentInspection = await createInspection(input.concurrentBatchId);
+  await saveResults(concurrentInspection.id, "0.875", "PASS");
+  await finalize(concurrentInspection.id);
+  const concurrent = await Promise.all([
+    api(page, tenantId, `/quality-control/batches/${input.concurrentBatchId}/release`, "POST"),
+    api(page, tenantId, `/quality-control/batches/${input.concurrentBatchId}/release`, "POST")
+  ]);
+  if (
+    concurrent.filter((value) => value.status === 200).length !== 1 ||
+    concurrent.filter((value) => value.status === 409).length !== 1
+  )
+    throw new Error("G10 concurrent terminal decisions did not serialize.");
+
+  const crossTenant = await api(
+    page,
+    randomUUID(),
+    `/quality-control/batches/${input.passBatchId}`
+  );
+  if (![403, 404].includes(crossTenant.status))
+    throw new Error("G10 cross-tenant Batch disposition leaked.");
+  const inventoryAfter = (
+    await runtime<
+      { count: number }[]
+    >`select count(*)::int as count from inventory.stock_movements where tenant_id = ${tenantId}`
+  )[0].count;
+  const productionAfter = await runtime<
+    { id: string; status: string; actual_output_mass_mg: string }[]
+  >`
+    select batch.id, production_order.status, batch.actual_output_mass_mg::text
+    from production.production_batches batch
+    join production.production_orders production_order on production_order.tenant_id = batch.tenant_id and production_order.id = batch.production_order_id
+    where batch.tenant_id = ${tenantId} and batch.id in (${input.passBatchId}, ${input.failBatchId}, ${input.reviewBatchId}, ${input.concurrentBatchId})
+    order by batch.id
+  `;
+  if (
+    inventoryAfter !== inventoryBefore ||
+    JSON.stringify(productionAfter) !== JSON.stringify(productionBefore)
+  )
+    throw new Error("G10 mutated G7 inventory or G9 Batch truth.");
+
+  await page.goto(url("/quality-control"), { waitUntil: "networkidle" });
+  await visible(page, page.getByRole("heading", { name: "Quality Control" }));
+  await page.goto(url(`/quality-control/batches/${input.passBatchId}`), {
+    waitUntil: "networkidle"
+  });
+  await visible(page, page.getByText("RELEASED", { exact: true }));
 }
 
 async function assertTrialConsumption(

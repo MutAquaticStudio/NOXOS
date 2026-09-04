@@ -15,6 +15,7 @@ import {
   PostgresProcurementMaterialSource,
   PostgresProcurementStore,
   PostgresProductionStore,
+  PostgresQualityControlStore,
   PostgresTrialInventoryPort,
   createRuntimeDatabase,
   probeDatabase
@@ -29,6 +30,7 @@ import { createTrialSensoryApi, TrialSensoryApplication } from "@nox-os/trial-se
 import { createInventoryApi, InventoryApplication } from "@nox-os/inventory";
 import { createProcurementApi, ProcurementApplication } from "@nox-os/procurement";
 import { createProductionApi, ProductionApplication } from "@nox-os/production";
+import { createQualityControlApi, QualityControlApplication } from "@nox-os/quality-control";
 import {
   createReleaseReadinessApi,
   KnownLimitV1Policy,
@@ -141,6 +143,17 @@ const production =
         featureFlags
       })
     : undefined;
+const qualityControl =
+  runtimeDatabase && platformCore
+    ? createQualityControlApi({
+        application: new QualityControlApplication(
+          new PostgresQualityControlStore(runtimeDatabase)
+        ),
+        authorization: platformCore,
+        definitions: [...moduleDefinitions, ...acceptanceModules],
+        featureFlags
+      })
+    : undefined;
 const designStudio =
   platformCore && designStudioStore && designStudioApplication
     ? createDesignStudioApi({
@@ -213,7 +226,8 @@ const foundationApi = createFoundationApi({
     ...(releaseReadiness ? [releaseReadiness] : []),
     ...(inventory ? [inventory] : []),
     ...(procurement ? [procurement] : []),
-    ...(production ? [production] : [])
+    ...(production ? [production] : []),
+    ...(qualityControl ? [qualityControl] : [])
   ],
   // Production release/start are bounded, multi-lot PostgreSQL transactions.
   // Keep the foundation timeout fail-safe while allowing the cloud runtime

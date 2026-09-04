@@ -94,6 +94,9 @@ importers:
       "@nox-os/production":
         specifier: workspace:*
         version: link:../../packages/production
+      "@nox-os/quality-control":
+        specifier: workspace:*
+        version: link:../../packages/quality-control
       "@nox-os/release-readiness":
         specifier: workspace:*
         version: link:../../packages/release-readiness
@@ -176,6 +179,9 @@ importers:
       "@nox-os/production":
         specifier: workspace:*
         version: link:../production
+      "@nox-os/quality-control":
+        specifier: workspace:*
+        version: link:../quality-control
       "@nox-os/release-readiness":
         specifier: workspace:*
         version: link:../release-readiness
@@ -293,6 +299,21 @@ importers:
       "@nox-os/module-registry":
         specifier: workspace:*
         version: link:../module-registry
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
+  packages/quality-control:
+    dependencies:
+      "@nox-os/contracts":
+        specifier: workspace:*
+        version: link:../contracts
+      "@nox-os/module-registry":
+        specifier: workspace:*
+        version: link:../module-registry
+      "@nox-os/production":
+        specifier: workspace:*
+        version: link:../production
       zod:
         specifier: 4.4.3
         version: 4.4.3
