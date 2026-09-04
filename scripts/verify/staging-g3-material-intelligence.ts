@@ -2390,7 +2390,7 @@ async function runG9OperationalAcceptance(
     tenantId,
     formulaVersionId,
     formulaMaterialId: lines[0].material_id,
-    initialReadyAssessmentId: ready.body.assessment.id,
+    initialReadyAssessmentId: restored.body.assessment.id,
     passBatchId: completed.body.batch.id,
     failBatchId: (await createCompletedBatch("QC-FAIL")).id,
     reviewBatchId: (await createCompletedBatch("QC-REVIEW")).id,
