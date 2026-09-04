@@ -1745,7 +1745,7 @@ async function runG12StagingAcceptance(
   await page.goto(new URL(`/project-operations/projects/${projectId}`, stagingUrl).toString(), {
     waitUntil: "networkidle"
   });
-  await expectVisible(page, "Operational Project");
+  await expectHeading(page, "Tasks & Milestones");
   await signOutInBrowser(page);
 
   const auditActions = await maintenance<{ action: string }[]>`
