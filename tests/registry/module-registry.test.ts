@@ -13,6 +13,7 @@ const expectedModuleIds = [
   "material-intelligence",
   "inventory",
   "procurement",
+  "project-operations",
   "lab-services",
   "production",
   "quality-control",
@@ -29,7 +30,7 @@ const expectedModuleIds = [
 
 describe("canonical Module Registry", () => {
   it("preserves Gate 0 declarations and appends the accepted bounded modules", () => {
-    expect(moduleDefinitions).toHaveLength(16);
+    expect(moduleDefinitions).toHaveLength(17);
     expect(moduleDefinitions.map((definition) => definition.descriptor.id)).toEqual(
       expectedModuleIds
     );
@@ -59,6 +60,7 @@ describe("canonical Module Registry", () => {
       "material-intelligence",
       "inventory",
       "procurement",
+      "project-operations",
       "lab-services",
       "production",
       "quality-control",
