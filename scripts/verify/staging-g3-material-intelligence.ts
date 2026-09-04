@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 41321)
-Total output lines: 4559
-
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -2225,7 +2222,148 @@ async function runG9OperationalAcceptance(
           body: {
             materialId: line.materialId,
             lotCode: `G9-SPLIT-${suffix}-${line.materialId.slice(0, 8)}`,
-       …1321 tokens truncated…atus(
+            supplierLotCode: null,
+            manufacturedAt: null,
+            expiresAt: null,
+            retestAt: null,
+            notes: "G9 split-lot acceptance fixture"
+          }
+        });
+        expectStatus(second, 201, "G9 split lot");
+        expectStatus(
+          await api(actor, `/inventory/lots/${second.body.lot.id}/receive`, {
+            method: "POST",
+            tenantId,
+            body: {
+              quantityMg: "10000000",
+              toLocationId: stock.locationId,
+              reasonCode: "G9_STAGING_ACCEPTANCE",
+              operationKey: `g9:${suffix}:split:${second.body.lot.id}`
+            }
+          }),
+          201,
+          "G9 split stock"
+        );
+        const first = quantity / 2n;
+        allocations.push({
+          productionOrderLineId: line.id,
+          lotId,
+          locationId: stock.locationId,
+          allocatedMassMg: String(first)
+        });
+        allocations.push({
+          productionOrderLineId: line.id,
+          lotId: second.body.lot.id,
+          locationId: stock.locationId,
+          allocatedMassMg: String(quantity - first)
+        });
+      } else {
+        allocations.push({
+          productionOrderLineId: line.id,
+          lotId,
+          locationId: stock.locationId,
+          allocatedMassMg: line.requiredMassMg
+        });
+      }
+    }
+    const result = await api<{ order: Order }>(
+      actor,
+      `/production/orders/${order.id}/allocations`,
+      {
+        method: "PUT",
+        tenantId,
+        body: { allocations }
+      }
+    );
+    expectStatus(result, 200, "G9 exact allocation");
+    return result.body.order;
+  };
+  const main = await allocate(await create("MAIN"), true);
+  const released = await api<{ order: Order }>(actor, `/production/orders/${main.id}/release`, {
+    method: "POST",
+    tenantId
+  });
+  expectStatus(released, 200, "G9 release");
+  if (released.body.order.status !== "RELEASED") throw new Error("G9 release did not complete.");
+  await runtime`
+    update material_intelligence.material_properties
+    set ifra_restricted = true, ifra_cat4_max_pct = 0, ifra_amendment = '51', updated_at = now()
+    where material_id = ${lines[0].material_id}
+  `;
+  const blocked = await api<{ assessment: { id: string; decision: string } }>(
+    actor,
+    `/release-readiness/assessments/${ready.body.assessment.id}/reassess`,
+    { method: "POST", tenantId }
+  );
+  expectStatus(blocked, 201, "G9 BLOCKED revalidation");
+  if (blocked.body.assessment.decision !== "BLOCKED")
+    throw new Error("G9 blocked revalidation failed.");
+  const denied = await api(actor, `/production/orders/${main.id}/start`, {
+    method: "POST",
+    tenantId
+  });
+  if (denied.status !== 409) throw new Error("G9 start ignored blocked readiness.");
+  await runtime`
+    update material_intelligence.material_properties
+    set ifra_restricted = false, ifra_cat4_max_pct = 100, ifra_amendment = '51', updated_at = now()
+    where material_id = ${lines[0].material_id}
+  `;
+  const restored = await api<{ assessment: { id: string; decision: string } }>(
+    actor,
+    `/release-readiness/assessments/${blocked.body.assessment.id}/reassess`,
+    { method: "POST", tenantId }
+  );
+  expectStatus(restored, 201, "G9 READY revalidation");
+  if (restored.body.assessment.decision !== "READY")
+    throw new Error("G9 READY revalidation failed.");
+  const started = await api<{ batch: Batch }>(actor, `/production/orders/${main.id}/start`, {
+    method: "POST",
+    tenantId
+  });
+  expectStatus(started, 200, "G9 start");
+  const duplicate = await api<{ batch: Batch }>(actor, `/production/orders/${main.id}/start`, {
+    method: "POST",
+    tenantId
+  });
+  expectStatus(duplicate, 200, "G9 duplicate start");
+  if (duplicate.body.batch.id !== started.body.batch.id)
+    throw new Error("G9 duplicate start created a batch.");
+  const batchDetail = await api<{ batch: Batch & { allocations: Order["allocations"] } }>(
+    actor,
+    `/production/batches/${started.body.batch.id}`,
+    { tenantId }
+  );
+  expectStatus(batchDetail, 200, "G9 batch detail");
+  if (batchDetail.body.batch.allocations.some((item) => !item.inventoryConsumptionMovementId))
+    throw new Error("G9 batch is missing consumption provenance.");
+  for (const allocation of batchDetail.body.batch.allocations) {
+    const trace = await api<Lot>(actor, `/inventory/lots/${allocation.inventoryLotId}`, {
+      tenantId
+    });
+    expectStatus(trace, 200, "G9 production lot trace");
+    if (
+      !trace.body.movements.some(
+        (movement) =>
+          movement.sourceModule === "PRODUCTION" && movement.sourceReferenceId === allocation.id
+      )
+    )
+      throw new Error("G9 production lot trace is incomplete.");
+  }
+  const completed = await api<{ batch: Batch }>(
+    actor,
+    `/production/batches/${started.body.batch.id}/complete`,
+    {
+      method: "POST",
+      tenantId,
+      body: { actualOutputMassMg: "980000", processNotes: "G9 acceptance completion" }
+    }
+  );
+  expectStatus(completed, 200, "G9 completion");
+  if (completed.body.batch.actualOutputMassMg !== "980000")
+    throw new Error("G9 actual output missing.");
+  const createCompletedBatch = async (label: string): Promise<Batch> => {
+    const order = await allocate(await create(label), false);
+    expectStatus(
       await api(actor, `/production/orders/${order.id}/release`, { method: "POST", tenantId }),
       200,
       `G10 ${label} production release`
