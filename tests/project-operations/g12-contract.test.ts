@@ -118,6 +118,10 @@ describe("G12 Project Operations contract", () => {
       "select id,status,updated_at from design_studio.formula_versions"
     );
   });
+  it("waits for the semantic Project Operations detail heading in Staging", () => {
+    expect(stagingAcceptance).toContain('await expectHeading(page, "Tasks & Milestones");');
+    expect(stagingAcceptance).not.toContain('await expectVisible(page, "Operational Project");');
+  });
   it("filters typed artifact lookups through an unambiguous derived relation", () => {
     expect(projectOperationsStore).toContain(
       "select * from (${query}) artifact where artifact.tenant_id=$1 and artifact.id=$2"
