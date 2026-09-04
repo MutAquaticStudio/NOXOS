@@ -200,7 +200,10 @@ async function visibleProjectDetail(page: Page, projectCode: string) {
     await visible(page, page.getByRole("heading", { name: new RegExp(projectCode) }));
   } catch (cause) {
     const headings = await page.locator("h1, h2, [role=alert]").allTextContents();
-    const tenant = await page.getByLabel("Current tenant").inputValue().catch(() => "UNAVAILABLE");
+    const tenant = await page
+      .getByLabel("Current tenant")
+      .inputValue()
+      .catch(() => "UNAVAILABLE");
     throw new Error(
       `Project Operations detail did not render for ${projectCode}; selectedTenant=${tenant}; headings=${JSON.stringify(headings)}`,
       { cause }
