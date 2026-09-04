@@ -58,9 +58,11 @@ try {
   );
 
   await page.goto(url("/project-operations"), { waitUntil: "networkidle" });
+  await selectTenant(page, tenantId);
   await visible(page, page.getByRole("heading", { name: "Project Operations" }));
   await capture(page, "project-operations-registry-desktop", "/project-operations");
   await page.goto(url(`/project-operations/projects/${created.id}`), { waitUntil: "networkidle" });
+  await selectTenant(page, tenantId);
   await visible(page, page.getByRole("heading", { name: new RegExp(`G12-PREVIEW-${suffix}`) }));
   await visible(page, page.getByRole("heading", { name: "Tasks & Milestones" }));
   await capture(
@@ -80,6 +82,7 @@ try {
     await mobile.goto(url(`/project-operations/projects/${created.id}`), {
       waitUntil: "networkidle"
     });
+    await selectTenant(mobile, tenantId);
     await visible(mobile, mobile.getByRole("heading", { name: "Tasks & Milestones" }));
     await capture(
       mobile,
