@@ -15,6 +15,10 @@ const migration = readFileSync(
 );
 const application = readFileSync(resolve(root, "apps/nox-os/src/app.tsx"), "utf8");
 const shellStyles = readFileSync(resolve(root, "packages/ui/src/styles.css"), "utf8");
+const projectOperationsStore = readFileSync(
+  resolve(root, "packages/database/src/project-operations-store.ts"),
+  "utf8"
+);
 const stagingAcceptance = readFileSync(
   resolve(root, "scripts/verify/staging-g3-material-intelligence.ts"),
   "utf8"
@@ -104,5 +108,11 @@ describe("G12 Project Operations contract", () => {
     expect(upstreamAuthorityProbe).not.toContain(
       "select id,status,updated_at from design_studio.formula_versions"
     );
+  });
+  it("filters typed artifact lookups through an unambiguous derived relation", () => {
+    expect(projectOperationsStore).toContain(
+      "select * from (${query}) artifact where artifact.tenant_id=$1 and artifact.id=$2"
+    );
+    expect(projectOperationsStore).not.toContain("${query} where tenant_id=$1 and id=$2");
   });
 });

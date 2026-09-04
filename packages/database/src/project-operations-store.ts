@@ -826,10 +826,10 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
     };
     const query = q[input.artifactType];
     if (!query) return undefined;
-    const rows = await sql.unsafe(`${query} where tenant_id=$1 and id=$2`, [
-      input.tenantId,
-      input.artifactId
-    ]);
+    const rows = await sql.unsafe(
+      `select * from (${query}) artifact where artifact.tenant_id=$1 and artifact.id=$2`,
+      [input.tenantId, input.artifactId]
+    );
     const r: any = rows[0];
     return r
       ? {
