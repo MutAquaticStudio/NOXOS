@@ -1,13 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Route, Routes, useParams } from "react-router-dom";
 import type { ApiClient } from "./platform-control";
 
-type Props = { api: ApiClient };
-export function ProjectOperationsExperience({ api }: Props) {
+type Props = { api: ApiClient; tenantId?: string };
+export function ProjectOperationsExperience({ api, tenantId }: Props) {
+  // Project Operations is entirely tenant-scoped. Bind the currently resolved
+  // G2 tenant context once so no route can accidentally omit the authority
+  // header; the server remains the final authority for every request.
+  const scopedApi = useCallback<ApiClient>(
+    (path, options = {}) => {
+      if (!tenantId) return Promise.reject(new Error("An active tenant is required."));
+      return api(path, { ...options, tenantId });
+    },
+    [api, tenantId]
+  );
   return (
     <Routes>
-      <Route index element={<Registry api={api} />} />
-      <Route path="projects/:projectId" element={<Detail api={api} />} />
+      <Route index element={<Registry api={scopedApi} />} />
+      <Route path="projects/:projectId" element={<Detail api={scopedApi} />} />
     </Routes>
   );
 }

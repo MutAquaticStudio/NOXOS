@@ -647,7 +647,7 @@ function AuthenticatedApplication({
             path="/project-operations/*"
             element={
               <Suspense fallback={<p className="nox-ai-context">Loading Project Operations…</p>}>
-                <LazyProjectOperationsExperience api={api} />
+                <LazyProjectOperationsExperience api={api} tenantId={activeTenant?.tenantId} />
               </Suspense>
             }
           />
