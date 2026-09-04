@@ -1012,12 +1012,22 @@ export async function runG13Acceptance({
       "G13 partial Order cancellation restored consumed stock or failed to release only active stock."
     );
 
-  expectError(
-    await api(otherActor, `/commercial-orders/orders/${orderId}`, { tenantId: tenantB }),
-    404,
-    "COMMERCIAL_ORDER_NOT_FOUND",
-    "G13 cross-tenant Commercial Order read"
+  const crossTenantOrder = await api<{ error?: { code?: string } }>(
+    otherActor,
+    `/commercial-orders/orders/${orderId}`,
+    {
+      tenantId: tenantB
+    }
   );
+  if (!(
+    (crossTenantOrder.status === 404 &&
+      crossTenantOrder.body.error?.code === "COMMERCIAL_ORDER_NOT_FOUND") ||
+    (crossTenantOrder.status === 403 &&
+      crossTenantOrder.body.error?.code === "TENANT_ACCESS_DENIED")
+  ))
+    throw new Error(
+      `G13 cross-tenant Commercial Order read did not fail closed: ${JSON.stringify(crossTenantOrder.body)}`
+    );
   const forged = await api<{ error?: { code?: string } }>(actor, "/commercial-orders/orders", {
     method: "POST",
     tenantId: tenantA,

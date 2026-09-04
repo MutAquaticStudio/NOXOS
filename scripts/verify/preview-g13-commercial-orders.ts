@@ -89,6 +89,17 @@ try {
   });
   if (other.status !== 201) throw new Error("G13 Preview isolation tenant fixture failed.");
   otherTenantId = other.body.tenant.id;
+  const disabled = await api(
+    page,
+    otherTenantId,
+    `/platform/tenants/${otherTenantId}/members/${actorUserId}`,
+    "PATCH",
+    { status: "DISABLED" }
+  );
+  if (disabled.status !== 200)
+    throw new Error(
+      "G13 Preview isolation fixture could not disable the actor's second membership."
+    );
   const enabled = await api(
     page,
     otherTenantId,
