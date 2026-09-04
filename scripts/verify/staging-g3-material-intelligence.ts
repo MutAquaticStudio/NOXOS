@@ -2711,7 +2711,15 @@ async function runG10StagingAcceptance(
       await api(actor, `/quality-control/inspections/${passInspection.id}/results`, {
         method: "PUT",
         tenantId,
-        body: { results: [] }
+        body: {
+          results: [
+            {
+              checkType: "NUMERIC_RANGE",
+              specificationItemId: active.items[0].id,
+              observedNumericValue: "0.851"
+            }
+          ]
+        }
       })
     ).status !== 409
   )
