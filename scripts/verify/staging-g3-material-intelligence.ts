@@ -517,6 +517,10 @@ try {
       await mobileContext.close();
     }
     await runG4Acceptance(page, tenantA, tenantB);
+    // G4 closes the browser session for fixture B. Supabase revokes the
+    // password-grant token at the same time, so G12 must start with a new
+    // authenticated API token instead of carrying a revoked session forward.
+    await refreshToken("B");
     await runG12StagingAcceptance(page, tenantA, tenantB);
   } finally {
     await browser.close();
