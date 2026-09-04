@@ -115,4 +115,8 @@ describe("G12 Project Operations contract", () => {
     );
     expect(projectOperationsStore).not.toContain("${query} where tenant_id=$1 and id=$2");
   });
+  it("resolves an artifact link on the transaction that protects the mutation", () => {
+    expect(projectOperationsStore).toContain("this.resolveArtifactFrom(tx, {");
+    expect(projectOperationsStore).not.toContain("const artifact = await this.resolveArtifact({");
+  });
 });
