@@ -63,7 +63,7 @@ try {
   await capture(page, "project-operations-registry-desktop", "/project-operations");
   await page.goto(url(`/project-operations/projects/${created.id}`), { waitUntil: "networkidle" });
   await selectTenant(page, tenantId);
-  await visible(page, page.getByRole("heading", { name: new RegExp(`G12-PREVIEW-${suffix}`) }));
+  await visibleProjectDetail(page, `G12-PREVIEW-${suffix}`);
   await visible(page, page.getByRole("heading", { name: "Tasks & Milestones" }));
   await capture(
     page,
@@ -190,6 +190,18 @@ async function selectTenant(page: Page, tenantId: string) {
   const selector = page.getByLabel("Current tenant");
   await visible(page, selector);
   if ((await selector.inputValue()) !== tenantId) await selector.selectOption(tenantId);
+}
+async function visibleProjectDetail(page: Page, projectCode: string) {
+  try {
+    await visible(page, page.getByRole("heading", { name: new RegExp(projectCode) }));
+  } catch (cause) {
+    const headings = await page.locator("h1, h2, [role=alert]").allTextContents();
+    const tenant = await page.getByLabel("Current tenant").inputValue().catch(() => "UNAVAILABLE");
+    throw new Error(
+      `Project Operations detail did not render for ${projectCode}; selectedTenant=${tenant}; headings=${JSON.stringify(headings)}`,
+      { cause }
+    );
+  }
 }
 async function actorUserId(page: Page, tenantId: string): Promise<string> {
   const context = expectStatus(
