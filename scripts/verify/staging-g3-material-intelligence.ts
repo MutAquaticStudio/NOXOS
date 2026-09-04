@@ -2311,14 +2311,116 @@ async function runG13StagingAcceptance(
   if (partialOrder.body.order.fulfillmentStatus !== "PARTIAL")
     throw new Error("G13 first exact Fulfillment did not derive PARTIAL status.");
 
-  expectStatus(
-    await api(actor, `/quality-control/batches/${batch.id}/hold`, {
+  // G10 RELEASED/REJECTED decisions are terminal. Model a stale Commercial
+  // allocation using an already-REJECTED disposable G10 fixture; never reopen
+  // a Released Batch or rewrite upstream decision history for this test.
+  const rejectedBatch = (
+    await runtime<{ id: string; decision_id: string }[]>`
+      select b.id::text, d.id::text decision_id
+      from production.production_batches b
+      join quality_control.batch_release_decisions d
+        on d.tenant_id=b.tenant_id and d.batch_id=b.id and d.decision='REJECTED'
+      where b.tenant_id=${tenantA} and b.formula_version_id=${batch.formula_version_id}
+      order by b.completed_at desc, b.id desc limit 1
+    `
+  )[0];
+  if (!rejectedBatch) throw new Error("G13 requires the existing rejected G10 fixture.");
+  const staleOrder = await createConfirmedDirectOrder(`G13-STALE-${suffix.slice(0, 8)}`, lines[2]!);
+  expectError(
+    await api(actor, `/commercial-orders/orders/${staleOrder.orderId}/allocations`, {
       method: "POST",
       tenantId: tenantA,
-      body: { reason: "G13 current release revalidation" }
+      body: {
+        allocationType: "RELEASED_BATCH",
+        orderLineId: staleOrder.lineId,
+        productionBatchId: rejectedBatch.id,
+        quantityValue: primaryBatchQuantity
+      }
+    }),
+    409,
+    "COMMERCIAL_ALLOCATION_BATCH_NOT_RELEASED",
+    "G13 rejected Batch allocation denial"
+  );
+  const upstreamDecisionBefore = await runtime`
+    select * from quality_control.batch_release_decisions
+    where tenant_id=${tenantA} and batch_id=${rejectedBatch.id} order by id
+  `;
+  // Admin fixture creation is restricted to this run's temporary tenant and
+  // G13 table. The deployed API must reject this deliberately stale reference.
+  const staleAllocation = (
+    await maintenance<{ id: string }[]>`
+      insert into commercial.order_allocations (
+        tenant_id,order_id,order_line_id,allocation_type,quantity_value,
+        production_batch_id,batch_release_decision_id,state,created_by_user_id
+      ) values (
+        ${tenantA},${staleOrder.orderId},${staleOrder.lineId},'RELEASED_BATCH',
+        ${primaryBatchQuantity},${rejectedBatch.id},${rejectedBatch.decision_id},
+        'ACTIVE',${fixture("B").id}
+      ) returning id::text
+    `
+  )[0]!;
+  const staleFulfillment = await api<{ fulfillment: Fulfillment }>(
+    actor,
+    `/commercial-orders/orders/${staleOrder.orderId}/fulfillments`,
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: { fulfillmentNumber: `G13-F-STALE-${suffix.slice(0, 8)}`, notes: null }
+    }
+  );
+  expectStatus(staleFulfillment, 201, "G13 stale allocation Fulfillment fixture");
+  const staleFulfillmentId = staleFulfillment.body.fulfillment.id;
+  expectStatus(
+    await api(actor, `/commercial-orders/fulfillments/${staleFulfillmentId}/lines`, {
+      method: "PUT",
+      tenantId: tenantA,
+      body: {
+        lines: [
+          {
+            orderLineId: staleOrder.lineId,
+            allocationId: staleAllocation.id,
+            quantityValue: primaryBatchQuantity
+          }
+        ]
+      }
     }),
     200,
-    "G13 G10 Batch hold"
+    "G13 stale allocation Fulfillment lines"
+  );
+  expectError(
+    await api(actor, `/commercial-orders/fulfillments/${staleFulfillmentId}/confirm`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "COMMERCIAL_ALLOCATION_BATCH_NOT_RELEASED",
+    "G13 current G10 release revalidation"
+  );
+  const rejectedState = (
+    await runtime<{ state: string; status: string }[]>`
+      select a.state,f.status from commercial.order_allocations a
+      join commercial.fulfillments f on f.tenant_id=a.tenant_id and f.order_id=a.order_id
+      where a.tenant_id=${tenantA} and a.id=${staleAllocation.id} and f.id=${staleFulfillmentId}
+    `
+  )[0];
+  const upstreamDecisionAfter = await runtime`
+    select * from quality_control.batch_release_decisions
+    where tenant_id=${tenantA} and batch_id=${rejectedBatch.id} order by id
+  `;
+  if (
+    rejectedState?.state !== "ACTIVE" ||
+    rejectedState.status !== "DRAFT" ||
+    !isDeepStrictEqual(upstreamDecisionBefore, upstreamDecisionAfter)
+  )
+    throw new Error("G13 rejected Fulfillment mutated allocation, Fulfillment, or G10 truth.");
+  expectStatus(
+    await api(actor, `/commercial-orders/orders/${staleOrder.orderId}/cancel`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: { reason: "G13 stale fixture cleanup" }
+    }),
+    200,
+    "G13 stale allocation cleanup"
   );
   const batchFulfillmentId = await createFulfillment(`G13-F-B-${suffix.slice(0, 8)}`);
   expectStatus(
@@ -2330,30 +2432,13 @@ async function runG13StagingAcceptance(
           {
             orderLineId: manufacturedLine.id,
             allocationId: batchAllocation.body.allocation.id,
-            quantityValue: "1000"
+            quantityValue: primaryBatchQuantity
           }
         ]
       }
     }),
     200,
     "G13 Batch Fulfillment exact lines"
-  );
-  expectError(
-    await api(actor, `/commercial-orders/fulfillments/${batchFulfillmentId}/confirm`, {
-      method: "POST",
-      tenantId: tenantA
-    }),
-    409,
-    "COMMERCIAL_ALLOCATION_BATCH_NOT_RELEASED",
-    "G13 current G10 release revalidation"
-  );
-  expectStatus(
-    await api(actor, `/quality-control/batches/${batch.id}/release`, {
-      method: "POST",
-      tenantId: tenantA
-    }),
-    200,
-    "G13 G10 Batch rerelease"
   );
   expectStatus(
     await api(actor, `/commercial-orders/fulfillments/${batchFulfillmentId}/confirm`, {
@@ -6543,6 +6628,14 @@ async function cleanupFixtures(): Promise<void> {
       // composition triggers for the explicitly enumerated disposable acceptance identities.
       await transaction`set local session_replication_role = replica`;
       for (const tenantId of tenantIds) {
+        await transaction`delete from commercial.shipments where tenant_id = ${tenantId}`;
+        await transaction`delete from commercial.fulfillment_lines where tenant_id = ${tenantId}`;
+        await transaction`delete from commercial.fulfillments where tenant_id = ${tenantId}`;
+        await transaction`delete from commercial.order_allocations where tenant_id = ${tenantId}`;
+        await transaction`delete from commercial.order_lines where tenant_id = ${tenantId}`;
+        await transaction`delete from commercial.orders where tenant_id = ${tenantId}`;
+        await transaction`delete from commercial.quote_lines where tenant_id = ${tenantId}`;
+        await transaction`delete from commercial.quotes where tenant_id = ${tenantId}`;
         await transaction`delete from lab_services.customer_interactions where tenant_id = ${tenantId}`;
         await transaction`delete from lab_services.service_order_lines where tenant_id = ${tenantId}`;
         await transaction`delete from lab_services.service_orders where tenant_id = ${tenantId}`;
