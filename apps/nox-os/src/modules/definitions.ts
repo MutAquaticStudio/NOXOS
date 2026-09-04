@@ -135,6 +135,19 @@ export const moduleProfiles = {
     mobilePriority: ["review order", "receive delivery"],
     reactBitsIntensity: "none"
   }),
+  labServices: profile({
+    id: "lab-services",
+    name: "NØX Lab Services",
+    archetype: "data-grid",
+    secondaryArchetype: "operations",
+    density: "compact",
+    primaryObject: "LabServiceOrder",
+    primaryTasks: ["find customer", "confirm service scope", "record interaction"],
+    navigation: { inspector: true, aiSidecar: false, workspaceTabs: true, splitView: false },
+    supportedViews: ["table", "form", "list"],
+    mobilePriority: ["find customer", "review service order", "record interaction"],
+    reactBitsIntensity: "none"
+  }),
   production: profile({
     id: "production",
     name: "Production",
@@ -469,6 +482,66 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
           "module.procurement.receipt.cancel"
         ],
         TENANT_MEMBER: ["module.procurement.read"]
+      }
+    }
+  }),
+  defineModule({
+    id: "lab-services",
+    displayName: "NØX Lab Services",
+    routeRoot: "/lab-services",
+    childRoutes: [
+      "/lab-services/customers/:customerId",
+      "/lab-services/service-orders/:serviceOrderId"
+    ],
+    apiNamespace: "lab-services",
+    navigationGroup: "Commercial",
+    lifecycle: "ACTIVE",
+    dependencies: ["platform"],
+    permissions: ["module.lab-services.read"],
+    entitlement: "module.lab-services",
+    featureFlag: "module.lab-services",
+    uxProfile: moduleProfiles.labServices,
+    owner: "Lab Services owner",
+    icon: "briefcase",
+    authorization: {
+      permissions: [
+        "module.lab-services.read",
+        "module.lab-services.customer.manage",
+        "module.lab-services.contact.manage",
+        "module.lab-services.service-order.create",
+        "module.lab-services.service-order.edit",
+        "module.lab-services.service-order.confirm",
+        "module.lab-services.service-order.start",
+        "module.lab-services.service-order.complete",
+        "module.lab-services.service-order.cancel",
+        "module.lab-services.interaction.create"
+      ],
+      defaultRoleGrants: {
+        TENANT_OWNER: [
+          "module.lab-services.read",
+          "module.lab-services.customer.manage",
+          "module.lab-services.contact.manage",
+          "module.lab-services.service-order.create",
+          "module.lab-services.service-order.edit",
+          "module.lab-services.service-order.confirm",
+          "module.lab-services.service-order.start",
+          "module.lab-services.service-order.complete",
+          "module.lab-services.service-order.cancel",
+          "module.lab-services.interaction.create"
+        ],
+        TENANT_ADMIN: [
+          "module.lab-services.read",
+          "module.lab-services.customer.manage",
+          "module.lab-services.contact.manage",
+          "module.lab-services.service-order.create",
+          "module.lab-services.service-order.edit",
+          "module.lab-services.service-order.confirm",
+          "module.lab-services.service-order.start",
+          "module.lab-services.service-order.complete",
+          "module.lab-services.service-order.cancel",
+          "module.lab-services.interaction.create"
+        ],
+        TENANT_MEMBER: ["module.lab-services.read"]
       }
     }
   }),

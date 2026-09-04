@@ -85,6 +85,10 @@ const LazyQualityControlExperience = lazy(async () => {
   const module = await import("./quality-control");
   return { default: module.QualityControlExperience };
 });
+const LazyLabServicesExperience = lazy(async () => {
+  const module = await import("./lab-services");
+  return { default: module.LabServicesExperience };
+});
 
 const publicIdentity = publicEnvironment({
   VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
@@ -628,6 +632,18 @@ function AuthenticatedApplication({
             element={
               <Suspense fallback={<p className="nox-ai-context">Loading Quality Control…</p>}>
                 <LazyQualityControlExperience
+                  api={api}
+                  tenantId={activeTenant?.tenantId}
+                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/lab-services/*"
+            element={
+              <Suspense fallback={<p className="nox-ai-context">Loading NØX Lab Services…</p>}>
+                <LazyLabServicesExperience
                   api={api}
                   tenantId={activeTenant?.tenantId}
                   modulePermissions={tenantContext?.authorization.modulePermissions ?? []}

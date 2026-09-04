@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { chromium, type Page } from "@playwright/test";
 import {
+  createPostgresLabServicesStore,
   createPostgresPlatformStore,
   createRuntimeDatabase,
   createStagingFixtureMaintenanceDatabase
@@ -192,6 +193,18 @@ try {
       "Quality Control entitlement"
     );
   }
+  for (const tenantId of [tenantA, tenantB]) {
+    expectStatus(
+      await api(
+        platformOwnerToken,
+        `/platform/tenants/${tenantId}/entitlements/module.lab-services`,
+        { method: "PUT", body: { enabled: true } }
+      ),
+      200,
+      "Lab Services entitlement"
+    );
+  }
+  await runG11StagingAcceptance(tenantA, tenantB);
   const materialContext = await api<{
     moduleAvailability: Array<{ moduleId: string; state: string }>;
   }>(token("A"), "/context", { tenantId: tenantA });
@@ -633,6 +646,544 @@ async function addMembership(
     201,
     "Tenant membership creation"
   );
+}
+
+async function runG11StagingAcceptance(tenantA: string, tenantB: string): Promise<void> {
+  const actor = token("B");
+  const otherTenantActor = token("E");
+  const line = {
+    lineOrder: 1,
+    serviceType: "FORMULATION_RND",
+    title: "Controlled fragrance development",
+    scopeDescription: "Develop and evaluate one lab fragrance direction.",
+    notes: null
+  };
+  const created = await api<{ customer: { id: string; status: string } }>(
+    actor,
+    "/lab-services/customers",
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        customerCode: `G11_${suffix.slice(0, 10).toUpperCase()}`,
+        customerType: "BUSINESS",
+        displayName: `G11 Customer ${suffix.slice(0, 8)}`,
+        legalName: "G11 Staging Fixture",
+        taxIdentifier: null,
+        countryCode: "AU",
+        notes: "Disposable Gate 11 acceptance fixture"
+      }
+    }
+  );
+  expectStatus(created, 201, "G11 PROSPECT Customer creation");
+  if (created.body.customer.status !== "PROSPECT")
+    throw new Error("G11 Customer did not begin in PROSPECT status.");
+  const customerId = created.body.customer.id;
+
+  const primary = await api<{ contact: { id: string; fullName: string } }>(
+    actor,
+    `/lab-services/customers/${customerId}/contacts`,
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        fullName: "G11 Primary Contact",
+        email: `g11-primary-${suffix}@example.test`,
+        phone: null,
+        roleTitle: "Lab lead",
+        isPrimary: true
+      }
+    }
+  );
+  expectStatus(primary, 201, "G11 primary Contact creation");
+  const primaryContactId = primary.body.contact.id;
+
+  expectError(
+    await api(actor, `/lab-services/customers/${customerId}/contacts`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        fullName: "G11 Duplicate Primary",
+        email: null,
+        phone: null,
+        roleTitle: null,
+        isPrimary: true
+      }
+    }),
+    409,
+    "LAB_PRIMARY_CONTACT_CONFLICT",
+    "G11 duplicate primary Contact"
+  );
+  const alternate = await api<{ contact: { id: string } }>(
+    actor,
+    `/lab-services/customers/${customerId}/contacts`,
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        fullName: "G11 Alternate Contact",
+        email: `g11-alternate-${suffix}@example.test`,
+        phone: null,
+        roleTitle: "Operations",
+        isPrimary: false
+      }
+    }
+  );
+  expectStatus(alternate, 201, "G11 alternate Contact creation");
+
+  const order = await api<{ serviceOrder: { id: string; status: string } }>(
+    actor,
+    "/lab-services/service-orders",
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        orderNumber: `G11_ORDER_${suffix.slice(0, 10).toUpperCase()}`,
+        customerId,
+        customerContactId: primaryContactId,
+        customerExternalReference: "STAGING-G11",
+        intakeSummary: "Controlled G11 lifecycle acceptance",
+        requestedCompletionDate: null,
+        notes: null,
+        lines: [line]
+      }
+    }
+  );
+  expectStatus(order, 201, "G11 PROSPECT DRAFT Service Order creation");
+  const orderId = order.body.serviceOrder.id;
+  expectError(
+    await api(actor, `/lab-services/service-orders/${orderId}/confirm`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "LAB_CUSTOMER_NOT_ACTIVE",
+    "G11 PROSPECT confirmation"
+  );
+  expectError(
+    await api(actor, `/lab-services/customers/${customerId}`, {
+      method: "PUT",
+      tenantId: tenantA,
+      body: { customerCode: `CHANGED_${suffix.slice(0, 8).toUpperCase()}` }
+    }),
+    409,
+    "LAB_CUSTOMER_CODE_CONFLICT",
+    "G11 Customer code stability"
+  );
+  expectStatus(
+    await api(actor, `/lab-services/customers/${customerId}/activate`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G11 Customer activation"
+  );
+  expectStatus(
+    await api(actor, `/lab-services/service-orders/${orderId}/confirm`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G11 Service Order confirmation"
+  );
+  expectError(
+    await api(actor, `/lab-services/customers/${customerId}/archive`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "LAB_CUSTOMER_HAS_OPEN_ORDERS",
+    "G11 open-order archive guard"
+  );
+  expectError(
+    await api(actor, `/lab-services/service-orders/${orderId}`, {
+      method: "PUT",
+      tenantId: tenantA,
+      body: { intakeSummary: "Forbidden confirmed-scope edit" }
+    }),
+    409,
+    "LAB_SERVICE_ORDER_SCOPE_IMMUTABLE",
+    "G11 confirmed Service Order edit"
+  );
+  expectError(
+    await api(actor, `/lab-services/service-orders/${orderId}/lines`, {
+      method: "PUT",
+      tenantId: tenantA,
+      body: { lines: [{ ...line, title: "Forbidden replacement" }] }
+    }),
+    409,
+    "LAB_SERVICE_ORDER_SCOPE_IMMUTABLE",
+    "G11 confirmed scope-line replacement"
+  );
+
+  expectStatus(
+    await api(actor, `/lab-services/contacts/${alternate.body.contact.id}/make-primary`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G11 primary Contact change"
+  );
+  const pinned = await api<{
+    serviceOrder: { customerContactId: string | null; contactFullName: string | null };
+  }>(actor, `/lab-services/service-orders/${orderId}`, { tenantId: tenantA });
+  expectStatus(pinned, 200, "G11 pinned Contact read-back");
+  if (
+    pinned.body.serviceOrder.customerContactId !== primaryContactId ||
+    pinned.body.serviceOrder.contactFullName !== "G11 Primary Contact"
+  )
+    throw new Error("G11 primary Contact change rewrote confirmed Service Order history.");
+
+  const source = createPostgresLabServicesStore(runtime);
+  const orderProjection = await source.findConfirmedServiceOrder(tenantA, orderId);
+  const directoryProjection = await source.findCustomerDirectoryEntry(tenantA, customerId);
+  if (
+    !orderProjection ||
+    orderProjection.pinnedContact?.contactId !== primaryContactId ||
+    directoryProjection?.primaryContact?.id !== alternate.body.contact.id
+  )
+    throw new Error(
+      "G11 downstream source projections did not preserve their authority contracts."
+    );
+
+  const customerInteraction = await api<{ interaction: { id: string } }>(
+    actor,
+    `/lab-services/customers/${customerId}/interactions`,
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        serviceOrderId: null,
+        interactionType: "MEETING",
+        occurredAt: new Date().toISOString(),
+        summary: "Customer-level G11 acceptance interaction",
+        nextActionText: null,
+        nextActionDate: null
+      }
+    }
+  );
+  expectStatus(customerInteraction, 201, "G11 customer-level Interaction");
+  expectStatus(
+    await api(actor, `/lab-services/customers/${customerId}/interactions`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        serviceOrderId: orderId,
+        interactionType: "NOTE",
+        occurredAt: new Date().toISOString(),
+        summary: "Service-order-linked G11 acceptance interaction",
+        nextActionText: "Complete controlled lifecycle",
+        nextActionDate: null
+      }
+    }),
+    201,
+    "G11 Service Order Interaction"
+  );
+  let appendOnlyEnforced = false;
+  try {
+    await maintenance`
+      update lab_services.customer_interactions
+      set summary = 'forbidden mutation'
+      where id = ${customerInteraction.body.interaction.id}
+    `;
+  } catch {
+    appendOnlyEnforced = true;
+  }
+  if (!appendOnlyEnforced) throw new Error("G11 Customer Interaction history was mutable.");
+
+  const secondaryCustomer = await api<{ customer: { id: string } }>(
+    actor,
+    "/lab-services/customers",
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        customerCode: `G11_SECOND_${suffix.slice(0, 8).toUpperCase()}`,
+        customerType: "INDIVIDUAL",
+        displayName: `G11 Secondary ${suffix.slice(0, 8)}`,
+        legalName: null,
+        taxIdentifier: null,
+        countryCode: null,
+        notes: null
+      }
+    }
+  );
+  expectStatus(secondaryCustomer, 201, "G11 secondary Customer creation");
+  const secondaryCustomerId = secondaryCustomer.body.customer.id;
+  expectStatus(
+    await api(actor, `/lab-services/customers/${secondaryCustomerId}/activate`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G11 secondary Customer activation"
+  );
+  expectError(
+    await api(actor, `/lab-services/customers/${secondaryCustomerId}/interactions`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        serviceOrderId: orderId,
+        interactionType: "NOTE",
+        occurredAt: new Date().toISOString(),
+        summary: "Forbidden cross-Customer order link",
+        nextActionText: null,
+        nextActionDate: null
+      }
+    }),
+    409,
+    "LAB_INTERACTION_ORDER_MISMATCH",
+    "G11 Interaction Customer/Order integrity"
+  );
+
+  const emptyOrder = await api<{ serviceOrder: { id: string } }>(
+    actor,
+    "/lab-services/service-orders",
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        orderNumber: `G11_EMPTY_${suffix.slice(0, 8).toUpperCase()}`,
+        customerId: secondaryCustomerId,
+        customerContactId: null,
+        customerExternalReference: null,
+        intakeSummary: "Zero-line confirmation guard",
+        requestedCompletionDate: null,
+        notes: null,
+        lines: []
+      }
+    }
+  );
+  expectStatus(emptyOrder, 201, "G11 zero-line DRAFT creation");
+  expectError(
+    await api(actor, `/lab-services/service-orders/${emptyOrder.body.serviceOrder.id}/confirm`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "LAB_SERVICE_ORDER_LINES_REQUIRED",
+    "G11 zero-line confirmation"
+  );
+  const cancelled = await api<{ serviceOrder: { status: string; cancellationReason: string } }>(
+    actor,
+    `/lab-services/service-orders/${emptyOrder.body.serviceOrder.id}/cancel`,
+    { method: "POST", tenantId: tenantA, body: { reason: "Controlled cancellation" } }
+  );
+  expectStatus(cancelled, 200, "G11 Service Order cancellation");
+  if (
+    cancelled.body.serviceOrder.status !== "CANCELLED" ||
+    cancelled.body.serviceOrder.cancellationReason !== "Controlled cancellation"
+  )
+    throw new Error("G11 cancellation history was not preserved.");
+  expectError(
+    await api(actor, `/lab-services/service-orders/${emptyOrder.body.serviceOrder.id}/confirm`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "LAB_SERVICE_ORDER_NOT_CONFIRMABLE",
+    "G11 terminal Service Order reopen"
+  );
+
+  const heldOrder = await api<{ serviceOrder: { id: string } }>(
+    actor,
+    "/lab-services/service-orders",
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        orderNumber: `G11_HOLD_${suffix.slice(0, 8).toUpperCase()}`,
+        customerId: secondaryCustomerId,
+        customerContactId: null,
+        customerExternalReference: null,
+        intakeSummary: "Held Customer confirmation guard",
+        requestedCompletionDate: null,
+        notes: null,
+        lines: [line]
+      }
+    }
+  );
+  expectStatus(heldOrder, 201, "G11 held-path DRAFT creation");
+  expectStatus(
+    await api(actor, `/lab-services/customers/${secondaryCustomerId}/hold`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G11 Customer hold"
+  );
+  expectError(
+    await api(actor, `/lab-services/service-orders/${heldOrder.body.serviceOrder.id}/confirm`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "LAB_CUSTOMER_ON_HOLD",
+    "G11 held Customer confirmation"
+  );
+  expectStatus(
+    await api(actor, `/lab-services/customers/${secondaryCustomerId}/activate`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G11 held Customer reactivation"
+  );
+  expectStatus(
+    await api(actor, `/lab-services/service-orders/${heldOrder.body.serviceOrder.id}/cancel`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: { reason: "End held-path fixture" }
+    }),
+    200,
+    "G11 held-path cancellation"
+  );
+
+  const contactGuardOrder = await api<{ serviceOrder: { id: string } }>(
+    actor,
+    "/lab-services/service-orders",
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        orderNumber: `G11_CONTACT_${suffix.slice(0, 8).toUpperCase()}`,
+        customerId,
+        customerContactId: alternate.body.contact.id,
+        customerExternalReference: null,
+        intakeSummary: "Archived Contact confirmation guard",
+        requestedCompletionDate: null,
+        notes: null,
+        lines: [line]
+      }
+    }
+  );
+  expectStatus(contactGuardOrder, 201, "G11 Contact-guard DRAFT creation");
+  expectStatus(
+    await api(actor, `/lab-services/contacts/${alternate.body.contact.id}/archive`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G11 Contact archive"
+  );
+  expectError(
+    await api(
+      actor,
+      `/lab-services/service-orders/${contactGuardOrder.body.serviceOrder.id}/confirm`,
+      { method: "POST", tenantId: tenantA }
+    ),
+    409,
+    "LAB_CONTACT_NOT_ACTIVE",
+    "G11 archived Contact confirmation"
+  );
+  expectStatus(
+    await api(
+      actor,
+      `/lab-services/service-orders/${contactGuardOrder.body.serviceOrder.id}/cancel`,
+      {
+        method: "POST",
+        tenantId: tenantA,
+        body: { reason: "End archived Contact fixture" }
+      }
+    ),
+    200,
+    "G11 Contact-guard cancellation"
+  );
+
+  expectStatus(
+    await api(actor, `/lab-services/service-orders/${orderId}/start`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G11 Service Order start"
+  );
+  expectStatus(
+    await api(actor, `/lab-services/service-orders/${orderId}/complete`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G11 Service Order completion"
+  );
+  expectStatus(
+    await api(actor, `/lab-services/customers/${customerId}/archive`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G11 Customer archive after terminal-only history"
+  );
+  expectError(
+    await api(actor, "/lab-services/service-orders", {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        orderNumber: `G11_ARCHIVED_${suffix.slice(0, 8).toUpperCase()}`,
+        customerId,
+        customerContactId: null,
+        customerExternalReference: null,
+        intakeSummary: "Archived Customer must reject new work",
+        requestedCompletionDate: null,
+        notes: null,
+        lines: [line]
+      }
+    }),
+    409,
+    "LAB_CUSTOMER_ARCHIVED",
+    "G11 archived Customer Service Order"
+  );
+
+  expectError(
+    await api(otherTenantActor, `/lab-services/customers/${customerId}`, { tenantId: tenantB }),
+    404,
+    "LAB_CUSTOMER_NOT_FOUND",
+    "G11 cross-tenant Customer read"
+  );
+  expectStatus(
+    await api(token("D"), `/platform/tenants/${tenantB}/entitlements/module.lab-services`, {
+      method: "PUT",
+      body: { enabled: false }
+    }),
+    200,
+    "G11 entitlement disable"
+  );
+  expectError(
+    await api(otherTenantActor, "/lab-services/customers", { tenantId: tenantB }),
+    403,
+    "PERMISSION_DENIED",
+    "G11 entitlement-off fail-closed"
+  );
+  expectStatus(
+    await api(token("D"), `/platform/tenants/${tenantB}/entitlements/module.lab-services`, {
+      method: "PUT",
+      body: { enabled: true }
+    }),
+    200,
+    "G11 entitlement restore"
+  );
+
+  const audits = await maintenance<{ action: string }[]>`
+    select action from platform.audit_events
+    where tenant_id = ${tenantA} and action like 'lab-services.%'
+  `;
+  for (const requiredAction of [
+    "lab-services.customer.created",
+    "lab-services.contact.created",
+    "lab-services.contact.primary-changed",
+    "lab-services.service-order.created",
+    "lab-services.service-order.confirmed",
+    "lab-services.service-order.started",
+    "lab-services.service-order.completed",
+    "lab-services.service-order.cancelled",
+    "lab-services.interaction.created"
+  ]) {
+    if (!audits.some((event) => event.action === requiredAction))
+      throw new Error(`G11 transactional audit event missing: ${requiredAction}.`);
+  }
+  console.log("G11_STAGING_LAB_SERVICES_ACCEPTANCE=PASS");
+  console.log("G11_STAGING_DOWNSTREAM_SOURCES=PASS");
+  console.log("G11_STAGING_TENANT_SECURITY=PASS");
 }
 
 async function seedPlatformReferenceMaterial(): Promise<MaterialSummary> {
@@ -4454,6 +5005,11 @@ async function cleanupFixtures(): Promise<void> {
       // composition triggers for the explicitly enumerated disposable acceptance identities.
       await transaction`set local session_replication_role = replica`;
       for (const tenantId of tenantIds) {
+        await transaction`delete from lab_services.customer_interactions where tenant_id = ${tenantId}`;
+        await transaction`delete from lab_services.service_order_lines where tenant_id = ${tenantId}`;
+        await transaction`delete from lab_services.service_orders where tenant_id = ${tenantId}`;
+        await transaction`delete from lab_services.customer_contacts where tenant_id = ${tenantId}`;
+        await transaction`delete from lab_services.customers where tenant_id = ${tenantId}`;
         await transaction`delete from procurement.goods_receipt_lines where tenant_id = ${tenantId}`;
         await transaction`delete from procurement.goods_receipts where tenant_id = ${tenantId}`;
         await transaction`delete from procurement.purchase_order_lines where tenant_id = ${tenantId}`;

@@ -112,6 +112,11 @@ try {
       key: "module.quality-control",
       enabled: true
     });
+    await store.upsertTenantEntitlement({
+      tenantId: tenant.id,
+      key: "module.lab-services",
+      enabled: true
+    });
     return tenant;
   });
 
