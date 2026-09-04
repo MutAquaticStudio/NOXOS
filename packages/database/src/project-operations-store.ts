@@ -539,7 +539,7 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
       const p = await project(tx, input.tenantId, input.projectId, true);
       if (["COMPLETED", "CANCELLED"].includes(p.status))
         throw new ProjectOperationsProblem(409, "PROJECT_ALREADY_TERMINAL", "Project terminal.");
-      const artifact = await this.resolveArtifact({
+      const artifact = await this.resolveArtifactFrom(tx, {
         tenantId: input.tenantId,
         artifactType: input.artifactType,
         artifactId: input.artifactId
