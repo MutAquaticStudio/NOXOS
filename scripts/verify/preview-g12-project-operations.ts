@@ -60,7 +60,11 @@ try {
   await page.goto(url("/project-operations"), { waitUntil: "networkidle" });
   await selectTenant(page, tenantId);
   await visible(page, page.getByRole("heading", { name: "Project Operations" }));
+  const projectLink = page.getByRole("link", { name: new RegExp(`G12-PREVIEW-${suffix}`) });
+  await visible(page, projectLink);
   await capture(page, "project-operations-registry-desktop", "/project-operations");
+  await projectLink.click();
+  await visibleProjectDetail(page, `G12-PREVIEW-${suffix}`);
   await page.goto(url(`/project-operations/projects/${created.id}`), { waitUntil: "networkidle" });
   await selectTenant(page, tenantId);
   await visibleProjectDetail(page, `G12-PREVIEW-${suffix}`);

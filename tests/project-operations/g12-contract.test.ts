@@ -13,6 +13,7 @@ const migration = readFileSync(
   resolve(root, "supabase/migrations/20260904123249_g12_project_operations.sql"),
   "utf8"
 );
+const application = readFileSync(resolve(root, "apps/nox-os/src/app.tsx"), "utf8");
 
 describe("G12 Project Operations contract", () => {
   it("owns exactly six G12 tables and no mutable phase truth", () => {
@@ -63,5 +64,9 @@ describe("G12 Project Operations contract", () => {
     expect(migration).toContain(
       "revoke all on all tables in schema project_operations from public, anon, authenticated;"
     );
+  });
+  it("routes the Project Operations workspace through its single route authority", () => {
+    expect(application).toContain('path="/project-operations/*"');
+    expect(application).toContain('definition.descriptor.id !== "project-operations"');
   });
 });

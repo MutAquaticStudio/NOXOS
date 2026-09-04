@@ -408,7 +408,11 @@ function AuthenticatedApplication({
             definition.descriptor.id !== "inventory" &&
             definition.descriptor.id !== "procurement" &&
             definition.descriptor.id !== "production" &&
-            definition.descriptor.id !== "quality-control"
+            definition.descriptor.id !== "quality-control" &&
+            // Project Operations has its own route-based workspace below. Leaving
+            // its generated registry entry here creates a higher-ranked duplicate
+            // child route and shadows /project-operations/projects/:projectId.
+            definition.descriptor.id !== "project-operations"
         )
         .flatMap((definition) => [
           { path: definition.descriptor.routeRoot, definition },
