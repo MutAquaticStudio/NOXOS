@@ -1,0 +1,157 @@
+name: g13-acceptance-tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact accepted G13 main SHA from successful G13 Staging
+        required: true
+        type: string
+      staging_evidence_run_id:
+        description: Successful Staging run containing exact-SHA G13 evidence
+        required: true
+        type: string
+      preview_evidence_run_id:
+        description: Successful final PR Preview run containing G13 evidence
+        required: true
+        type: string
+      pr_number:
+        description: Merged Gate 13 pull request number
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: nox-os-g13-acceptance-tag
+  cancel-in-progress: false
+
+jobs:
+  create-annotated-tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      STAGING_EVIDENCE_RUN_ID: ${{ inputs.staging_evidence_run_id }}
+      PREVIEW_EVIDENCE_RUN_ID: ${{ inputs.preview_evidence_run_id }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+    steps:
+      - name: Validate immutable G13 Preview and Staging evidence
+        id: evidence
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$STAGING_EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$PREVIEW_EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+
+          api() {
+            curl -fsS -H "Authorization: Bearer $GITHUB_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28" "$1"
+          }
+          artifact_id() {
+            printf '%s' "$1" | jq -r --arg name "$2" '.artifacts[] | select(.name == $name and .expired == false) | .id' | head -n 1
+          }
+          artifact_env() {
+            local id="$1" output="$2"
+            curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" -o "$RUNNER_TEMP/artifact.zip"
+            unzip -p "$RUNNER_TEMP/artifact.zip" > "$output"
+            test -s "$output"
+          }
+
+          pull_json="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          test "$(printf '%s' "$pull_json" | jq -r '.merged')" = true
+          test "$(printf '%s' "$pull_json" | jq -r '.merge_commit_sha')" = "$TARGET_SHA"
+          preview_sha="$(printf '%s' "$pull_json" | jq -r '.head.sha')"
+          [[ "$preview_sha" =~ ^[0-9a-f]{40}$ ]]
+
+          staging_run="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$STAGING_EVIDENCE_RUN_ID")"
+          test "$(printf '%s' "$staging_run" | jq -r '.conclusion')" = success
+          test "$(printf '%s' "$staging_run" | jq -r '.head_branch')" = main
+          test "$(printf '%s' "$staging_run" | jq -r '.head_sha')" = "$TARGET_SHA"
+          staging_artifacts="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$STAGING_EVIDENCE_RUN_ID/artifacts")"
+          for gate in $(seq 3 13); do
+            id="$(artifact_id "$staging_artifacts" "g$gate-staging-evidence-$TARGET_SHA")"
+            [[ "$id" =~ ^[0-9]+$ ]]
+          done
+          staging_artifact_id="$(artifact_id "$staging_artifacts" "g13-staging-evidence-$TARGET_SHA")"
+          artifact_env "$staging_artifact_id" "$RUNNER_TEMP/g13-staging.env"
+          for line in \
+            "STAGING_SOURCE_SHA=$TARGET_SHA" \
+            "EXPECTED_STAGING_SHA=$TARGET_SHA" \
+            "DEPLOYED_STAGING_SHA=$TARGET_SHA" \
+            "STAGING_EXACT_SHA=PASS" \
+            "EIGHT_G13_TABLES=PASS" \
+            "CUSTOMER_PROJECT_INVENTORY_TRUTH_REUSED=PASS" \
+            "QUOTE_ORDER_LIFECYCLE=PASS" \
+            "QUOTE_TO_ORDER_CONCURRENCY=PASS" \
+            "COMMERCIAL_ALLOCATION=PASS" \
+            "G7_COMMERCIAL_RESERVATION=PASS" \
+            "FULFILLMENT_CONSUMPTION=PASS" \
+            "BATCH_RELEASE_REVALIDATION=PASS" \
+            "SERVICE_COMPLETION_REVALIDATION=PASS" \
+            "SHIPMENT_NO_INVENTORY_MUTATION=PASS" \
+            "TENANT_ISOLATION=PASS" \
+            "RBAC_FAIL_CLOSED=PASS" \
+            "FORGED_AUTHORITY_DENIED=PASS" \
+            "UNAUTHORIZED_UPSTREAM_MUTATION_FROM_G13=NONE" \
+            "G7_COMMERCIAL_INTEGRATION_ONLY=PASS" \
+            "G3_G12_REGRESSION=PASS" \
+            "PRODUCTION_PROMOTION_PERFORMED=NO" \
+            "PRODUCTION_MIGRATION_PERFORMED=NO" \
+            "PRODUCTION_DATA_MUTATED=NO"
+          do grep -Fx "$line" "$RUNNER_TEMP/g13-staging.env"; done
+
+          preview_run="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PREVIEW_EVIDENCE_RUN_ID")"
+          test "$(printf '%s' "$preview_run" | jq -r '.conclusion')" = success
+          test "$(printf '%s' "$preview_run" | jq -r '.head_sha')" = "$preview_sha"
+          preview_artifacts="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PREVIEW_EVIDENCE_RUN_ID/artifacts")"
+          for gate in $(seq 3 13); do
+            id="$(artifact_id "$preview_artifacts" "g$gate-preview-evidence-$preview_sha")"
+            [[ "$id" =~ ^[0-9]+$ ]]
+          done
+          preview_artifact_id="$(artifact_id "$preview_artifacts" "g13-preview-evidence-$preview_sha")"
+          artifact_env "$preview_artifact_id" "$RUNNER_TEMP/g13-preview.env"
+          for line in \
+            "PR_SOURCE_SHA=$preview_sha" \
+            "PREVIEW_DEPLOYED_SHA=$preview_sha" \
+            "PREVIEW_EXACT_SHA=PASS" \
+            "AUTHENTICATED_PREVIEW=PASS" \
+            "COMMERCIAL_ORDERS_MODULE_AVAILABILITY=PASS" \
+            "COMMERCIAL_ORDERS_API_ACCEPTANCE=PASS" \
+            "COMMERCIAL_ORDERS_UI_ACCEPTANCE=PASS" \
+            "FORGED_AUTHORITY_DENIED=PASS" \
+            "PRODUCTION_MUTATED=NO"
+          do grep -Fx "$line" "$RUNNER_TEMP/g13-preview.env"; done
+
+          echo "tag_name=g13-v1.0-accepted-${TARGET_SHA:0:8}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Create immutable annotated Gate 13 acceptance tag
+        env:
+          TAG_NAME: ${{ steps.evidence.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$TARGET_SHA" origin/main
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/$TAG_NAME:refs/tags/$TAG_NAME"
+            test "$(git cat-file -t "refs/tags/$TAG_NAME")" = tag
+            test "$(git rev-parse "refs/tags/$TAG_NAME^{}")" = "$TARGET_SHA"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG_NAME" "$TARGET_SHA" -m "NØX-OS Gate 13 accepted Staging SHA $TARGET_SHA"
+          git push origin "refs/tags/$TAG_NAME"
+          test "$(git cat-file -t "refs/tags/$TAG_NAME")" = tag
+          test "$(git rev-parse "refs/tags/$TAG_NAME^{}")" = "$TARGET_SHA"

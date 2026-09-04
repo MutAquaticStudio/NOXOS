@@ -9,6 +9,7 @@ export default defineConfig({
       "@nox-os/auth": source("./packages/auth/src/index.ts"),
       "@nox-os/config": source("./packages/config/src/index.ts"),
       "@nox-os/contracts": source("./packages/contracts/src/index.ts"),
+      "@nox-os/commercial-orders": source("./packages/commercial-orders/src/index.ts"),
       "@nox-os/database": source("./packages/database/src/index.ts"),
       "@nox-os/design-studio": source("./packages/design-studio/src/index.ts"),
       "@nox-os/design-studio/browser": source("./packages/design-studio/src/browser.ts"),

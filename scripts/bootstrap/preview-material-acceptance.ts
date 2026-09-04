@@ -122,6 +122,11 @@ try {
       key: "module.project-operations",
       enabled: true
     });
+    await store.upsertTenantEntitlement({
+      tenantId: tenant.id,
+      key: "module.commercial-orders",
+      enabled: true
+    });
     return tenant;
   });
 

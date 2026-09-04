@@ -19,7 +19,7 @@ const expectedModuleIds = [
   "quality-control",
   "sensory-intelligence",
   "compliance",
-  "commercial",
+  "commercial-orders",
   "community",
   "settings",
   "support",
@@ -64,6 +64,7 @@ describe("canonical Module Registry", () => {
       "lab-services",
       "production",
       "quality-control",
+      "commercial-orders",
       "settings",
       "support",
       "design-studio",
@@ -85,21 +86,21 @@ describe("canonical Module Registry", () => {
     expect(rail.map((item) => item.moduleId)).toEqual(["settings"]);
   });
 
-  it("keeps disabled future modules unavailable even when a UI caller presents flags", () => {
-    const commercial = moduleDefinitions.find(
-      (definition) => definition.descriptor.id === "commercial"
+  it("fails Commercial Orders closed when its entitlement is absent", () => {
+    const commercialOrders = moduleDefinitions.find(
+      (definition) => definition.descriptor.id === "commercial-orders"
     );
-    if (!commercial) {
-      throw new Error("Expected commercial declaration.");
+    if (!commercialOrders) {
+      throw new Error("Expected Commercial Orders declaration.");
     }
 
     expect(
-      resolveModuleAvailability(commercial.descriptor, {
-        featureFlags: new Set(["module.production"]),
-        entitlements: new Set(["module.commercial"]),
-        permissions: new Set(commercial.descriptor.permissions)
+      resolveModuleAvailability(commercialOrders.descriptor, {
+        featureFlags: new Set(["module.commercial-orders"]),
+        entitlements: new Set(),
+        permissions: new Set(commercialOrders.descriptor.permissions)
       }).state
-    ).toBe("DISABLED");
+    ).toBe("NOT_ENTITLED");
   });
 
   it("rejects duplicate module API namespaces", () => {
@@ -184,7 +185,7 @@ describe("canonical Module Registry", () => {
     expect(() => validateModuleDefinitions(mismatch)).toThrow(/UX profile mismatch/);
   });
 
-  it("does not expose disabled module API manifests through the registry helper", () => {
+  it("registers the active Commercial Orders namespace through the canonical registry", () => {
     const registeredPaths: string[] = [];
     registerModuleApiRoutes(moduleDefinitions, {
       get(path) {
@@ -198,6 +199,6 @@ describe("canonical Module Registry", () => {
     expect(registeredPaths).toContain("/materials/foundation");
     expect(registeredPaths).toContain("/inventory/foundation");
     expect(registeredPaths).toContain("/procurement/foundation");
-    expect(registeredPaths).not.toContain("/commercial/foundation");
+    expect(registeredPaths).toContain("/commercial-orders/foundation");
   });
 });

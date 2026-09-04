@@ -124,6 +124,25 @@ export interface ProductionInventoryPort {
   consumeReservation(input: ProductionReservationTransitionInput): Promise<StockReservation>;
 }
 
+/** G13's narrow typed adapter. Provenance remains server-derived as COMMERCIAL. */
+export interface CommercialInventoryPort {
+  getLotAvailability(input: {
+    tenantId: string;
+    materialId: string;
+    lotId: string;
+    locationId: string;
+  }): Promise<{
+    onHandMg: string;
+    reservedMg: string;
+    availableMg: string;
+    lotStatus: string;
+    locationStatus: string;
+  }>;
+  reserve(input: CommercialReservationInput): Promise<StockReservation>;
+  release(input: CommercialReservationTransitionInput): Promise<StockReservation>;
+  consume(input: CommercialReservationTransitionInput): Promise<StockReservation>;
+}
+
 /** Typed boundary used by Production. The browser cannot select sourceModule. */
 export type ProductionReservationInput = InventoryCommandContext & {
   lotId: string;
@@ -135,6 +154,20 @@ export type ProductionReservationInput = InventoryCommandContext & {
 };
 
 export type ProductionReservationTransitionInput = InventoryCommandContext & {
+  reservationId: string;
+  operationKey: string;
+};
+
+export type CommercialReservationInput = InventoryCommandContext & {
+  allocationId: string;
+  lotId: string;
+  materialId: string;
+  locationId: string;
+  quantityMg: QuantityMg;
+  operationKey: string;
+};
+export type CommercialReservationTransitionInput = InventoryCommandContext & {
+  allocationId: string;
   reservationId: string;
   operationKey: string;
 };

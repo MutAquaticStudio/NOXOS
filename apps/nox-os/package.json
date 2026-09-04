@@ -12,6 +12,7 @@
     "@nox-os/auth": "workspace:*",
     "@nox-os/config": "workspace:*",
     "@nox-os/contracts": "workspace:*",
+    "@nox-os/commercial-orders": "workspace:*",
     "@nox-os/database": "workspace:*",
     "@nox-os/design-studio": "workspace:*",
     "@nox-os/inventory": "workspace:*",

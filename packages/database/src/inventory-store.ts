@@ -3,6 +3,9 @@ import {
   InventoryProblem,
   type InventoryBalance,
   type InventoryCommandContext,
+  type CommercialInventoryPort,
+  type CommercialReservationInput,
+  type CommercialReservationTransitionInput,
   type InventoryLocation,
   type InventoryMaterialReference,
   type InventoryMaterialSource,
@@ -1604,4 +1607,200 @@ export async function consumeProductionReservationInTransaction(
     }
   });
   return reservation(updated[0]);
+}
+
+/**
+ * Gate 13 uses the established G7 reservation state machine. This adapter is
+ * deliberately separate only at the typed call boundary: source provenance is
+ * fixed to COMMERCIAL and cannot be supplied by a browser or caller.
+ */
+export class PostgresCommercialInventoryPort implements CommercialInventoryPort {
+  constructor(private readonly sql: Sql) {}
+
+  async getLotAvailability(input: {
+    tenantId: string;
+    materialId: string;
+    lotId: string;
+    locationId: string;
+  }): Promise<{
+    onHandMg: string;
+    reservedMg: string;
+    availableMg: string;
+    lotStatus: string;
+    locationStatus: string;
+  }> {
+    const lot = await requireLockedLot(this.sql, input.tenantId, input.lotId);
+    if (lot.material_id !== input.materialId)
+      throw new InventoryProblem(
+        409,
+        "INVALID_MOVEMENT",
+        "Commercial Material Lot does not match."
+      );
+    await requireActiveLocation(this.sql, input.tenantId, input.locationId);
+    const balance = await balanceAt(this.sql, input.tenantId, input.lotId, input.locationId);
+    return {
+      onHandMg: String(balance.onHand),
+      reservedMg: String(balance.reserved),
+      availableMg: String(balance.available),
+      lotStatus: `${lot.lifecycle_status}:${lot.availability_status}`,
+      locationStatus: "ACTIVE"
+    };
+  }
+
+  reserve(input: CommercialReservationInput): Promise<StockReservation> {
+    return this.sql.begin((tx) => reserveCommercialLotInTransaction(tx, input));
+  }
+  release(input: CommercialReservationTransitionInput): Promise<StockReservation> {
+    return this.sql.begin((tx) => releaseCommercialReservationInTransaction(tx, input));
+  }
+  consume(input: CommercialReservationTransitionInput): Promise<StockReservation> {
+    return this.sql.begin((tx) => consumeCommercialReservationInTransaction(tx, input));
+  }
+}
+
+export async function reserveCommercialLotInTransaction(
+  tx: TransactionSql,
+  input: CommercialReservationInput
+): Promise<StockReservation> {
+  const existing = await tx<ReservationRow[]>`
+    select * from inventory.stock_reservations
+    where tenant_id = ${input.tenantId} and operation_key = ${input.operationKey} for update
+  `;
+  if (existing[0]) {
+    const current = existing[0];
+    if (
+      current.source_module !== "COMMERCIAL" ||
+      current.source_reference_id !== input.allocationId ||
+      current.lot_id !== input.lotId ||
+      current.location_id !== input.locationId ||
+      String(current.quantity_mg) !== input.quantityMg
+    )
+      throw new InventoryProblem(
+        409,
+        "IDEMPOTENCY_CONFLICT",
+        "Commercial reservation operation conflicts."
+      );
+    return reservation(current);
+  }
+  const lot = await requireLockedLot(tx, input.tenantId, input.lotId);
+  if (lot.material_id !== input.materialId)
+    throw new InventoryProblem(409, "INVALID_MOVEMENT", "Commercial Material Lot does not match.");
+  if (lot.lifecycle_status !== "OPEN")
+    throw new InventoryProblem(409, "LOT_CLOSED", "Material Lot is closed.");
+  if (lot.availability_status !== "AVAILABLE")
+    throw new InventoryProblem(409, "LOT_ON_HOLD", "Material Lot is on hold.");
+  if (lot.expires_at && lot.expires_at <= new Date())
+    throw new InventoryProblem(409, "LOT_EXPIRED", "Material Lot is expired.");
+  await requireActiveLocation(tx, input.tenantId, input.locationId);
+  const available = await balanceAt(tx, input.tenantId, input.lotId, input.locationId);
+  if (BigInt(input.quantityMg) > available.available)
+    throw new InventoryProblem(
+      409,
+      "RESERVATION_EXCEEDS_AVAILABLE_STOCK",
+      "Commercial reservation exceeds available stock."
+    );
+  const rows = await tx<ReservationRow[]>`
+    insert into inventory.stock_reservations (
+      tenant_id, lot_id, material_id, location_id, quantity_mg, source_module,
+      source_reference_id, operation_key, created_by_user_id
+    ) values (
+      ${input.tenantId}, ${input.lotId}, ${input.materialId}, ${input.locationId}, ${input.quantityMg},
+      'COMMERCIAL', ${input.allocationId}, ${input.operationKey}, ${input.actorUserId}
+    ) returning *
+  `;
+  await audit(tx, {
+    ...input,
+    action: "inventory.reservation.created",
+    resourceType: "StockReservation",
+    resourceId: rows[0].id,
+    metadata: {
+      lotId: input.lotId,
+      materialId: input.materialId,
+      locationId: input.locationId,
+      quantityMg: input.quantityMg,
+      sourceModule: "COMMERCIAL",
+      sourceReferenceId: input.allocationId
+    }
+  });
+  return reservation(rows[0]);
+}
+
+async function lockCommercialReservation(
+  tx: TransactionSql,
+  input: CommercialReservationTransitionInput
+): Promise<ReservationRow> {
+  const rows = await tx<ReservationRow[]>`
+    select * from inventory.stock_reservations where tenant_id = ${input.tenantId} and id = ${input.reservationId} for update
+  `;
+  const value = rows[0];
+  if (!value)
+    throw new InventoryProblem(404, "RESERVATION_NOT_FOUND", "Reservation was not found.");
+  if (value.source_module !== "COMMERCIAL" || value.source_reference_id !== input.allocationId)
+    throw new InventoryProblem(
+      403,
+      "PERMISSION_DENIED",
+      "Reservation provenance is not Commercial."
+    );
+  return value;
+}
+
+export async function releaseCommercialReservationInTransaction(
+  tx: TransactionSql,
+  input: CommercialReservationTransitionInput
+): Promise<StockReservation> {
+  const current = await lockCommercialReservation(tx, input);
+  if (current.status === "RELEASED" || current.status === "CANCELLED") return reservation(current);
+  if (current.status !== "ACTIVE")
+    throw new InventoryProblem(
+      409,
+      "RESERVATION_ALREADY_TERMINAL",
+      "Reservation is already consumed."
+    );
+  const rows = await tx<ReservationRow[]>`
+    update inventory.stock_reservations set status = 'RELEASED', released_at = now()
+    where tenant_id = ${input.tenantId} and id = ${input.reservationId} returning *
+  `;
+  await audit(tx, {
+    ...input,
+    action: "inventory.reservation.released",
+    resourceType: "StockReservation",
+    resourceId: input.reservationId,
+    metadata: { sourceModule: "COMMERCIAL" }
+  });
+  return reservation(rows[0]);
+}
+
+export async function consumeCommercialReservationInTransaction(
+  tx: TransactionSql,
+  input: CommercialReservationTransitionInput
+): Promise<StockReservation> {
+  const current = await lockCommercialReservation(tx, input);
+  if (current.status === "CONSUMED") return reservation(current);
+  if (current.status !== "ACTIVE")
+    throw new InventoryProblem(409, "RESERVATION_ALREADY_TERMINAL", "Reservation is not active.");
+  const movement = await insertMovement(tx, {
+    ...input,
+    lotId: current.lot_id,
+    movementType: "CONSUMPTION",
+    quantityMg: String(current.quantity_mg),
+    fromLocationId: current.location_id,
+    toLocationId: null,
+    sourceModule: "COMMERCIAL",
+    sourceReferenceId: input.allocationId,
+    reasonCode: "COMMERCIAL_FULFILLMENT",
+    operationKey: input.operationKey,
+    protectedReservationMg: String(current.quantity_mg)
+  });
+  const rows = await tx<ReservationRow[]>`
+    update inventory.stock_reservations set status = 'CONSUMED', consumed_at = now(), consumed_movement_id = ${movement.id}
+    where tenant_id = ${input.tenantId} and id = ${input.reservationId} returning *
+  `;
+  await audit(tx, {
+    ...input,
+    action: "inventory.reservation.consumed",
+    resourceType: "StockReservation",
+    resourceId: input.reservationId,
+    metadata: { movementId: movement.id, sourceModule: "COMMERCIAL" }
+  });
+  return reservation(rows[0]);
 }
