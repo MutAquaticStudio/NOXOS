@@ -1,0 +1,36 @@
+import type { ErrorCode } from "@nox-os/contracts";
+
+export type LabServicesProblemCode = Extract<
+  ErrorCode,
+  | "LAB_CUSTOMER_NOT_FOUND"
+  | "LAB_CUSTOMER_NOT_ACTIVE"
+  | "LAB_CUSTOMER_ON_HOLD"
+  | "LAB_CUSTOMER_ARCHIVED"
+  | "LAB_CUSTOMER_HAS_OPEN_ORDERS"
+  | "LAB_CUSTOMER_CODE_CONFLICT"
+  | "LAB_CONTACT_NOT_FOUND"
+  | "LAB_CONTACT_NOT_ACTIVE"
+  | "LAB_CONTACT_CUSTOMER_MISMATCH"
+  | "LAB_PRIMARY_CONTACT_CONFLICT"
+  | "LAB_SERVICE_ORDER_NOT_FOUND"
+  | "LAB_SERVICE_ORDER_NOT_EDITABLE"
+  | "LAB_SERVICE_ORDER_NOT_CONFIRMABLE"
+  | "LAB_SERVICE_ORDER_ALREADY_TERMINAL"
+  | "LAB_SERVICE_ORDER_LINES_REQUIRED"
+  | "LAB_SERVICE_ORDER_CONTACT_INVALID"
+  | "LAB_SERVICE_ORDER_SCOPE_IMMUTABLE"
+  | "LAB_INTERACTION_INVALID"
+  | "LAB_INTERACTION_ORDER_MISMATCH"
+  | "TENANT_ACCESS_DENIED"
+  | "PERMISSION_DENIED"
+>;
+
+export class LabServicesProblem extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: LabServicesProblemCode,
+    message: string
+  ) {
+    super(message);
+  }
+}

@@ -1,5 +1,6 @@
 const requiredRuntimePackages = [
   "@nox-os/database",
+  "@nox-os/lab-services",
   "@nox-os/material-intelligence",
   "@nox-os/platform",
   "@nox-os/procurement",

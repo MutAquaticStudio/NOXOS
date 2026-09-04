@@ -219,4 +219,39 @@ for (const requiredBoundary of [
     throw new Error(`Gate 7 persistence boundary missing: ${requiredBoundary}`);
 }
 
+const labServicesMigration = readFileSync(
+  resolve(migrationDirectory, "20260904102903_g11_lab_service_orders_customer_tracking.sql"),
+  "utf8"
+);
+const declaredLabServicesTables = [
+  ...labServicesMigration.matchAll(/create\s+table\s+lab_services\.([a-z_]+)/gi)
+].map((match) => match[1]);
+const canonicalLabServicesTables = [
+  "customers",
+  "customer_contacts",
+  "service_orders",
+  "service_order_lines",
+  "customer_interactions"
+];
+if (
+  declaredLabServicesTables.length !== canonicalLabServicesTables.length ||
+  canonicalLabServicesTables.some((table) => !declaredLabServicesTables.includes(table))
+) {
+  throw new Error(
+    `Gate 11 must create exactly the five canonical Lab Services tables; found ${declaredLabServicesTables.join(",")}`
+  );
+}
+for (const requiredBoundary of [
+  "customer_contacts_one_active_primary",
+  "LAB_CUSTOMER_HAS_OPEN_ORDERS",
+  "LAB_SERVICE_ORDER_LINES_REQUIRED",
+  "LAB_SERVICE_ORDER_SCOPE_IMMUTABLE",
+  "LAB_INTERACTION_ORDER_MISMATCH",
+  "force row level security",
+  "revoke all on all tables in schema lab_services from public, anon, authenticated"
+]) {
+  if (!labServicesMigration.includes(requiredBoundary))
+    throw new Error(`Gate 11 persistence boundary missing: ${requiredBoundary}`);
+}
+
 console.log("MIGRATION_STATIC_VALIDATION=PASS");

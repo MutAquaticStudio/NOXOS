@@ -79,6 +79,9 @@ importers:
       "@nox-os/inventory":
         specifier: workspace:*
         version: link:../../packages/inventory
+      "@nox-os/lab-services":
+        specifier: workspace:*
+        version: link:../../packages/lab-services
       "@nox-os/material-intelligence":
         specifier: workspace:*
         version: link:../../packages/material-intelligence
@@ -170,6 +173,9 @@ importers:
       "@nox-os/inventory":
         specifier: workspace:*
         version: link:../inventory
+      "@nox-os/lab-services":
+        specifier: workspace:*
+        version: link:../lab-services
       "@nox-os/material-intelligence":
         specifier: workspace:*
         version: link:../material-intelligence
@@ -208,6 +214,18 @@ importers:
         version: 4.4.3
 
   packages/inventory:
+    dependencies:
+      "@nox-os/contracts":
+        specifier: workspace:*
+        version: link:../contracts
+      "@nox-os/module-registry":
+        specifier: workspace:*
+        version: link:../module-registry
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
+  packages/lab-services:
     dependencies:
       "@nox-os/contracts":
         specifier: workspace:*

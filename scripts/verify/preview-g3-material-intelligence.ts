@@ -24,6 +24,7 @@ try {
   await verifyDeploymentIdentity(page);
   await signIn(page);
   const tenantId = await resolveActiveTenantId(page);
+  await verifyLabServices(page, tenantId);
   await capture(page, "materials-registry-desktop", "/materials");
 
   const materialId = await resolveAccessibleMaterialId(page, tenantId);
@@ -191,6 +192,33 @@ async function resolveAccessibleMaterialId(page: Page, tenantId: string): Promis
     );
   }
   return result.materialId;
+}
+
+async function verifyLabServices(page: Page, tenantId: string): Promise<void> {
+  const result = await page.evaluate(async (activeTenantId) => {
+    const storageEntry = Object.entries(localStorage).find(([, value]) =>
+      value.includes("access_token")
+    );
+    const session = storageEntry
+      ? (JSON.parse(storageEntry[1]) as { access_token?: string })
+      : undefined;
+    if (!session?.access_token) return { status: 0 };
+    const response = await fetch("/api/v1/lab-services/customers", {
+      headers: {
+        authorization: `Bearer ${session.access_token}`,
+        "x-nox-tenant-id": activeTenantId
+      }
+    });
+    return { status: response.status };
+  }, tenantId);
+  if (result.status !== 200)
+    throw new Error("Authenticated Preview Lab Services API did not fail-safe or respond.");
+  await page.goto(url("/lab-services"), { waitUntil: "networkidle" });
+  await requireVisible(
+    page,
+    "Lab Services registry",
+    page.getByRole("heading", { name: "NØX Lab Services" })
+  );
 }
 
 async function assertTenantMaterialBoundary(
