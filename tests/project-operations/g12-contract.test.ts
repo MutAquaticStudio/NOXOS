@@ -15,6 +15,10 @@ const migration = readFileSync(
 );
 const application = readFileSync(resolve(root, "apps/nox-os/src/app.tsx"), "utf8");
 const shellStyles = readFileSync(resolve(root, "packages/ui/src/styles.css"), "utf8");
+const stagingAcceptance = readFileSync(
+  resolve(root, "scripts/verify/staging-g3-material-intelligence.ts"),
+  "utf8"
+);
 
 describe("G12 Project Operations contract", () => {
   it("owns exactly six G12 tables and no mutable phase truth", () => {
@@ -74,5 +78,18 @@ describe("G12 Project Operations contract", () => {
     expect(shellStyles).toContain(
       ".nox-system-actions > :not(:first-child):not(.nox-tenant-selector)"
     );
+  });
+  it("refreshes the G12 actor token after G4 signs the fixture out", () => {
+    const g4Acceptance = stagingAcceptance.indexOf(
+      "await runG4Acceptance(page, tenantA, tenantB);"
+    );
+    const refreshedToken = stagingAcceptance.indexOf('await refreshToken("B");', g4Acceptance);
+    const g12Acceptance = stagingAcceptance.indexOf(
+      "await runG12StagingAcceptance(page, tenantA, tenantB);",
+      refreshedToken
+    );
+    expect(g4Acceptance).toBeGreaterThanOrEqual(0);
+    expect(refreshedToken).toBeGreaterThan(g4Acceptance);
+    expect(g12Acceptance).toBeGreaterThan(refreshedToken);
   });
 });
