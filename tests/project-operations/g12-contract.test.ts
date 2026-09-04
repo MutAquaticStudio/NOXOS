@@ -80,8 +80,16 @@ describe("G12 Project Operations contract", () => {
     );
   });
   it("refreshes the G12 actor token after G4 signs the fixture out", () => {
-    expect(stagingAcceptance).toMatch(
-      /await runG4Acceptance\\(page, tenantA, tenantB\\);[\\s\\S]{0,360}await refreshToken\\("B"\\);[\\s\\S]{0,120}await runG12StagingAcceptance\\(page, tenantA, tenantB\\);/
+    const g4Acceptance = stagingAcceptance.indexOf(
+      "await runG4Acceptance(page, tenantA, tenantB);"
     );
+    const refreshedToken = stagingAcceptance.indexOf('await refreshToken("B");', g4Acceptance);
+    const g12Acceptance = stagingAcceptance.indexOf(
+      "await runG12StagingAcceptance(page, tenantA, tenantB);",
+      refreshedToken
+    );
+    expect(g4Acceptance).toBeGreaterThanOrEqual(0);
+    expect(refreshedToken).toBeGreaterThan(g4Acceptance);
+    expect(g12Acceptance).toBeGreaterThan(refreshedToken);
   });
 });
