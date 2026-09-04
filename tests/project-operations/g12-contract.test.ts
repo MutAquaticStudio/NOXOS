@@ -97,9 +97,7 @@ describe("G12 Project Operations contract", () => {
       stagingAcceptance.indexOf("const upstreamBefore"),
       stagingAcceptance.indexOf("const created", stagingAcceptance.indexOf("const upstreamBefore"))
     );
-    expect(upstreamAuthorityProbe).toContain(
-      "select id,status,bundle_hash,frozen_at,created_at"
-    );
+    expect(upstreamAuthorityProbe).toContain("select id,status,bundle_hash,frozen_at,created_at");
     expect(upstreamAuthorityProbe).toContain(
       "from design_studio.formula_versions where tenant_id=${tenantA}"
     );
