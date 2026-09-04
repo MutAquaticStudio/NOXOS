@@ -2396,6 +2396,11 @@ async function runG9OperationalAcceptance(
     reviewBatchId: (await createCompletedBatch("QC-REVIEW")).id,
     concurrentBatchId: (await createCompletedBatch("QC-CONCURRENT")).id
   });
+  // G10 browser acceptance signs the fixture out, which revokes the API token
+  // captured at G9 entry. Re-authenticate before continuing the remaining G9
+  // cancellation and abort assertions; this is normal Supabase Auth, not a bypass.
+  await refreshToken("B");
+  actor = token("B");
   const cancel = await allocate(await create("CANCEL"), false);
   expectStatus(
     await api(actor, `/production/orders/${cancel.id}/release`, { method: "POST", tenantId }),
