@@ -5,6 +5,10 @@ const migration = readFileSync(
   "supabase/migrations/20260904102903_g11_lab_service_orders_customer_tracking.sql",
   "utf8"
 );
+const contactCancellationMigration = readFileSync(
+  "supabase/migrations/20260904114000_g11_allow_cancel_after_contact_archive.sql",
+  "utf8"
+);
 const store = readFileSync("packages/database/src/lab-services-store.ts", "utf8");
 const api = readFileSync("packages/lab-services/src/api.ts", "utf8");
 
@@ -38,6 +42,21 @@ describe("Gate 11 persistence and authority boundaries", () => {
     expect(store).toContain('owner.status === "ARCHIVED"');
     expect(migration).not.toContain(
       "grant select, insert, update on lab_services.customer_interactions"
+    );
+  });
+
+  it("keeps archived contact history pinned while allowing an existing order to terminate", () => {
+    expect(contactCancellationMigration).toContain(
+      "require_active_contact :=\n      new.customer_contact_id is distinct from old.customer_contact_id"
+    );
+    expect(contactCancellationMigration).toContain(
+      "or (old.status = 'DRAFT' and new.status = 'CONFIRMED')"
+    );
+    expect(contactCancellationMigration).toContain(
+      "if require_active_contact and contact_status <> 'ACTIVE'"
+    );
+    expect(contactCancellationMigration).not.toMatch(
+      /new\.status = 'CANCELLED'[\s\S]{0,120}require_active_contact\s*:=\s*true/i
     );
   });
 
