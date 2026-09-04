@@ -26,6 +26,7 @@ try {
   await verifyIdentity(page);
   await signIn(page);
   const tenantId = await activeTenant(page);
+  await selectTenant(page, tenantId);
   await assertAvailability(page, tenantId);
 
   const created = expectStatus(
@@ -75,6 +76,7 @@ try {
   try {
     await mobile.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
     await signIn(mobile);
+    await selectTenant(mobile, tenantId);
     await mobile.goto(url(`/project-operations/projects/${created.id}`), {
       waitUntil: "networkidle"
     });
@@ -180,6 +182,11 @@ async function activeTenant(page: Page): Promise<string> {
   if (result.status !== 200 || !tenantId)
     throw new Error("G12 Preview requires one active Tenant.");
   return tenantId;
+}
+async function selectTenant(page: Page, tenantId: string) {
+  const selector = page.getByLabel("Current tenant");
+  await visible(page, selector);
+  if ((await selector.inputValue()) !== tenantId) await selector.selectOption(tenantId);
 }
 async function actorUserId(page: Page, tenantId: string): Promise<string> {
   const context = expectStatus(
