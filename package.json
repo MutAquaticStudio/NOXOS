@@ -46,6 +46,7 @@
     "verify:preview:g3-material-intelligence": "pnpm tsx scripts/verify/preview-g3-material-intelligence.ts",
     "verify:preview:g4-design-studio": "pnpm tsx scripts/verify/preview-g4-design-studio.ts",
     "verify:preview:g5-trial-sensory": "pnpm tsx scripts/verify/preview-g5-trial-sensory.ts",
+    "verify:preview:g12-project-operations": "pnpm tsx scripts/verify/preview-g12-project-operations.ts",
     "secrets:scan": "node scripts/security/scan.mjs",
     "build:packages": "node scripts/build/runtime-packages.mjs",
     "verify:runtime-packages": "node apps/nox-os/scripts/verify-runtime-packages.mjs",

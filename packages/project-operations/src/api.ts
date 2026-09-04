@@ -81,7 +81,10 @@ export class ProjectOperationsApi {
             "PROJECT_NOT_FOUND",
             "Operational Project was not found."
           );
-        return { status: 200, body: { project: p } };
+        // `findProject` already returns the project workspace envelope
+        // ({ project, phases, tasks, links, updates, ... }). Keep its root shape
+        // stable for the route-based detail experience rather than nesting it.
+        return { status: 200, body: p };
       })
     );
     registrar.register(

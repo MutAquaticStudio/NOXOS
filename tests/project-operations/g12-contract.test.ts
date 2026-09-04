@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   artifactTypeSchema,
   createProjectSchema,
-  phaseKeySchema
+  phaseKeySchema,
+  phasePlansSchema
 } from "../../packages/project-operations/src/contracts.js";
 
 const root = resolve(import.meta.dirname, "../..");
@@ -30,5 +31,37 @@ describe("G12 Project Operations contract", () => {
     ).toBe(false);
     expect(phaseKeySchema.safeParse("G13_COMMERCIAL").success).toBe(false);
     expect(artifactTypeSchema.safeParse("BATCH_RELEASE_STATUS").success).toBe(false);
+  });
+  it("rejects ambiguous phase-plan identity before a DRAFT plan can be replaced", () => {
+    expect(
+      phasePlansSchema.safeParse({
+        phases: [
+          { phaseKey: "DESIGN", phaseOrder: 1, required: true },
+          { phaseKey: "DESIGN", phaseOrder: 2, required: false }
+        ]
+      }).success
+    ).toBe(false);
+    expect(
+      phasePlansSchema.safeParse({
+        phases: [
+          { phaseKey: "DESIGN", phaseOrder: 1, required: true },
+          { phaseKey: "TRIAL", phaseOrder: 1, required: false }
+        ]
+      }).success
+    ).toBe(false);
+  });
+  it("uses database guards for append-only link and update history", () => {
+    expect(migration).toContain("project_operations.enforce_artifact_link_history");
+    expect(migration).toContain("PROJECT_ARTIFACT_LINK_DELETE_FORBIDDEN");
+    expect(migration).toContain("project_operations.enforce_update_history");
+    expect(migration).toContain("PROJECT_UPDATE_APPEND_ONLY");
+  });
+  it("grants only the runtime role the narrowly required DRAFT cleanup capability", () => {
+    expect(migration).toContain(
+      "grant select, insert, update, delete on all tables in schema project_operations to nox_app_runtime;"
+    );
+    expect(migration).toContain(
+      "revoke all on all tables in schema project_operations from public, anon, authenticated;"
+    );
   });
 });

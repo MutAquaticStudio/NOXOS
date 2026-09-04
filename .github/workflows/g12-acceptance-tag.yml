@@ -1,62 +1,164 @@
-name: G12 acceptance tag
+name: g12-acceptance-tag
 
 on:
   workflow_dispatch:
     inputs:
-      runtime_sha:
-        description: Exact accepted G12 main runtime SHA
+      target_sha:
+        description: Exact accepted G12 main SHA from successful G12 Staging
         required: true
         type: string
-      staging_run_id:
-        description: Successful immutable G12 staging evidence run
+      staging_evidence_run_id:
+        description: Successful Staging run containing exact-SHA G12 evidence
         required: true
         type: string
-      preview_run_id:
-        description: Successful immutable G12 Preview evidence run
+      preview_evidence_run_id:
+        description: Successful final PR Preview run containing G12 evidence
+        required: true
+        type: string
+      pr_number:
+        description: Merged Gate 12 pull request number
         required: true
         type: string
 
 permissions:
   contents: write
+  pull-requests: read
   actions: read
 
+concurrency:
+  group: nox-os-g12-acceptance-tag
+  cancel-in-progress: false
+
 jobs:
-  accept:
-    runs-on: ubuntu-latest
+  create-annotated-tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      STAGING_EVIDENCE_RUN_ID: ${{ inputs.staging_evidence_run_id }}
+      PREVIEW_EVIDENCE_RUN_ID: ${{ inputs.preview_evidence_run_id }}
+      PR_NUMBER: ${{ inputs.pr_number }}
     steps:
-      - uses: actions/checkout@v6
-        with: { fetch-depth: 0 }
-      - name: Verify exact accepted runtime ancestry
+      - name: Validate immutable G12 Preview and Staging evidence
+        id: evidence
         env:
-          TARGET_SHA: "${{ inputs.runtime_sha }}"
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          test "$(git rev-parse "$TARGET_SHA")" = "$TARGET_SHA"
-          git merge-base --is-ancestor "$TARGET_SHA" origin/main
-      - name: Verify immutable evidence references
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$STAGING_EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$PREVIEW_EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+
+          api() {
+            curl -fsS \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$1"
+          }
+          artifact_id() {
+            printf '%s' "$1" | jq -r --arg name "$2" \
+              '.artifacts[] | select(.name == $name and .expired == false) | .id' | head -n 1
+          }
+          artifact_env() {
+            local artifact_id="$1" output="$2"
+            curl -fsSL \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" \
+              -o "$RUNNER_TEMP/artifact.zip"
+            unzip -p "$RUNNER_TEMP/artifact.zip" > "$output"
+            test -s "$output"
+          }
+
+          pull_json="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          test "$(printf '%s' "$pull_json" | jq -r '.merged')" = "true"
+          test "$(printf '%s' "$pull_json" | jq -r '.merge_commit_sha')" = "$TARGET_SHA"
+          preview_sha="$(printf '%s' "$pull_json" | jq -r '.head.sha')"
+          [[ "$preview_sha" =~ ^[0-9a-f]{40}$ ]]
+
+          staging_run="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$STAGING_EVIDENCE_RUN_ID")"
+          test "$(printf '%s' "$staging_run" | jq -r '.conclusion')" = "success"
+          test "$(printf '%s' "$staging_run" | jq -r '.head_branch')" = "main"
+          test "$(printf '%s' "$staging_run" | jq -r '.head_sha')" = "$TARGET_SHA"
+          staging_artifacts="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$STAGING_EVIDENCE_RUN_ID/artifacts")"
+          for gate in g3 g4 g5 g6 g7 g8 g9 g10 g11 g12; do
+            id="$(artifact_id "$staging_artifacts" "$gate-staging-evidence-$TARGET_SHA")"
+            [[ "$id" =~ ^[0-9]+$ ]]
+          done
+          staging_artifact_id="$(artifact_id "$staging_artifacts" "g12-staging-evidence-$TARGET_SHA")"
+          artifact_env "$staging_artifact_id" "$RUNNER_TEMP/g12-staging.env"
+          for line in \
+            "STAGING_SOURCE_SHA=$TARGET_SHA" \
+            "EXPECTED_STAGING_SHA=$TARGET_SHA" \
+            "DEPLOYED_STAGING_SHA=$TARGET_SHA" \
+            "STAGING_EXACT_SHA=PASS" \
+            "G12_SCHEMA=PASS" \
+            "SIX_G12_TABLES=PASS" \
+            "PHASE_STATE_DERIVED_ONLY=PASS" \
+            "CLIENT_PROJECT_SOURCE_GUARD=PASS" \
+            "SCOPE_COVERAGE=PASS" \
+            "TASK_DEPENDENCY_CYCLE_SAFETY=PASS" \
+            "ARTIFACT_LINEAGE_VALIDATION=PASS" \
+            "ARTIFACT_LINK_HISTORY_APPEND_ONLY=PASS" \
+            "PROJECT_UPDATE_HISTORY_APPEND_ONLY=PASS" \
+            "PROJECT_COMPLETION_GUARDS=PASS" \
+            "PROJECT_OPERATIONS_SOURCE=PASS" \
+            "TENANT_ISOLATION=PASS" \
+            "RBAC_FAIL_CLOSED=PASS" \
+            "UPSTREAM_MUTATION_FROM_G12=NONE" \
+            "G3_G11_REGRESSION=PASS" \
+            "PRODUCTION_PROMOTION_PERFORMED=NO" \
+            "PRODUCTION_MIGRATION_PERFORMED=NO" \
+            "PRODUCTION_DATA_MUTATED=NO"
+          do grep -Fx "$line" "$RUNNER_TEMP/g12-staging.env"; done
+
+          preview_run="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PREVIEW_EVIDENCE_RUN_ID")"
+          test "$(printf '%s' "$preview_run" | jq -r '.conclusion')" = "success"
+          test "$(printf '%s' "$preview_run" | jq -r '.head_sha')" = "$preview_sha"
+          preview_artifacts="$(api "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$PREVIEW_EVIDENCE_RUN_ID/artifacts")"
+          for gate in g3 g4 g5 g6 g7 g8 g9 g10 g11 g12; do
+            id="$(artifact_id "$preview_artifacts" "$gate-preview-evidence-$preview_sha")"
+            [[ "$id" =~ ^[0-9]+$ ]]
+          done
+          preview_artifact_id="$(artifact_id "$preview_artifacts" "g12-preview-evidence-$preview_sha")"
+          artifact_env "$preview_artifact_id" "$RUNNER_TEMP/g12-preview.env"
+          for line in \
+            "PR_SOURCE_SHA=$preview_sha" \
+            "PREVIEW_DEPLOYED_SHA=$preview_sha" \
+            "PREVIEW_EXACT_SHA=PASS" \
+            "AUTHENTICATED_PREVIEW=PASS" \
+            "PROJECT_OPERATIONS_MODULE_AVAILABILITY=PASS" \
+            "PROJECT_OPERATIONS_API_ACCEPTANCE=PASS" \
+            "PROJECT_OPERATIONS_UI_ACCEPTANCE=PASS" \
+            "FORGED_AUTHORITY_DENIED=PASS" \
+            "PRODUCTION_MUTATED=NO"
+          do grep -Fx "$line" "$RUNNER_TEMP/g12-preview.env"; done
+
+          echo "tag_name=g12-v1.0-accepted-${TARGET_SHA:0:8}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Create immutable annotated Gate 12 acceptance tag
         env:
-          STAGING_RUN: "${{ inputs.staging_run_id }}"
-          PREVIEW_RUN: "${{ inputs.preview_run_id }}"
+          TAG_NAME: ${{ steps.evidence.outputs.tag_name }}
         run: |
-          test -n "$STAGING_RUN"
-          test -n "$PREVIEW_RUN"
-      - name: Verify G12 authority boundaries
-        run: |
-          test -f packages/project-operations/src/persistence.ts
-          test -f packages/database/src/project-operations-store.ts
-          test -f supabase/migrations/20260904123249_g12_project_operations.sql
-          test "$(rg -c 'create table project_operations\.' supabase/migrations/20260904123249_g12_project_operations.sql)" = 6
-          ! rg -q 'create table .*project_phase_status|current_phase_status|percent_complete' supabase/migrations/20260904123249_g12_project_operations.sql
-      - name: Create or verify annotated acceptance tag
-        env:
-          TARGET_SHA: "${{ inputs.runtime_sha }}"
-        run: |
-          tag="g12-v1.0-accepted-${TARGET_SHA:0:8}"
-          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            test "$(git rev-parse "$tag^{}")" = "$TARGET_SHA"
-            test "$(git cat-file -t "$tag")" = tag
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$tag" "$TARGET_SHA" -m "NØX-OS Gate 12 accepted Staging SHA $TARGET_SHA"
-            git push origin "$tag"
+          set -euo pipefail
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$TARGET_SHA" "origin/main"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/$TAG_NAME:refs/tags/$TAG_NAME"
+            test "$(git cat-file -t "refs/tags/$TAG_NAME")" = tag
+            test "$(git rev-parse "refs/tags/$TAG_NAME^{}")" = "$TARGET_SHA"
+            exit 0
           fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG_NAME" "$TARGET_SHA" -m "NØX-OS Gate 12 accepted Staging SHA $TARGET_SHA"
+          git push origin "refs/tags/$TAG_NAME"
+          test "$(git cat-file -t "refs/tags/$TAG_NAME")" = tag
+          test "$(git rev-parse "refs/tags/$TAG_NAME^{}")" = "$TARGET_SHA"

@@ -170,7 +170,10 @@ alter table project_operations.task_dependencies force row level security;
 alter table project_operations.project_artifact_links force row level security;
 alter table project_operations.project_updates force row level security;
 revoke all on all tables in schema project_operations from public, anon, authenticated;
-grant select, insert, update on all tables in schema project_operations to nox_app_runtime;
+-- DRAFT phase-plan replacement and dependency removal are scoped administrative
+-- operations.  DELETE remains unavailable to browser roles and is guarded by
+-- the project lifecycle triggers below.
+grant select, insert, update, delete on all tables in schema project_operations to nox_app_runtime;
 
 -- The database role is server-only; tenant scope is resolved by the G2 request
 -- context and enforced by the Project Operations repositories. Browser roles have
@@ -188,3 +191,309 @@ create policy project_operations_runtime_access on project_operations.project_ar
   for all to nox_app_runtime using (true) with check (true);
 create policy project_operations_runtime_access on project_operations.project_updates
   for all to nox_app_runtime using (true) with check (true);
+
+-- Link identities are historical evidence. They may only transition from ACTIVE to
+-- REVOKED with a complete revocation record; no correction is performed in place.
+create or replace function project_operations.enforce_artifact_link_history()
+returns trigger language plpgsql set search_path = pg_catalog, project_operations as $$
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'PROJECT_ARTIFACT_LINK_DELETE_FORBIDDEN' using errcode = 'P0001';
+  end if;
+  if old.status = 'REVOKED'
+    or new.status <> 'REVOKED'
+    or new.id <> old.id
+    or new.tenant_id <> old.tenant_id
+    or new.project_id <> old.project_id
+    or new.phase_plan_id is distinct from old.phase_plan_id
+    or new.artifact_type <> old.artifact_type
+    or new.artifact_id <> old.artifact_id
+    or new.relationship <> old.relationship
+    or new.created_by_user_id <> old.created_by_user_id
+    or new.created_at <> old.created_at
+    or new.revoked_by_user_id is null
+    or new.revoked_at is null
+    or new.revocation_reason is null
+  then
+    raise exception 'PROJECT_ARTIFACT_LINK_IMMUTABLE' using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+create trigger project_operations_artifact_link_history
+before update or delete on project_operations.project_artifact_links
+for each row execute function project_operations.enforce_artifact_link_history();
+
+-- Internal Updates are append-only operational history, including blockers and
+-- their explicit resolution records.
+create or replace function project_operations.enforce_update_history()
+returns trigger language plpgsql set search_path = pg_catalog, project_operations as $$
+begin
+  raise exception 'PROJECT_UPDATE_APPEND_ONLY' using errcode = 'P0001';
+end $$;
+create trigger project_operations_update_history
+before update or delete on project_operations.project_updates
+for each row execute function project_operations.enforce_update_history();
+
+-- The server store remains the orchestration authority, but these guards keep a
+-- direct runtime SQL statement from bypassing tenant-safe Project Operations
+-- relationships or history/state invariants.
+create or replace function project_operations.enforce_project_integrity()
+returns trigger language plpgsql set search_path = pg_catalog as $$
+declare
+  source_status text;
+begin
+  if tg_op = 'UPDATE' then
+    if old.status in ('COMPLETED', 'CANCELLED') then
+      raise exception 'PROJECT_ALREADY_TERMINAL' using errcode = 'P0001';
+    end if;
+    if new.tenant_id <> old.tenant_id
+      or new.project_code <> old.project_code
+      or new.project_type <> old.project_type
+      or new.source_service_order_id is distinct from old.source_service_order_id then
+      raise exception 'PROJECT_NOT_EDITABLE' using errcode = 'P0001';
+    end if;
+    if old.status = 'DRAFT' and new.status not in ('DRAFT', 'ACTIVE', 'CANCELLED') then
+      raise exception 'PROJECT_STATE_INVALID' using errcode = 'P0001';
+    elsif old.status = 'ACTIVE' and new.status not in ('ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED') then
+      raise exception 'PROJECT_STATE_INVALID' using errcode = 'P0001';
+    elsif old.status = 'ON_HOLD' and new.status not in ('ON_HOLD', 'ACTIVE', 'CANCELLED') then
+      raise exception 'PROJECT_STATE_INVALID' using errcode = 'P0001';
+    end if;
+    if new.status = 'ON_HOLD' and btrim(coalesce(new.hold_reason, '')) = '' then
+      raise exception 'PROJECT_HOLD_REASON_REQUIRED' using errcode = 'P0001';
+    end if;
+    if new.status = 'CANCELLED' and old.status <> 'DRAFT'
+      and btrim(coalesce(new.cancellation_reason, '')) = '' then
+      raise exception 'PROJECT_CANCELLATION_REASON_REQUIRED' using errcode = 'P0001';
+    end if;
+  end if;
+  if tg_op = 'INSERT' and new.project_type = 'CLIENT_SERVICE' then
+    select status into source_status from lab_services.service_orders
+      where tenant_id = new.tenant_id and id = new.source_service_order_id;
+    if source_status not in ('CONFIRMED', 'IN_PROGRESS') then
+      raise exception 'PROJECT_SOURCE_SERVICE_ORDER_INVALID' using errcode = 'P0001';
+    end if;
+  end if;
+  return new;
+end $$;
+create trigger project_operations_project_guard
+before insert or update on project_operations.projects
+for each row execute function project_operations.enforce_project_integrity();
+
+create or replace function project_operations.enforce_phase_plan_integrity()
+returns trigger language plpgsql set search_path = pg_catalog as $$
+declare
+  project_status text;
+  row_tenant uuid;
+  row_project uuid;
+begin
+  if tg_op = 'DELETE' then
+    row_tenant := old.tenant_id;
+    row_project := old.project_id;
+  else
+    row_tenant := new.tenant_id;
+    row_project := new.project_id;
+  end if;
+  select status into project_status from project_operations.projects
+    where tenant_id = row_tenant and id = row_project;
+  if project_status is null then
+    raise exception 'PROJECT_NOT_FOUND' using errcode = 'P0001';
+  end if;
+  if tg_op = 'DELETE' then
+    if project_status <> 'DRAFT' then
+      raise exception 'PROJECT_PHASE_IMMUTABLE' using errcode = 'P0001';
+    end if;
+    return old;
+  end if;
+  if project_status in ('COMPLETED', 'CANCELLED') then
+    raise exception 'PROJECT_ALREADY_TERMINAL' using errcode = 'P0001';
+  end if;
+  if tg_op = 'UPDATE' and project_status <> 'DRAFT' and (
+    new.tenant_id <> old.tenant_id or new.project_id <> old.project_id
+    or new.phase_key <> old.phase_key or new.phase_order <> old.phase_order
+    or new.required <> old.required
+  ) then
+    raise exception 'PROJECT_PHASE_IMMUTABLE' using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+create trigger project_operations_phase_plan_guard
+before insert or update or delete on project_operations.project_phase_plans
+for each row execute function project_operations.enforce_phase_plan_integrity();
+
+create or replace function project_operations.enforce_task_integrity()
+returns trigger language plpgsql set search_path = pg_catalog as $$
+declare
+  project_status text;
+  project_type text;
+  source_order_id uuid;
+  row_tenant uuid;
+  row_project uuid;
+begin
+  if tg_op = 'DELETE' then
+    row_tenant := old.tenant_id;
+    row_project := old.project_id;
+  else
+    row_tenant := new.tenant_id;
+    row_project := new.project_id;
+  end if;
+  select status, project_type, source_service_order_id
+    into project_status, project_type, source_order_id
+    from project_operations.projects
+    where tenant_id = row_tenant and id = row_project;
+  if project_status is null then
+    raise exception 'PROJECT_NOT_FOUND' using errcode = 'P0001';
+  end if;
+  if tg_op = 'DELETE' then
+    if project_status in ('COMPLETED', 'CANCELLED') then
+      raise exception 'PROJECT_ALREADY_TERMINAL' using errcode = 'P0001';
+    end if;
+    return old;
+  end if;
+  if project_status in ('COMPLETED', 'CANCELLED') then
+    raise exception 'PROJECT_ALREADY_TERMINAL' using errcode = 'P0001';
+  end if;
+  if new.phase_plan_id is not null and not exists (
+    select 1 from project_operations.project_phase_plans
+    where tenant_id = new.tenant_id and project_id = new.project_id and id = new.phase_plan_id
+  ) then
+    raise exception 'PROJECT_TASK_PHASE_INVALID' using errcode = 'P0001';
+  end if;
+  if new.source_service_order_line_id is not null and (
+    project_type <> 'CLIENT_SERVICE' or not exists (
+      select 1 from lab_services.service_order_lines
+      where tenant_id = new.tenant_id and service_order_id = source_order_id
+        and id = new.source_service_order_line_id
+    )
+  ) then
+    raise exception 'PROJECT_TASK_SOURCE_SCOPE_INVALID' using errcode = 'P0001';
+  end if;
+  if tg_op = 'UPDATE' then
+    if old.status in ('DONE', 'CANCELLED') then
+      raise exception 'PROJECT_TASK_ALREADY_TERMINAL' using errcode = 'P0001';
+    end if;
+    if project_status <> 'ACTIVE' and new.status <> old.status then
+      raise exception 'PROJECT_TASK_NOT_STARTABLE' using errcode = 'P0001';
+    end if;
+    if old.status <> new.status and not (
+      (old.status = 'TODO' and new.status in ('IN_PROGRESS', 'DONE', 'CANCELLED'))
+      or (old.status = 'IN_PROGRESS' and new.status in ('DONE', 'CANCELLED'))
+    ) then
+      raise exception 'PROJECT_TASK_NOT_EDITABLE' using errcode = 'P0001';
+    end if;
+    if new.status in ('IN_PROGRESS', 'DONE') and new.task_kind = 'MILESTONE'
+      and new.status = 'IN_PROGRESS' then
+      raise exception 'PROJECT_TASK_NOT_STARTABLE' using errcode = 'P0001';
+    end if;
+    if new.status in ('IN_PROGRESS', 'DONE') and exists (
+      select 1 from project_operations.task_dependencies d
+      join project_operations.project_tasks predecessor
+        on predecessor.tenant_id = d.tenant_id and predecessor.id = d.predecessor_task_id
+      where d.tenant_id = new.tenant_id and d.successor_task_id = new.id
+        and predecessor.status <> 'DONE'
+    ) then
+      raise exception 'PROJECT_TASK_DEPENDENCY_UNSATISFIED' using errcode = 'P0001';
+    end if;
+    if old.status <> 'TODO' and (
+      new.project_id <> old.project_id or new.phase_plan_id is distinct from old.phase_plan_id
+      or new.source_service_order_line_id is distinct from old.source_service_order_line_id
+      or new.task_kind <> old.task_kind or new.title <> old.title
+      or new.description is distinct from old.description or new.required <> old.required
+    ) then
+      raise exception 'PROJECT_TASK_NOT_EDITABLE' using errcode = 'P0001';
+    end if;
+  end if;
+  if new.status = 'CANCELLED' and new.required and btrim(coalesce(new.cancellation_reason, '')) = '' then
+    raise exception 'PROJECT_TASK_CANCELLATION_REASON_REQUIRED' using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+create trigger project_operations_task_guard
+before insert or update or delete on project_operations.project_tasks
+for each row execute function project_operations.enforce_task_integrity();
+
+create or replace function project_operations.enforce_dependency_integrity()
+returns trigger language plpgsql set search_path = pg_catalog as $$
+declare
+  project_status text;
+begin
+  if tg_op = 'UPDATE' then
+    raise exception 'PROJECT_DEPENDENCY_IMMUTABLE' using errcode = 'P0001';
+  end if;
+  if tg_op = 'DELETE' then
+    select status into project_status from project_operations.projects
+      where tenant_id = old.tenant_id and id = old.project_id;
+    if project_status not in ('DRAFT', 'ACTIVE') then
+      raise exception 'PROJECT_DEPENDENCY_IMMUTABLE' using errcode = 'P0001';
+    end if;
+    return old;
+  end if;
+  if not exists (
+    select 1 from project_operations.project_tasks
+    where tenant_id = new.tenant_id and project_id = new.project_id and id = new.predecessor_task_id
+  ) or not exists (
+    select 1 from project_operations.project_tasks
+    where tenant_id = new.tenant_id and project_id = new.project_id and id = new.successor_task_id
+  ) then
+    raise exception 'PROJECT_DEPENDENCY_CROSS_PROJECT' using errcode = 'P0001';
+  end if;
+  if exists (
+    with recursive path(id) as (
+      select successor_task_id from project_operations.task_dependencies
+        where tenant_id = new.tenant_id and predecessor_task_id = new.successor_task_id
+      union
+      select d.successor_task_id from project_operations.task_dependencies d
+        join path p on p.id = d.predecessor_task_id
+        where d.tenant_id = new.tenant_id
+    ) select 1 from path where id = new.predecessor_task_id
+  ) then
+    raise exception 'PROJECT_DEPENDENCY_CYCLE' using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+create trigger project_operations_dependency_guard
+before insert or update or delete on project_operations.task_dependencies
+for each row execute function project_operations.enforce_dependency_integrity();
+
+create or replace function project_operations.enforce_artifact_link_insert()
+returns trigger language plpgsql set search_path = pg_catalog as $$
+begin
+  if new.phase_plan_id is not null and not exists (
+    select 1 from project_operations.project_phase_plans
+    where tenant_id = new.tenant_id and project_id = new.project_id and id = new.phase_plan_id
+  ) then
+    raise exception 'PROJECT_ARTIFACT_PHASE_MISMATCH' using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+create trigger project_operations_artifact_link_insert_guard
+before insert on project_operations.project_artifact_links
+for each row execute function project_operations.enforce_artifact_link_insert();
+
+create or replace function project_operations.enforce_update_insert()
+returns trigger language plpgsql set search_path = pg_catalog as $$
+begin
+  if new.phase_plan_id is not null and not exists (
+    select 1 from project_operations.project_phase_plans
+    where tenant_id = new.tenant_id and project_id = new.project_id and id = new.phase_plan_id
+  ) then
+    raise exception 'PROJECT_PHASE_INVALID' using errcode = 'P0001';
+  end if;
+  if new.task_id is not null and not exists (
+    select 1 from project_operations.project_tasks
+    where tenant_id = new.tenant_id and project_id = new.project_id and id = new.task_id
+  ) then
+    raise exception 'PROJECT_TASK_NOT_FOUND' using errcode = 'P0001';
+  end if;
+  if new.update_type = 'BLOCKER_RESOLVED' and not exists (
+    select 1 from project_operations.project_updates
+    where tenant_id = new.tenant_id and project_id = new.project_id
+      and id = new.resolves_update_id and update_type = 'BLOCKER'
+  ) then
+    raise exception 'PROJECT_BLOCKER_NOT_FOUND' using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+create trigger project_operations_update_insert_guard
+before insert on project_operations.project_updates
+for each row execute function project_operations.enforce_update_insert();

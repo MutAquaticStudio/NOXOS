@@ -45,24 +45,62 @@ const allowedPrimary: Record<string, readonly string[]> = {
 export class PostgresProjectOperationsStore implements ProjectOperationsStore {
   constructor(private readonly sql: Sql) {}
   async listProjects(tenantId: string) {
-    return this
-      .sql`select p.*, count(t.id) filter(where t.required)::int as required_task_count, count(t.id) filter(where t.required and t.status='DONE')::int as completed_required_task_count from project_operations.projects p left join project_operations.project_tasks t on t.tenant_id=p.tenant_id and t.project_id=p.id where p.tenant_id=${tenantId} group by p.id order by p.updated_at desc`;
+    return this.sql`
+      select p.*,o.order_number as source_service_order_number,
+        c.display_name as source_customer_display_name,
+        u.display_name as owner_display_name,
+        count(distinct t.id) filter(where t.required)::int as required_task_count,
+        count(distinct t.id) filter(where t.required and t.status='DONE')::int as completed_required_task_count,
+        count(distinct ph.id) filter(where ph.required)::int as required_phase_count
+      from project_operations.projects p
+      left join project_operations.project_tasks t
+        on t.tenant_id=p.tenant_id and t.project_id=p.id
+      left join lab_services.service_orders o
+        on o.tenant_id=p.tenant_id and o.id=p.source_service_order_id
+      left join lab_services.customers c
+        on c.tenant_id=o.tenant_id and c.id=o.customer_id
+      left join platform.platform_users u on u.id=p.owner_user_id
+      left join project_operations.project_phase_plans ph
+        on ph.tenant_id=p.tenant_id and ph.project_id=p.id
+      where p.tenant_id=${tenantId}
+      group by p.id,o.id,c.id,u.id
+      order by p.updated_at desc
+    `;
   }
   async findProject(tenantId: string, id: string) {
-    const p = await this
-      .sql`select * from project_operations.projects where tenant_id=${tenantId} and id=${id}`;
+    const p = await this.sql`
+      select p.*,o.order_number as source_service_order_number,
+        c.display_name as source_customer_display_name,o.status as source_service_order_status
+        ,u.display_name as owner_display_name
+      from project_operations.projects p
+      left join lab_services.service_orders o
+        on o.tenant_id=p.tenant_id and o.id=p.source_service_order_id
+      left join lab_services.customers c
+        on c.tenant_id=o.tenant_id and c.id=o.customer_id
+      left join platform.platform_users u on u.id=p.owner_user_id
+      where p.tenant_id=${tenantId} and p.id=${id}
+    `;
     if (!p[0]) return undefined;
-    const [phases, tasks, links, updates] = await Promise.all([
+    const [phases, tasks, dependencies, links, updates, scope, phaseState] = await Promise.all([
       this
-        .sql`select * from project_operations.project_phase_plans where tenant_id=${tenantId} and project_id=${id} order by phase_order`,
+        .sql`select ph.*,u.display_name as owner_display_name from project_operations.project_phase_plans ph left join platform.platform_users u on u.id=ph.owner_user_id where ph.tenant_id=${tenantId} and ph.project_id=${id} order by ph.phase_order`,
       this
-        .sql`select * from project_operations.project_tasks where tenant_id=${tenantId} and project_id=${id} order by created_at`,
+        .sql`select t.*,u.display_name as assignee_display_name from project_operations.project_tasks t left join platform.platform_users u on u.id=t.assignee_user_id where t.tenant_id=${tenantId} and t.project_id=${id} order by t.created_at`,
+      this
+        .sql`select * from project_operations.task_dependencies where tenant_id=${tenantId} and project_id=${id} order by created_at`,
       this
         .sql`select * from project_operations.project_artifact_links where tenant_id=${tenantId} and project_id=${id} order by created_at`,
       this
-        .sql`select * from project_operations.project_updates where tenant_id=${tenantId} and project_id=${id} order by created_at`
+        .sql`select * from project_operations.project_updates where tenant_id=${tenantId} and project_id=${id} order by created_at`,
+      this.sql`
+        select id,line_order,service_type,title,scope_description
+        from lab_services.service_order_lines
+        where tenant_id=${tenantId} and service_order_id=${p[0].source_service_order_id ?? null}
+        order by line_order
+      `,
+      this.phaseStateWith(this.sql, tenantId, id)
     ]);
-    return { project: p[0], phases, tasks, links, updates };
+    return { project: p[0], phases, phaseState, tasks, dependencies, links, updates, scope };
   }
   async createProject(input: any) {
     return this.sql.begin(async (tx) => {
@@ -73,6 +111,17 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
           "Project owner must be an active Tenant member."
         );
       if (input.projectType === "CLIENT_SERVICE") {
+        // A transaction-scoped advisory lock protects the partial unique invariant
+        // before an absent source link can be observed by two concurrent creators.
+        await tx`select pg_advisory_xact_lock(hashtextextended(${`${input.tenantId}:${input.sourceServiceOrderId}`}, 0))`;
+        const existing =
+          await tx`select id from project_operations.projects where tenant_id=${input.tenantId} and source_service_order_id=${input.sourceServiceOrderId} for update`;
+        if (existing[0])
+          throw new ProjectOperationsProblem(
+            409,
+            "PROJECT_SOURCE_SERVICE_ORDER_ALREADY_LINKED",
+            "A Client Project already exists for this Service Order."
+          );
         const source =
           await tx`select o.id,o.status from lab_services.service_orders o where o.tenant_id=${input.tenantId} and o.id=${input.sourceServiceOrderId}`;
         const lines =
@@ -80,7 +129,7 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
         if (!source[0] || !["CONFIRMED", "IN_PROGRESS"].includes(source[0].status) || !lines.length)
           throw new ProjectOperationsProblem(
             409,
-            "PROJECT_SOURCE_INVALID",
+            "PROJECT_SOURCE_SERVICE_ORDER_INVALID",
             "Confirmed Service Order with scope is required."
           );
       }
@@ -103,7 +152,7 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
       if (["COMPLETED", "CANCELLED"].includes(p.status))
         throw new ProjectOperationsProblem(
           409,
-          "PROJECT_TERMINAL",
+          "PROJECT_ALREADY_TERMINAL",
           "Terminal Project is immutable."
         );
       if (
@@ -267,6 +316,13 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
           "PROJECT_PHASE_IMMUTABLE",
           "Phase identity is frozen after activation."
         );
+      for (const phase of input.phases)
+        if (phase.ownerUserId && !(await activeMember(tx, input.tenantId, phase.ownerUserId)))
+          throw new ProjectOperationsProblem(
+            409,
+            "PROJECT_PHASE_OWNER_NOT_ACTIVE_MEMBER",
+            "Phase owner must be an active Tenant member."
+          );
       await tx`delete from project_operations.project_phase_plans where tenant_id=${input.tenantId} and project_id=${p.id}`;
       for (const phase of input.phases)
         await tx`insert into project_operations.project_phase_plans (tenant_id,project_id,phase_key,phase_order,required,owner_user_id,planned_start_date,planned_due_date,notes,created_by_user_id) values (${input.tenantId},${p.id},${phase.phaseKey},${phase.phaseOrder},${phase.required},${phase.ownerUserId ?? null},${phase.plannedStartDate ?? null},${phase.plannedDueDate ?? null},${phase.notes ?? null},${input.actorUserId})`;
@@ -278,13 +334,14 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
     return this.sql.begin(async (tx) => {
       const p = await project(tx, input.tenantId, input.projectId, true);
       if (["COMPLETED", "CANCELLED"].includes(p.status))
-        throw new ProjectOperationsProblem(409, "PROJECT_TERMINAL", "Project terminal.");
+        throw new ProjectOperationsProblem(409, "PROJECT_ALREADY_TERMINAL", "Project terminal.");
       if (input.assigneeUserId && !(await activeMember(tx, input.tenantId, input.assigneeUserId)))
         throw new ProjectOperationsProblem(
           409,
           "PROJECT_ASSIGNEE_NOT_ACTIVE_MEMBER",
           "Assignee not active."
         );
+      if (input.phasePlanId) await this.assertPhase(tx, input.tenantId, p.id, input.phasePlanId);
       if (p.project_type === "INTERNAL" && input.sourceServiceOrderLineId)
         throw new ProjectOperationsProblem(
           400,
@@ -301,21 +358,39 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
     });
   }
   async updateTask(input: any) {
-    const t = await this.sql<
-      any[]
-    >`select * from project_operations.project_tasks where tenant_id=${input.tenantId} and id=${input.taskId}`;
-    if (!t[0]) throw new ProjectOperationsProblem(404, "PROJECT_TASK_NOT_FOUND", "Task not found.");
-    if (t[0].status !== "TODO")
-      throw new ProjectOperationsProblem(
-        409,
-        "PROJECT_TASK_NOT_EDITABLE",
-        "Only TODO Task can change identity."
-      );
     return this.sql.begin(async (tx) => {
+      const t = await tx<
+        any[]
+      >`select * from project_operations.project_tasks where tenant_id=${input.tenantId} and id=${input.taskId} for update`;
+      if (!t[0])
+        throw new ProjectOperationsProblem(404, "PROJECT_TASK_NOT_FOUND", "Task not found.");
+      if (t[0].status !== "TODO")
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_TASK_NOT_EDITABLE",
+          "Only TODO Task can change identity."
+        );
       const c = input.changes;
+      if (c.assigneeUserId && !(await activeMember(tx, input.tenantId, c.assigneeUserId)))
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_ASSIGNEE_NOT_ACTIVE_MEMBER",
+          "Assignee must be active."
+        );
+      const taskProject = await project(tx, input.tenantId, t[0].project_id);
+      if (c.phasePlanId) await this.assertPhase(tx, input.tenantId, taskProject.id, c.phasePlanId);
+      if (c.sourceServiceOrderLineId) {
+        if (taskProject.project_type === "INTERNAL")
+          throw new ProjectOperationsProblem(
+            400,
+            "PROJECT_TASK_SOURCE_SCOPE_INVALID",
+            "Internal task cannot have Service Order scope."
+          );
+        await this.assertLine(tx, input.tenantId, taskProject, c.sourceServiceOrderLineId);
+      }
       const r = await tx<
         any[]
-      >`update project_operations.project_tasks set title=coalesce(${c.title ?? null},title),description=coalesce(${c.description ?? null},description),priority=coalesce(${c.priority ?? null},priority),required=coalesce(${c.required ?? null},required),assignee_user_id=coalesce(${c.assigneeUserId ?? null},assignee_user_id),due_date=coalesce(${c.dueDate ?? null},due_date),updated_at=now() where id=${input.taskId} returning *`;
+      >`update project_operations.project_tasks set title=coalesce(${c.title ?? null},title),description=coalesce(${c.description ?? null},description),priority=coalesce(${c.priority ?? null},priority),required=coalesce(${c.required ?? null},required),assignee_user_id=coalesce(${c.assigneeUserId ?? null},assignee_user_id),due_date=coalesce(${c.dueDate ?? null},due_date),phase_plan_id=coalesce(${c.phasePlanId ?? null},phase_plan_id),source_service_order_line_id=coalesce(${c.sourceServiceOrderLineId ?? null},source_service_order_line_id),updated_at=now() where id=${input.taskId} returning *`;
       await audit(tx, input, "project-operations.task.updated", "ProjectTask", input.taskId);
       return r[0];
     });
@@ -333,11 +408,11 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
       >`select t.*,p.status as project_status,p.project_type,p.source_service_order_id from project_operations.project_tasks t join project_operations.projects p on p.id=t.project_id and p.tenant_id=t.tenant_id where t.tenant_id=${input.tenantId} and t.id=${input.taskId} for update`;
       const t = rows[0];
       if (!t) throw new ProjectOperationsProblem(404, "PROJECT_TASK_NOT_FOUND", "Task not found.");
-      if (
-        t.project_status !== "ACTIVE" ||
-        t.status !== "TODO" ||
-        (to === "IN_PROGRESS" && t.task_kind === "MILESTONE")
-      )
+      const allowedTransition =
+        (to === "IN_PROGRESS" && t.status === "TODO" && t.task_kind !== "MILESTONE") ||
+        (to === "DONE" &&
+          (t.status === "TODO" || (t.status === "IN_PROGRESS" && t.task_kind === "TASK")));
+      if (t.project_status !== "ACTIVE" || !allowedTransition)
         throw new ProjectOperationsProblem(
           409,
           to === "DONE" ? "PROJECT_TASK_NOT_COMPLETABLE" : "PROJECT_TASK_NOT_STARTABLE",
@@ -430,6 +505,17 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
   }
   async removeDependency(input: any) {
     await this.sql.begin(async (tx) => {
+      const task = (
+        await tx<
+          any[]
+        >`select t.project_id,p.status as project_status from project_operations.project_tasks t join project_operations.projects p on p.tenant_id=t.tenant_id and p.id=t.project_id where t.tenant_id=${input.tenantId} and t.id=${input.taskId} for update`
+      )[0];
+      if (!task || !["DRAFT", "ACTIVE"].includes(task.project_status))
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_DEPENDENCY_INVALID",
+          "Dependency cannot mutate while Project is on hold or terminal."
+        );
       const r = await tx<
         any[]
       >`delete from project_operations.task_dependencies where tenant_id=${input.tenantId} and id=${input.dependencyId} and successor_task_id=${input.taskId} returning id`;
@@ -452,7 +538,7 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
     return this.sql.begin(async (tx) => {
       const p = await project(tx, input.tenantId, input.projectId, true);
       if (["COMPLETED", "CANCELLED"].includes(p.status))
-        throw new ProjectOperationsProblem(409, "PROJECT_TERMINAL", "Project terminal.");
+        throw new ProjectOperationsProblem(409, "PROJECT_ALREADY_TERMINAL", "Project terminal.");
       const artifact = await this.resolveArtifact({
         tenantId: input.tenantId,
         artifactType: input.artifactType,
@@ -464,6 +550,7 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
           "PROJECT_ARTIFACT_NOT_FOUND",
           "Artifact not found."
         );
+      await this.assertArtifactLineage(tx, input.tenantId, p.id, artifact);
       if (input.phasePlanId) {
         const phase = (
           await tx<
@@ -485,7 +572,10 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
             "PROJECT_ARTIFACT_PHASE_MISMATCH",
             "Artifact cannot be primary for phase."
           );
-        await tx`update project_operations.project_artifact_links set status='REVOKED',revoked_by_user_id=${input.actorUserId},revoked_at=now(),revocation_reason='Replaced by promoted primary' where tenant_id=${input.tenantId} and project_id=${p.id} and phase_plan_id=${input.phasePlanId} and relationship='PRIMARY' and status='ACTIVE'`;
+        // Reference/evidence/output links preserve the current primary. A primary
+        // replacement is the only operation permitted to revoke it.
+        if (input.relationship === "PRIMARY")
+          await tx`update project_operations.project_artifact_links set status='REVOKED',revoked_by_user_id=${input.actorUserId},revoked_at=now(),revocation_reason='Replaced by promoted primary' where tenant_id=${input.tenantId} and project_id=${p.id} and phase_plan_id=${input.phasePlanId} and relationship='PRIMARY' and status='ACTIVE'`;
       }
       const r = await tx<
         any[]
@@ -534,6 +624,30 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
           "PROJECT_ARTIFACT_PHASE_MISMATCH",
           "Primary needs phase."
         );
+      const p = await project(tx, input.tenantId, old.project_id, true);
+      const phase = (
+        await tx<
+          any[]
+        >`select phase_key from project_operations.project_phase_plans where tenant_id=${input.tenantId} and id=${old.phase_plan_id} and project_id=${p.id} for update`
+      )[0];
+      if (!phase || !allowedPrimary[phase.phase_key].includes(old.artifact_type))
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_ARTIFACT_PHASE_MISMATCH",
+          "Artifact cannot be primary for phase."
+        );
+      const artifact = await this.resolveArtifactFrom(tx, {
+        tenantId: input.tenantId,
+        artifactType: old.artifact_type,
+        artifactId: old.artifact_id
+      });
+      if (!artifact)
+        throw new ProjectOperationsProblem(
+          404,
+          "PROJECT_ARTIFACT_NOT_FOUND",
+          "Artifact not found."
+        );
+      await this.assertArtifactLineage(tx, input.tenantId, p.id, artifact);
       await tx`update project_operations.project_artifact_links set status='REVOKED',revoked_by_user_id=${input.actorUserId},revoked_at=now(),revocation_reason='Promoted alternate primary' where tenant_id=${input.tenantId} and project_id=${old.project_id} and phase_plan_id=${old.phase_plan_id} and relationship='PRIMARY' and status='ACTIVE'`;
       const r = await tx<
         any[]
@@ -563,6 +677,15 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
             "PROJECT_BLOCKER_RESOLUTION_INVALID",
             "Blocker resolution invalid."
           );
+        const existingResolution = await tx<
+          any[]
+        >`select id from project_operations.project_updates where tenant_id=${input.tenantId} and resolves_update_id=${input.resolvesUpdateId} for update`;
+        if (existingResolution[0])
+          throw new ProjectOperationsProblem(
+            409,
+            "PROJECT_BLOCKER_ALREADY_RESOLVED",
+            "Blocker already has a resolution record."
+          );
       }
       const r = await tx<
         any[]
@@ -578,17 +701,24 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
     const phases = await sql<
       any[]
     >`select p.*,l.artifact_type,l.artifact_id from project_operations.project_phase_plans p left join project_operations.project_artifact_links l on l.tenant_id=p.tenant_id and l.phase_plan_id=p.id and l.relationship='PRIMARY' and l.status='ACTIVE' where p.tenant_id=${tenantId} and p.project_id=${projectId} order by p.phase_order`;
-    return Promise.all(
-      phases.map(async (p) => {
-        if (!p.artifact_id)
-          return { ...p, state: p.phase_order === 1 ? "AVAILABLE" : "NOT_STARTED" };
+    const resolved: any[] = [];
+    for (const p of phases) {
+      let state: string;
+      if (!p.artifact_id) {
+        const predecessors = resolved.filter((candidate) => candidate.phase_order < p.phase_order);
+        state = predecessors.every(
+          (candidate) => !candidate.required || candidate.state === "COMPLETE"
+        )
+          ? "AVAILABLE"
+          : "NOT_STARTED";
+      } else {
         const a = await this.resolveArtifactFrom(sql, {
           tenantId,
           artifactType: p.artifact_type,
           artifactId: p.artifact_id
         });
         const s = a?.canonicalStatus ?? "MISSING";
-        const state = [
+        state = [
           "FROZEN",
           "PREPARED",
           "COMPLETED",
@@ -605,9 +735,29 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
               : s === "REVISION_REQUIRED"
                 ? "REVISION_REQUIRED"
                 : "ACTIVE";
-        return { ...p, state };
-      })
-    );
+      }
+      // A final G5 revision signal remains meaningful after the formula that
+      // preceded it was frozen. It is a read-only derived exception for the
+      // DESIGN phase, never a mutable status stored by G12.
+      if (p.phase_key === "DESIGN") {
+        const revisionLinks = await sql<
+          any[]
+        >`select artifact_id from project_operations.project_artifact_links where tenant_id=${tenantId} and phase_plan_id=${p.id} and artifact_type='SENSORY_EVALUATION' and status='ACTIVE'`;
+        for (const revisionLink of revisionLinks) {
+          const revision = await this.resolveArtifactFrom(sql, {
+            tenantId,
+            artifactType: "SENSORY_EVALUATION",
+            artifactId: revisionLink.artifact_id
+          });
+          if (revision?.canonicalStatus === "REVISION_REQUIRED") {
+            state = "REVISION_REQUIRED";
+            break;
+          }
+        }
+      }
+      resolved.push({ ...p, state });
+    }
+    return resolved;
   }
   async timeline(tenantId: string, projectId: string) {
     return this
@@ -653,23 +803,26 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
     input: { tenantId: string; artifactType: ProjectArtifactType; artifactId: string }
   ): Promise<ProjectArtifactReference | undefined> {
     const q: Record<string, string> = {
-      DESIGN_PROJECT: "select id,tenant_id,name label,status from design_studio.projects",
-      DESIGN_BRIEF: "select id,tenant_id,raw_brief label,status from design_studio.design_briefs",
+      DESIGN_PROJECT:
+        "select p.id,p.tenant_id,p.name label,p.status,jsonb_build_object('designProjectId',p.id) lineage from design_studio.projects p",
+      DESIGN_BRIEF:
+        "select b.id,b.tenant_id,b.raw_brief label,b.status,jsonb_build_object('designProjectId',b.project_id,'designBriefId',b.id) lineage from design_studio.design_briefs b",
       FORMULA_VERSION:
-        "select id,tenant_id,formula_id::text label,status from design_studio.formula_versions",
-      TRIAL: "select id,tenant_id,id::text label,status from trial_sensory.trials",
+        "select v.id,v.tenant_id,v.formula_id::text label,v.status,jsonb_build_object('designProjectId',f.project_id,'designBriefId',f.source_brief_id,'formulaId',v.formula_id,'formulaVersionId',v.id,'formulaBundleHash',v.bundle_hash) lineage from design_studio.formula_versions v join design_studio.formulas f on f.tenant_id=v.tenant_id and f.id=v.formula_id",
+      TRIAL:
+        "select t.id,t.tenant_id,t.id::text label,t.status,jsonb_build_object('designProjectId',f.project_id,'designBriefId',f.source_brief_id,'formulaId',v.formula_id,'formulaVersionId',t.formula_version_id,'formulaBundleHash',t.formula_bundle_hash,'trialId',t.id) lineage from trial_sensory.trials t join design_studio.formula_versions v on v.tenant_id=t.tenant_id and v.id=t.formula_version_id join design_studio.formulas f on f.tenant_id=v.tenant_id and f.id=v.formula_id",
       SENSORY_EVALUATION:
-        "select id,tenant_id,id::text label,status from trial_sensory.sensory_evaluations",
+        "select e.id,e.tenant_id,e.id::text label,case when e.status='FINAL' and e.decision='REVISION_REQUIRED' then 'REVISION_REQUIRED' else e.status end status,jsonb_build_object('designProjectId',f.project_id,'designBriefId',f.source_brief_id,'formulaId',v.formula_id,'formulaVersionId',t.formula_version_id,'formulaBundleHash',t.formula_bundle_hash,'trialId',t.id,'evaluationId',e.id) lineage from trial_sensory.sensory_evaluations e join trial_sensory.trials t on t.tenant_id=e.tenant_id and t.id=e.trial_id join design_studio.formula_versions v on v.tenant_id=t.tenant_id and v.id=t.formula_version_id join design_studio.formulas f on f.tenant_id=v.tenant_id and f.id=v.formula_id",
       READINESS_ASSESSMENT:
-        "select id,tenant_id,id::text label,decision status from release_readiness.assessments",
+        "select r.id,r.tenant_id,r.id::text label,r.decision status,jsonb_build_object('designProjectId',f.project_id,'designBriefId',f.source_brief_id,'formulaId',v.formula_id,'formulaVersionId',r.formula_version_id,'formulaBundleHash',r.formula_bundle_hash) lineage from release_readiness.assessments r join design_studio.formula_versions v on v.tenant_id=r.tenant_id and v.id=r.formula_version_id join design_studio.formulas f on f.tenant_id=v.tenant_id and f.id=v.formula_id",
       PRODUCTION_ORDER:
-        "select id,tenant_id,order_number label,status from production.production_orders",
+        "select o.id,o.tenant_id,o.order_number label,o.status,jsonb_build_object('designProjectId',f.project_id,'designBriefId',f.source_brief_id,'formulaId',v.formula_id,'formulaVersionId',o.formula_version_id,'formulaBundleHash',o.formula_bundle_hash,'productionOrderId',o.id) lineage from production.production_orders o join design_studio.formula_versions v on v.tenant_id=o.tenant_id and v.id=o.formula_version_id join design_studio.formulas f on f.tenant_id=v.tenant_id and f.id=v.formula_id",
       PRODUCTION_BATCH:
-        "select id,tenant_id,batch_number label,status from production.production_batches",
+        "select b.id,b.tenant_id,b.batch_number label,o.status,jsonb_build_object('designProjectId',f.project_id,'designBriefId',f.source_brief_id,'formulaId',v.formula_id,'formulaVersionId',b.formula_version_id,'formulaBundleHash',b.formula_bundle_hash,'productionOrderId',b.production_order_id,'productionBatchId',b.id) lineage from production.production_batches b join production.production_orders o on o.tenant_id=b.tenant_id and o.id=b.production_order_id join design_studio.formula_versions v on v.tenant_id=b.tenant_id and v.id=b.formula_version_id join design_studio.formulas f on f.tenant_id=v.tenant_id and f.id=v.formula_id",
       QC_INSPECTION:
-        "select id,tenant_id,inspection_number label,status from quality_control.batch_inspections",
+        "select i.id,i.tenant_id,i.inspection_number label,i.status,jsonb_build_object('designProjectId',f.project_id,'designBriefId',f.source_brief_id,'formulaId',v.formula_id,'formulaVersionId',b.formula_version_id,'formulaBundleHash',b.formula_bundle_hash,'productionOrderId',b.production_order_id,'productionBatchId',b.id) lineage from quality_control.batch_inspections i join production.production_batches b on b.tenant_id=i.tenant_id and b.id=i.batch_id join design_studio.formula_versions v on v.tenant_id=b.tenant_id and v.id=b.formula_version_id join design_studio.formulas f on f.tenant_id=v.tenant_id and f.id=v.formula_id",
       BATCH_RELEASE_DECISION:
-        "select id,tenant_id,id::text label,decision status from quality_control.batch_release_decisions"
+        "select d.id,d.tenant_id,d.id::text label,d.decision status,jsonb_build_object('designProjectId',f.project_id,'designBriefId',f.source_brief_id,'formulaId',v.formula_id,'formulaVersionId',b.formula_version_id,'formulaBundleHash',b.formula_bundle_hash,'productionOrderId',b.production_order_id,'productionBatchId',b.id) lineage from quality_control.batch_release_decisions d join production.production_batches b on b.tenant_id=d.tenant_id and b.id=d.batch_id join design_studio.formula_versions v on v.tenant_id=b.tenant_id and v.id=b.formula_version_id join design_studio.formulas f on f.tenant_id=v.tenant_id and f.id=v.formula_id"
     };
     const query = q[input.artifactType];
     if (!query) return undefined;
@@ -685,19 +838,61 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
           tenantId: r.tenant_id,
           label: r.label,
           canonicalStatus: r.status,
-          lineage: {}
+          lineage: r.lineage ?? {}
         }
       : undefined;
   }
   private async assertSourceLive(sql: Db, tenantId: string, p: any) {
     const r =
       await sql`select status from lab_services.service_orders where tenant_id=${tenantId} and id=${p.source_service_order_id}`;
-    if (!r[0] || r[0].status === "CANCELLED")
+    if (!r[0] || !["CONFIRMED", "IN_PROGRESS"].includes(r[0].status))
       throw new ProjectOperationsProblem(
         409,
-        "PROJECT_SOURCE_CANCELLED",
-        "Source Service Order is cancelled."
+        r[0]?.status === "CANCELLED"
+          ? "PROJECT_SOURCE_SERVICE_ORDER_CANCELLED"
+          : "PROJECT_SOURCE_SERVICE_ORDER_INVALID",
+        r[0]?.status === "CANCELLED"
+          ? "Source Service Order is cancelled."
+          : "Source Service Order is not available for operational work."
       );
+  }
+  private async assertPhase(sql: Db, tenantId: string, projectId: string, phasePlanId: string) {
+    const phase =
+      await sql`select 1 from project_operations.project_phase_plans where tenant_id=${tenantId} and project_id=${projectId} and id=${phasePlanId}`;
+    if (!phase[0])
+      throw new ProjectOperationsProblem(
+        409,
+        "PROJECT_TASK_PHASE_INVALID",
+        "Task phase must belong to this Project."
+      );
+  }
+  private async assertArtifactLineage(
+    sql: Db,
+    tenantId: string,
+    projectId: string,
+    candidate: ProjectArtifactReference
+  ) {
+    const links = await sql<
+      any[]
+    >`select artifact_type,artifact_id from project_operations.project_artifact_links where tenant_id=${tenantId} and project_id=${projectId}`;
+    for (const link of links) {
+      const existing = await this.resolveArtifactFrom(sql, {
+        tenantId,
+        artifactType: link.artifact_type,
+        artifactId: link.artifact_id
+      });
+      if (!existing) continue;
+      for (const key of ["designProjectId", "designBriefId", "formulaId"] as const) {
+        const a = existing.lineage[key];
+        const b = candidate.lineage[key];
+        if (a && b && a !== b)
+          throw new ProjectOperationsProblem(
+            409,
+            "PROJECT_ARTIFACT_LINEAGE_MISMATCH",
+            "Artifact belongs to a different canonical development lineage."
+          );
+      }
+    }
   }
   private async assertLine(sql: Db, tenantId: string, p: any, line: string) {
     const r =

@@ -95,7 +95,21 @@ export const phasePlanSchema = z
     notes: optionalText(4000)
   })
   .strict();
-export const phasePlansSchema = z.object({ phases: z.array(phasePlanSchema).max(7) }).strict();
+export const phasePlansSchema = z
+  .object({ phases: z.array(phasePlanSchema).max(7) })
+  .strict()
+  .superRefine((value, context) => {
+    const phaseKeys = new Set<string>();
+    const phaseOrders = new Set<number>();
+    for (const phase of value.phases) {
+      if (phaseKeys.has(phase.phaseKey))
+        context.addIssue({ code: "custom", message: "PROJECT_PHASE_DUPLICATE_KEY" });
+      if (phaseOrders.has(phase.phaseOrder))
+        context.addIssue({ code: "custom", message: "PROJECT_PHASE_DUPLICATE_ORDER" });
+      phaseKeys.add(phase.phaseKey);
+      phaseOrders.add(phase.phaseOrder);
+    }
+  });
 export const createTaskSchema = z
   .object({
     phasePlanId: projectUuidSchema.nullable().optional(),
