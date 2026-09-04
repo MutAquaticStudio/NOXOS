@@ -81,6 +81,10 @@ const LazyProductionExperience = lazy(async () => {
   const module = await import("./production");
   return { default: module.ProductionExperience };
 });
+const LazyQualityControlExperience = lazy(async () => {
+  const module = await import("./quality-control");
+  return { default: module.QualityControlExperience };
+});
 
 const publicIdentity = publicEnvironment({
   VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
@@ -395,7 +399,8 @@ function AuthenticatedApplication({
             definition.descriptor.id !== "release-readiness" &&
             definition.descriptor.id !== "inventory" &&
             definition.descriptor.id !== "procurement" &&
-            definition.descriptor.id !== "production"
+            definition.descriptor.id !== "production" &&
+            definition.descriptor.id !== "quality-control"
         )
         .flatMap((definition) => [
           { path: definition.descriptor.routeRoot, definition },
@@ -418,7 +423,11 @@ function AuthenticatedApplication({
               ? moduleDefinitions.find((definition) => definition.descriptor.id === "procurement")
               : location.pathname.startsWith("/production")
                 ? moduleDefinitions.find((definition) => definition.descriptor.id === "production")
-                : undefined);
+                : location.pathname.startsWith("/quality-control")
+                  ? moduleDefinitions.find(
+                      (definition) => definition.descriptor.id === "quality-control"
+                    )
+                  : undefined);
   const density = activeDefinition ? toShellDensity(activeDefinition.uxProfile.density) : "DEFAULT";
   const isPlatformOwner = platformIdentity.identity?.platformRoleKey === "PLATFORM_OWNER";
   const hasNoWorkspace = tenantSelection.state === "ready" && tenantSelection.choices.length === 0;
@@ -614,6 +623,18 @@ function AuthenticatedApplication({
               }
             />
           ))}
+          <Route
+            path="/quality-control/*"
+            element={
+              <Suspense fallback={<p className="nox-ai-context">Loading Quality Control…</p>}>
+                <LazyQualityControlExperience
+                  api={api}
+                  tenantId={activeTenant?.tenantId}
+                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                />
+              </Suspense>
+            }
+          />
           <Route
             path="/release-readiness/*"
             element={

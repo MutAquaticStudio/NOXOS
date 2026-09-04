@@ -107,6 +107,11 @@ try {
       key: "module.production",
       enabled: true
     });
+    await store.upsertTenantEntitlement({
+      tenantId: tenant.id,
+      key: "module.quality-control",
+      enabled: true
+    });
     return tenant;
   });
 

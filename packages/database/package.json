@@ -17,6 +17,7 @@
     "@nox-os/material-intelligence": "workspace:*",
     "@nox-os/procurement": "workspace:*",
     "@nox-os/production": "workspace:*",
+    "@nox-os/quality-control": "workspace:*",
     "@nox-os/release-readiness": "workspace:*",
     "@nox-os/trial-sensory": "workspace:*",
     "postgres": "3.4.9"

@@ -148,6 +148,19 @@ export const moduleProfiles = {
     mobilePriority: ["scan batch", "flag issue", "review queue"],
     reactBitsIntensity: "none"
   }),
+  qualityControl: profile({
+    id: "quality-control",
+    name: "Quality Control",
+    archetype: "workflow",
+    secondaryArchetype: "data-grid",
+    density: "compact",
+    primaryObject: "ProductionBatch",
+    primaryTasks: ["inspect completed batch", "record evidence", "decide disposition"],
+    navigation: { inspector: true, aiSidecar: false, workspaceTabs: true, splitView: true },
+    supportedViews: ["table", "form"],
+    mobilePriority: ["inspect batch", "record result", "review disposition"],
+    reactBitsIntensity: "none"
+  }),
   sensoryIntelligence: profile({
     id: "sensory-intelligence",
     name: "Sensory Intelligence",
@@ -520,6 +533,75 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
           "module.production.batch.abort"
         ],
         TENANT_MEMBER: ["module.production.read"]
+      }
+    }
+  }),
+  defineModule({
+    id: "quality-control",
+    displayName: "Quality Control",
+    routeRoot: "/quality-control",
+    childRoutes: [
+      "/quality-control/specifications",
+      "/quality-control/specifications/:specificationId",
+      "/quality-control/batches/:batchId",
+      "/quality-control/inspections/:inspectionId"
+    ],
+    apiNamespace: "quality-control",
+    navigationGroup: "Operations",
+    lifecycle: "ACTIVE",
+    dependencies: ["platform", "production", "release-readiness"],
+    permissions: [
+      "module.quality-control.read",
+      "module.quality-control.specification.manage",
+      "module.quality-control.inspection.create",
+      "module.quality-control.inspection.edit",
+      "module.quality-control.inspection.finalize",
+      "module.quality-control.inspection.cancel",
+      "module.quality-control.batch.hold",
+      "module.quality-control.batch.release",
+      "module.quality-control.batch.reject"
+    ],
+    entitlement: "module.quality-control",
+    featureFlag: "module.quality-control",
+    uxProfile: moduleProfiles.qualityControl,
+    owner: "Quality owner",
+    icon: "shield",
+    authorization: {
+      permissions: [
+        "module.quality-control.read",
+        "module.quality-control.specification.manage",
+        "module.quality-control.inspection.create",
+        "module.quality-control.inspection.edit",
+        "module.quality-control.inspection.finalize",
+        "module.quality-control.inspection.cancel",
+        "module.quality-control.batch.hold",
+        "module.quality-control.batch.release",
+        "module.quality-control.batch.reject"
+      ],
+      defaultRoleGrants: {
+        TENANT_OWNER: [
+          "module.quality-control.read",
+          "module.quality-control.specification.manage",
+          "module.quality-control.inspection.create",
+          "module.quality-control.inspection.edit",
+          "module.quality-control.inspection.finalize",
+          "module.quality-control.inspection.cancel",
+          "module.quality-control.batch.hold",
+          "module.quality-control.batch.release",
+          "module.quality-control.batch.reject"
+        ],
+        TENANT_ADMIN: [
+          "module.quality-control.read",
+          "module.quality-control.specification.manage",
+          "module.quality-control.inspection.create",
+          "module.quality-control.inspection.edit",
+          "module.quality-control.inspection.finalize",
+          "module.quality-control.inspection.cancel",
+          "module.quality-control.batch.hold",
+          "module.quality-control.batch.release",
+          "module.quality-control.batch.reject"
+        ],
+        TENANT_MEMBER: ["module.quality-control.read"]
       }
     }
   }),

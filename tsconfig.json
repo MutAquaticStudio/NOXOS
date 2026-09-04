@@ -31,6 +31,8 @@
       "@nox-os/procurement/browser": ["./packages/procurement/src/browser.ts"],
       "@nox-os/production": ["./packages/production/src/index.ts"],
       "@nox-os/production/browser": ["./packages/production/src/browser.ts"],
+      "@nox-os/quality-control": ["./packages/quality-control/src/index.ts"],
+      "@nox-os/quality-control/browser": ["./packages/quality-control/src/browser.ts"],
       "@nox-os/release-readiness": ["./packages/release-readiness/src/index.ts"],
       "@nox-os/release-readiness/browser": ["./packages/release-readiness/src/browser.ts"],
       "@nox-os/scientific": ["./packages/scientific/src/index.ts"],
