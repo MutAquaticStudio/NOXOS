@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@nox-os/contracts": "workspace:*",
+    "@nox-os/commercial-orders": "workspace:*",
     "@nox-os/design-studio": "workspace:*",
     "@nox-os/inventory": "workspace:*",
     "@nox-os/lab-services": "workspace:*",

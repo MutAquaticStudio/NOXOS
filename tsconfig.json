@@ -18,6 +18,7 @@
       "@nox-os/auth": ["./packages/auth/src/index.ts"],
       "@nox-os/config": ["./packages/config/src/index.ts"],
       "@nox-os/contracts": ["./packages/contracts/src/index.ts"],
+      "@nox-os/commercial-orders": ["./packages/commercial-orders/src/index.ts"],
       "@nox-os/database": ["./packages/database/src/index.ts"],
       "@nox-os/design-studio": ["./packages/design-studio/src/index.ts"],
       "@nox-os/design-studio/browser": ["./packages/design-studio/src/browser.ts"],

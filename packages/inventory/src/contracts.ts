@@ -25,10 +25,21 @@ export const movementTypeSchema = z.enum([
 ]);
 export type MovementType = z.infer<typeof movementTypeSchema>;
 
-export const movementSourceModuleSchema = z.enum(["MANUAL", "TRIAL", "PROCUREMENT", "PRODUCTION"]);
+export const movementSourceModuleSchema = z.enum([
+  "MANUAL",
+  "TRIAL",
+  "PROCUREMENT",
+  "PRODUCTION",
+  "COMMERCIAL"
+]);
 export type MovementSourceModule = z.infer<typeof movementSourceModuleSchema>;
 
-export const reservationSourceModuleSchema = z.enum(["MANUAL", "TRIAL", "PRODUCTION"]);
+export const reservationSourceModuleSchema = z.enum([
+  "MANUAL",
+  "TRIAL",
+  "PRODUCTION",
+  "COMMERCIAL"
+]);
 export type ReservationSourceModule = z.infer<typeof reservationSourceModuleSchema>;
 
 export const reservationStatusSchema = z.enum(["ACTIVE", "RELEASED", "CONSUMED", "CANCELLED"]);

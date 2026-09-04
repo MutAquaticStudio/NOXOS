@@ -165,6 +165,7 @@ jobs:
           G6_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g6-visual
           G7_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g7-visual
           G8_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g8-visual
+          G13_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g13-visual
       - id: g3-evidence
         run: |
           artifact_path="$RUNNER_TEMP/g3-evidence/G3_STAGING_${GITHUB_SHA}.env"
@@ -338,6 +339,27 @@ jobs:
         with:
           name: g12-staging-evidence-${{ github.sha }}
           path: ${{ steps.g12-evidence.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 365
+      - id: g13-evidence
+        run: |
+          artifact_path="$RUNNER_TEMP/g13-evidence/G13_STAGING_${GITHUB_SHA}.env"
+          node scripts/evidence/write-g13-staging-evidence.mjs "$artifact_path"
+          echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
+        env:
+          NOX_STAGING_URL: ${{ steps.deploy.outputs.staging_url }}
+      - name: Upload G13 exact-SHA Staging evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g13-staging-evidence-${{ github.sha }}
+          path: ${{ steps.g13-evidence.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 365
+      - name: Upload G13 Staging visual acceptance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g13-staging-visual-${{ github.sha }}
+          path: ${{ runner.temp }}/g13-visual
           if-no-files-found: error
           retention-days: 365
       - name: Record exact accepted Staging identity

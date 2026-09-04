@@ -93,6 +93,10 @@ const LazyProjectOperationsExperience = lazy(async () => {
   const module = await import("./project-operations");
   return { default: module.ProjectOperationsExperience };
 });
+const LazyCommercialOrdersExperience = lazy(async () => {
+  const module = await import("./commercial-orders");
+  return { default: module.CommercialOrdersExperience };
+});
 
 const publicIdentity = publicEnvironment({
   VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
@@ -409,6 +413,7 @@ function AuthenticatedApplication({
             definition.descriptor.id !== "procurement" &&
             definition.descriptor.id !== "production" &&
             definition.descriptor.id !== "quality-control" &&
+            definition.descriptor.id !== "commercial-orders" &&
             // Project Operations has its own route-based workspace below. Leaving
             // its generated registry entry here creates a higher-ranked duplicate
             // child route and shadows /project-operations/projects/:projectId.
@@ -439,7 +444,11 @@ function AuthenticatedApplication({
                   ? moduleDefinitions.find(
                       (definition) => definition.descriptor.id === "quality-control"
                     )
-                  : undefined);
+                  : location.pathname.startsWith("/commercial-orders")
+                    ? moduleDefinitions.find(
+                        (definition) => definition.descriptor.id === "commercial-orders"
+                      )
+                    : undefined);
   const density = activeDefinition ? toShellDensity(activeDefinition.uxProfile.density) : "DEFAULT";
   const isPlatformOwner = platformIdentity.identity?.platformRoleKey === "PLATFORM_OWNER";
   const hasNoWorkspace = tenantSelection.state === "ready" && tenantSelection.choices.length === 0;
@@ -652,6 +661,18 @@ function AuthenticatedApplication({
             element={
               <Suspense fallback={<p className="nox-ai-context">Loading Project Operations…</p>}>
                 <LazyProjectOperationsExperience api={api} tenantId={activeTenant?.tenantId} />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/commercial-orders/*"
+            element={
+              <Suspense fallback={<p className="nox-ai-context">Loading Commercial Orders…</p>}>
+                <LazyCommercialOrdersExperience
+                  api={api}
+                  tenantId={activeTenant?.tenantId}
+                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                />
               </Suspense>
             }
           />
