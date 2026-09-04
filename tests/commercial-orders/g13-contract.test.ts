@@ -7,6 +7,10 @@ const migration = readFileSync(
   resolve(process.cwd(), "supabase/migrations/20260905090000_g13_commercial_orders.sql"),
   "utf8"
 );
+const parentImmutabilityFix = readFileSync(
+  resolve(process.cwd(), "supabase/migrations/20260905093000_g13_fix_parent_immutability.sql"),
+  "utf8"
+);
 
 describe("G13 Commercial Orders contract", () => {
   it("creates exactly the eight authorized commercial tables and no finance truth", () => {
@@ -103,5 +107,13 @@ describe("G13 Commercial Orders contract", () => {
     );
     expect(verifier).toContain("order by batch.completed_at desc, batch.id desc limit 1");
     expect(verifier).not.toContain("order by batch.created_at desc limit 1");
+  });
+
+  it("keeps quote-line and order-line trigger fields in separate PL/pgSQL branches", () => {
+    expect(parentImmutabilityFix).toContain("elsif tg_table_name = 'order_lines' then");
+    expect(parentImmutabilityFix).toContain(
+      "elsif tg_table_name = 'order_lines' and new.order_id is distinct from old.order_id"
+    );
+    expect(parentImmutabilityFix).not.toContain("or (tg_table_name = 'order_lines'");
   });
 });
