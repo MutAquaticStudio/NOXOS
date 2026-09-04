@@ -222,7 +222,7 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
           "PROJECT_BLOCKER_UNRESOLVED",
           "Project has unresolved blocker."
         );
-      const phases = await this.phaseState(input.tenantId, p.id);
+      const phases = await this.phaseStateWith(tx, input.tenantId, p.id);
       if ((phases as any[]).some((x) => x.required && x.state !== "COMPLETE"))
         throw new ProjectOperationsProblem(
           409,
@@ -464,13 +464,22 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
           "PROJECT_ARTIFACT_NOT_FOUND",
           "Artifact not found."
         );
-      if (input.phasePlanId && input.relationship === "PRIMARY") {
+      if (input.phasePlanId) {
         const phase = (
           await tx<
             any[]
           >`select phase_key from project_operations.project_phase_plans where tenant_id=${input.tenantId} and id=${input.phasePlanId} and project_id=${p.id} for update`
         )[0];
-        if (!phase || !allowedPrimary[phase.phase_key].includes(input.artifactType))
+        if (!phase)
+          throw new ProjectOperationsProblem(
+            409,
+            "PROJECT_ARTIFACT_PHASE_MISMATCH",
+            "Artifact phase does not belong to this Project."
+          );
+        if (
+          input.relationship === "PRIMARY" &&
+          !allowedPrimary[phase.phase_key].includes(input.artifactType)
+        )
           throw new ProjectOperationsProblem(
             409,
             "PROJECT_ARTIFACT_PHASE_MISMATCH",
@@ -528,7 +537,7 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
       await tx`update project_operations.project_artifact_links set status='REVOKED',revoked_by_user_id=${input.actorUserId},revoked_at=now(),revocation_reason='Promoted alternate primary' where tenant_id=${input.tenantId} and project_id=${old.project_id} and phase_plan_id=${old.phase_plan_id} and relationship='PRIMARY' and status='ACTIVE'`;
       const r = await tx<
         any[]
-      >`update project_operations.project_artifact_links set relationship='PRIMARY' where id=${old.id} returning *`;
+      >`insert into project_operations.project_artifact_links (tenant_id,project_id,phase_plan_id,artifact_type,artifact_id,relationship,created_by_user_id) values (${input.tenantId},${old.project_id},${old.phase_plan_id},${old.artifact_type},${old.artifact_id},'PRIMARY',${input.actorUserId}) returning *`;
       await audit(
         tx,
         input,
@@ -563,14 +572,17 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
     });
   }
   async phaseState(tenantId: string, projectId: string) {
-    const phases = await this.sql<
+    return this.phaseStateWith(this.sql, tenantId, projectId);
+  }
+  private async phaseStateWith(sql: Db, tenantId: string, projectId: string) {
+    const phases = await sql<
       any[]
     >`select p.*,l.artifact_type,l.artifact_id from project_operations.project_phase_plans p left join project_operations.project_artifact_links l on l.tenant_id=p.tenant_id and l.phase_plan_id=p.id and l.relationship='PRIMARY' and l.status='ACTIVE' where p.tenant_id=${tenantId} and p.project_id=${projectId} order by p.phase_order`;
     return Promise.all(
       phases.map(async (p) => {
         if (!p.artifact_id)
           return { ...p, state: p.phase_order === 1 ? "AVAILABLE" : "NOT_STARTED" };
-        const a = await this.resolveArtifact({
+        const a = await this.resolveArtifactFrom(sql, {
           tenantId,
           artifactType: p.artifact_type,
           artifactId: p.artifact_id
@@ -582,7 +594,8 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
           "COMPLETED",
           "READY",
           "RELEASED",
-          "INTENT_CONFIRMED"
+          "INTENT_CONFIRMED",
+          "FINAL"
         ].includes(s)
           ? "COMPLETE"
           : ["CANCELLED", "ARCHIVED", "ABORTED", "REJECTED", "BLOCKED", "AMBIGUOUS"].includes(s)
@@ -633,16 +646,22 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
     artifactType: ProjectArtifactType;
     artifactId: string;
   }): Promise<ProjectArtifactReference | undefined> {
+    return this.resolveArtifactFrom(this.sql, input);
+  }
+  private async resolveArtifactFrom(
+    sql: Db,
+    input: { tenantId: string; artifactType: ProjectArtifactType; artifactId: string }
+  ): Promise<ProjectArtifactReference | undefined> {
     const q: Record<string, string> = {
       DESIGN_PROJECT: "select id,tenant_id,name label,status from design_studio.projects",
-      DESIGN_BRIEF: "select id,tenant_id,title label,status from design_studio.design_briefs",
+      DESIGN_BRIEF: "select id,tenant_id,raw_brief label,status from design_studio.design_briefs",
       FORMULA_VERSION:
         "select id,tenant_id,formula_id::text label,status from design_studio.formula_versions",
-      TRIAL: "select id,tenant_id,trial_code label,status from trial_sensory.trials",
+      TRIAL: "select id,tenant_id,id::text label,status from trial_sensory.trials",
       SENSORY_EVALUATION:
         "select id,tenant_id,id::text label,status from trial_sensory.sensory_evaluations",
       READINESS_ASSESSMENT:
-        "select id,tenant_id,id::text label,status from release_readiness.assessments",
+        "select id,tenant_id,id::text label,decision status from release_readiness.assessments",
       PRODUCTION_ORDER:
         "select id,tenant_id,order_number label,status from production.production_orders",
       PRODUCTION_BATCH:
@@ -654,7 +673,7 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
     };
     const query = q[input.artifactType];
     if (!query) return undefined;
-    const rows = await this.sql.unsafe(`${query} where tenant_id=$1 and id=$2`, [
+    const rows = await sql.unsafe(`${query} where tenant_id=$1 and id=$2`, [
       input.tenantId,
       input.artifactId
     ]);

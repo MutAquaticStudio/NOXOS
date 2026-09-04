@@ -146,6 +146,7 @@ create table project_operations.project_updates (
   resolves_update_id uuid,
   created_by_user_id uuid not null references platform.platform_users(id),
   created_at timestamptz not null default now(),
+  unique (tenant_id, id),
   foreign key (tenant_id, project_id) references project_operations.projects(tenant_id, id) on delete restrict,
   foreign key (tenant_id, phase_plan_id) references project_operations.project_phase_plans(tenant_id, id) on delete restrict,
   foreign key (tenant_id, task_id) references project_operations.project_tasks(tenant_id, id) on delete restrict,
@@ -170,3 +171,20 @@ alter table project_operations.project_artifact_links force row level security;
 alter table project_operations.project_updates force row level security;
 revoke all on all tables in schema project_operations from public, anon, authenticated;
 grant select, insert, update on all tables in schema project_operations to nox_app_runtime;
+
+-- The database role is server-only; tenant scope is resolved by the G2 request
+-- context and enforced by the Project Operations repositories. Browser roles have
+-- no grant on this private schema. Force RLS remains a defense against accidental
+-- direct access by a differently configured runtime role.
+create policy project_operations_runtime_access on project_operations.projects
+  for all to nox_app_runtime using (true) with check (true);
+create policy project_operations_runtime_access on project_operations.project_phase_plans
+  for all to nox_app_runtime using (true) with check (true);
+create policy project_operations_runtime_access on project_operations.project_tasks
+  for all to nox_app_runtime using (true) with check (true);
+create policy project_operations_runtime_access on project_operations.task_dependencies
+  for all to nox_app_runtime using (true) with check (true);
+create policy project_operations_runtime_access on project_operations.project_artifact_links
+  for all to nox_app_runtime using (true) with check (true);
+create policy project_operations_runtime_access on project_operations.project_updates
+  for all to nox_app_runtime using (true) with check (true);
