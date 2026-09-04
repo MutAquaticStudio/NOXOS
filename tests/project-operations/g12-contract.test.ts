@@ -19,6 +19,10 @@ const projectOperationsStore = readFileSync(
   resolve(root, "packages/database/src/project-operations-store.ts"),
   "utf8"
 );
+const taskTriggerRepair = readFileSync(
+  resolve(root, "supabase/migrations/20260905004500_g12_task_trigger_scope.sql"),
+  "utf8"
+);
 const stagingAcceptance = readFileSync(
   resolve(root, "scripts/verify/staging-g3-material-intelligence.ts"),
   "utf8"
@@ -118,5 +122,10 @@ describe("G12 Project Operations contract", () => {
   it("resolves an artifact link on the transaction that protects the mutation", () => {
     expect(projectOperationsStore).toContain("this.resolveArtifactFrom(tx, {");
     expect(projectOperationsStore).not.toContain("const artifact = await this.resolveArtifact({");
+  });
+  it("keeps the task trigger's project type resolution unambiguous", () => {
+    expect(taskTriggerRepair).toContain("resolved_project_type text;");
+    expect(taskTriggerRepair).toContain("select p.status, p.project_type");
+    expect(taskTriggerRepair).toContain("resolved_project_type <> 'CLIENT_SERVICE'");
   });
 });
