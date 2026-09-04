@@ -17,6 +17,7 @@ import {
   PostgresProductionStore,
   PostgresQualityControlStore,
   PostgresLabServicesStore,
+  createPostgresProjectOperationsStore,
   PostgresTrialInventoryPort,
   createRuntimeDatabase,
   probeDatabase
@@ -33,6 +34,10 @@ import { createProcurementApi, ProcurementApplication } from "@nox-os/procuremen
 import { createProductionApi, ProductionApplication } from "@nox-os/production";
 import { createQualityControlApi, QualityControlApplication } from "@nox-os/quality-control";
 import { createLabServicesApi, LabServicesApplication } from "@nox-os/lab-services";
+import {
+  createProjectOperationsApi,
+  ProjectOperationsApplication
+} from "@nox-os/project-operations";
 import {
   createReleaseReadinessApi,
   KnownLimitV1Policy,
@@ -165,6 +170,17 @@ const labServices =
         featureFlags
       })
     : undefined;
+const projectOperations =
+  runtimeDatabase && platformCore
+    ? createProjectOperationsApi({
+        application: new ProjectOperationsApplication(
+          createPostgresProjectOperationsStore(runtimeDatabase)
+        ),
+        authorization: platformCore,
+        definitions: [...moduleDefinitions, ...acceptanceModules],
+        featureFlags
+      })
+    : undefined;
 const designStudio =
   platformCore && designStudioStore && designStudioApplication
     ? createDesignStudioApi({
@@ -239,7 +255,8 @@ const foundationApi = createFoundationApi({
     ...(procurement ? [procurement] : []),
     ...(production ? [production] : []),
     ...(qualityControl ? [qualityControl] : []),
-    ...(labServices ? [labServices] : [])
+    ...(labServices ? [labServices] : []),
+    ...(projectOperations ? [projectOperations] : [])
   ],
   // Production release/start are bounded, multi-lot PostgreSQL transactions.
   // Keep the foundation timeout fail-safe while allowing the cloud runtime

@@ -89,6 +89,10 @@ const LazyLabServicesExperience = lazy(async () => {
   const module = await import("./lab-services");
   return { default: module.LabServicesExperience };
 });
+const LazyProjectOperationsExperience = lazy(async () => {
+  const module = await import("./project-operations");
+  return { default: module.ProjectOperationsExperience };
+});
 
 const publicIdentity = publicEnvironment({
   VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
@@ -404,7 +408,11 @@ function AuthenticatedApplication({
             definition.descriptor.id !== "inventory" &&
             definition.descriptor.id !== "procurement" &&
             definition.descriptor.id !== "production" &&
-            definition.descriptor.id !== "quality-control"
+            definition.descriptor.id !== "quality-control" &&
+            // Project Operations has its own route-based workspace below. Leaving
+            // its generated registry entry here creates a higher-ranked duplicate
+            // child route and shadows /project-operations/projects/:projectId.
+            definition.descriptor.id !== "project-operations"
         )
         .flatMap((definition) => [
           { path: definition.descriptor.routeRoot, definition },
@@ -636,6 +644,14 @@ function AuthenticatedApplication({
                   tenantId={activeTenant?.tenantId}
                   modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
                 />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/project-operations/*"
+            element={
+              <Suspense fallback={<p className="nox-ai-context">Loading Project Operations…</p>}>
+                <LazyProjectOperationsExperience api={api} tenantId={activeTenant?.tenantId} />
               </Suspense>
             }
           />

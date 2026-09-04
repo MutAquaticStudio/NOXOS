@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { chromium, type Page } from "@playwright/test";
 import {
   createPostgresLabServicesStore,
+  createPostgresProjectOperationsStore,
   createPostgresPlatformStore,
   createRuntimeDatabase,
   createStagingFixtureMaintenanceDatabase
@@ -202,6 +203,17 @@ try {
       ),
       200,
       "Lab Services entitlement"
+    );
+  }
+  for (const tenantId of [tenantA, tenantB]) {
+    expectStatus(
+      await api(
+        platformOwnerToken,
+        `/platform/tenants/${tenantId}/entitlements/module.project-operations`,
+        { method: "PUT", body: { enabled: true } }
+      ),
+      200,
+      "Project Operations entitlement"
     );
   }
   await runG11StagingAcceptance(tenantA, tenantB);
@@ -505,6 +517,7 @@ try {
       await mobileContext.close();
     }
     await runG4Acceptance(page, tenantA, tenantB);
+    await runG12StagingAcceptance(page, tenantA, tenantB);
   } finally {
     await browser.close();
   }
@@ -1184,6 +1197,568 @@ async function runG11StagingAcceptance(tenantA: string, tenantB: string): Promis
   console.log("G11_STAGING_LAB_SERVICES_ACCEPTANCE=PASS");
   console.log("G11_STAGING_DOWNSTREAM_SOURCES=PASS");
   console.log("G11_STAGING_TENANT_SECURITY=PASS");
+}
+
+async function runG12StagingAcceptance(
+  page: Page,
+  tenantA: string,
+  tenantB: string
+): Promise<void> {
+  const actor = token("B");
+  const sourceLines = [
+    {
+      lineOrder: 1,
+      serviceType: "FORMULATION_RND",
+      title: "G12 Design work",
+      scopeDescription: "Controlled G12 design scope.",
+      notes: null
+    },
+    {
+      lineOrder: 2,
+      serviceType: "TRIAL_EVALUATION",
+      title: "G12 Trial work",
+      scopeDescription: "Controlled G12 trial scope.",
+      notes: null
+    },
+    {
+      lineOrder: 3,
+      serviceType: "TECHNICAL_CONSULTING",
+      title: "G12 Review work",
+      scopeDescription: "Controlled G12 review scope.",
+      notes: null
+    }
+  ];
+  const customer = await api<{ customer: { id: string } }>(actor, "/lab-services/customers", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      customerCode: `G12_${suffix.slice(0, 10).toUpperCase()}`,
+      customerType: "BUSINESS",
+      displayName: `G12 Customer ${suffix.slice(0, 8)}`,
+      legalName: null,
+      taxIdentifier: null,
+      countryCode: "AU",
+      notes: "Disposable Project Operations acceptance fixture"
+    }
+  });
+  expectStatus(customer, 201, "G12 Customer creation");
+  expectStatus(
+    await api(actor, `/lab-services/customers/${customer.body.customer.id}/activate`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G12 Customer activation"
+  );
+  const order = await api<{ serviceOrder: { id: string } }>(actor, "/lab-services/service-orders", {
+    method: "POST",
+    tenantId: tenantA,
+    body: {
+      orderNumber: `G12_ORDER_${suffix.slice(0, 10).toUpperCase()}`,
+      customerId: customer.body.customer.id,
+      customerContactId: null,
+      customerExternalReference: null,
+      intakeSummary: "Confirmed immutable Service Order source for G12.",
+      requestedCompletionDate: null,
+      notes: null,
+      lines: sourceLines
+    }
+  });
+  expectStatus(order, 201, "G12 Service Order creation");
+  const orderId = order.body.serviceOrder.id;
+  expectStatus(
+    await api(actor, `/lab-services/service-orders/${orderId}/confirm`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G12 Service Order confirmation"
+  );
+  const source = await api<{
+    serviceOrder: { status: string; lines: Array<{ id: string; lineOrder: number }> };
+  }>(actor, `/lab-services/service-orders/${orderId}`, { tenantId: tenantA });
+  expectStatus(source, 200, "G12 confirmed Service Order source read");
+  if (
+    source.body.serviceOrder.status !== "CONFIRMED" ||
+    source.body.serviceOrder.lines.length !== 3
+  )
+    throw new Error("G12 requires exactly three immutable confirmed source lines.");
+
+  const formula = (
+    await maintenance<
+      {
+        id: string;
+        formula_id: string;
+        bundle_hash: string;
+        project_id: string;
+        source_brief_id: string;
+      }[]
+    >`
+      select v.id,v.formula_id,v.bundle_hash,f.project_id,f.source_brief_id
+      from design_studio.formula_versions v
+      join design_studio.formulas f on f.tenant_id=v.tenant_id and f.id=v.formula_id
+      where v.tenant_id=${tenantA} and v.status='FROZEN'
+      order by v.created_at desc limit 1
+    `
+  )[0];
+  if (!formula?.bundle_hash) throw new Error("G12 requires the accepted G4 FROZEN Formula seam.");
+  const upstreamBefore = await maintenance<{ source: string; records: string }[]>`
+    select 'g4' source, json_agg(x order by x.id)::text records from (
+      select id,status,updated_at from design_studio.formula_versions where tenant_id=${tenantA}
+    ) x
+    union all select 'g5', json_agg(x order by x.id)::text from (
+      select id,status,updated_at from trial_sensory.trials where tenant_id=${tenantA}
+    ) x
+    union all select 'g6', json_agg(x order by x.id)::text from (
+      select id,decision,assessed_at from release_readiness.assessments where tenant_id=${tenantA}
+    ) x
+    union all select 'g9', json_agg(x order by x.id)::text from (
+      select id,status,updated_at from production.production_orders where tenant_id=${tenantA}
+    ) x
+    union all select 'g10', json_agg(x order by x.id)::text from (
+      select id,decision,decided_at from quality_control.batch_release_decisions where tenant_id=${tenantA}
+    ) x
+    union all select 'g11', json_agg(x order by x.id)::text from (
+      select id,status,updated_at from lab_services.service_orders where tenant_id=${tenantA}
+    ) x
+  `;
+
+  const created = await api<{ project: { id: string; source_service_order_id?: string } }>(
+    actor,
+    "/project-operations/projects",
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        projectType: "CLIENT_SERVICE",
+        projectCode: `G12-OP-${suffix.slice(0, 10).toUpperCase()}`,
+        name: "Controlled Client Operational Project",
+        description: "Project Operations closure fixture",
+        sourceServiceOrderId: orderId,
+        ownerUserId: fixture("B").id,
+        priority: "HIGH",
+        targetStartDate: null,
+        targetCompletionDate: null
+      }
+    }
+  );
+  expectStatus(created, 201, "G12 Client Project creation");
+  const projectId = created.body.project.id;
+  expectError(
+    await api(actor, "/project-operations/projects", {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        projectType: "CLIENT_SERVICE",
+        projectCode: `G12-DUP-${suffix.slice(0, 10).toUpperCase()}`,
+        name: "Duplicate Client Project",
+        description: null,
+        sourceServiceOrderId: orderId,
+        ownerUserId: fixture("B").id,
+        priority: "NORMAL"
+      }
+    }),
+    409,
+    "PROJECT_SOURCE_SERVICE_ORDER_ALREADY_LINKED",
+    "G12 one Client Project per Service Order"
+  );
+  expectError(
+    await api(token("E"), `/project-operations/projects/${projectId}`, { tenantId: tenantB }),
+    404,
+    "PROJECT_NOT_FOUND",
+    "G12 cross-tenant Project read"
+  );
+
+  const phases = await api<{ phases: Array<{ id: string; phase_key: string }> }>(
+    actor,
+    `/project-operations/projects/${projectId}/phases`,
+    {
+      method: "PUT",
+      tenantId: tenantA,
+      body: {
+        phases: [
+          {
+            phaseKey: "DESIGN",
+            phaseOrder: 1,
+            required: true,
+            ownerUserId: fixture("B").id,
+            plannedStartDate: null,
+            plannedDueDate: null,
+            notes: "Derived from G4 only"
+          }
+        ]
+      }
+    }
+  );
+  expectStatus(phases, 200, "G12 phase plan creation");
+  const designPhaseId = phases.body.phases.find((phase) => phase.phase_key === "DESIGN")?.id;
+  if (!designPhaseId) throw new Error("G12 Design phase plan was not created.");
+  expectError(
+    await api(actor, `/project-operations/projects/${projectId}/artifacts`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        phasePlanId: designPhaseId,
+        artifactType: "TRIAL",
+        artifactId: formula.id,
+        relationship: "PRIMARY"
+      }
+    }),
+    404,
+    "PROJECT_ARTIFACT_NOT_FOUND",
+    "G12 typed artifact existence"
+  );
+  const primary = await api<{ link: { id: string } }>(
+    actor,
+    `/project-operations/projects/${projectId}/artifacts`,
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        phasePlanId: designPhaseId,
+        artifactType: "FORMULA_VERSION",
+        artifactId: formula.id,
+        relationship: "PRIMARY"
+      }
+    }
+  );
+  expectStatus(primary, 201, "G12 primary Formula artifact link");
+  const reference = await api<{ link: { id: string } }>(
+    actor,
+    `/project-operations/projects/${projectId}/artifacts`,
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        phasePlanId: designPhaseId,
+        artifactType: "FORMULA_VERSION",
+        artifactId: formula.id,
+        relationship: "REFERENCE"
+      }
+    }
+  );
+  expectStatus(reference, 201, "G12 reference Formula artifact link");
+  const promoted = await api<{ link: { id: string } }>(
+    actor,
+    `/project-operations/artifact-links/${reference.body.link.id}/promote-primary`,
+    { method: "POST", tenantId: tenantA }
+  );
+  expectStatus(promoted, 200, "G12 primary artifact promotion");
+  const activePrimaries = await maintenance<{ count: string }[]>`
+    select count(*)::text count from project_operations.project_artifact_links
+    where tenant_id=${tenantA} and project_id=${projectId} and phase_plan_id=${designPhaseId}
+      and relationship='PRIMARY' and status='ACTIVE'
+  `;
+  if (activePrimaries[0]?.count !== "1")
+    throw new Error("G12 allowed more than one active primary.");
+  let linkMutationRejected = false;
+  try {
+    await maintenance`
+      update project_operations.project_artifact_links set relationship='OUTPUT'
+      where id=${primary.body.link.id}
+    `;
+  } catch {
+    linkMutationRejected = true;
+  }
+  if (!linkMutationRejected) throw new Error("G12 Artifact Link history was mutable.");
+
+  const tasks: Array<{ id: string; sourceLineId: string }> = [];
+  for (const sourceLine of source.body.serviceOrder.lines.slice(0, 2)) {
+    const task = await api<{ task: { id: string } }>(
+      actor,
+      `/project-operations/projects/${projectId}/tasks`,
+      {
+        method: "POST",
+        tenantId: tenantA,
+        body: {
+          phasePlanId: designPhaseId,
+          sourceServiceOrderLineId: sourceLine.id,
+          taskKind: "TASK",
+          title: `Required work ${sourceLine.lineOrder}`,
+          description: null,
+          priority: "NORMAL",
+          required: true,
+          assigneeUserId: fixture("B").id,
+          dueDate: null
+        }
+      }
+    );
+    expectStatus(task, 201, "G12 scoped task creation");
+    tasks.push({ id: task.body.task.id, sourceLineId: sourceLine.id });
+  }
+  expectError(
+    await api(actor, `/project-operations/projects/${projectId}/activate`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "PROJECT_SCOPE_NOT_COVERED",
+    "G12 activation scope coverage guard"
+  );
+  const finalSourceLine = source.body.serviceOrder.lines[2];
+  const finalTask = await api<{ task: { id: string } }>(
+    actor,
+    `/project-operations/projects/${projectId}/tasks`,
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        phasePlanId: designPhaseId,
+        sourceServiceOrderLineId: finalSourceLine.id,
+        taskKind: "MILESTONE",
+        title: "Required review milestone",
+        description: null,
+        priority: "HIGH",
+        required: true,
+        assigneeUserId: null,
+        dueDate: null
+      }
+    }
+  );
+  expectStatus(finalTask, 201, "G12 final scope task creation");
+  tasks.push({ id: finalTask.body.task.id, sourceLineId: finalSourceLine.id });
+  expectStatus(
+    await api(actor, `/project-operations/projects/${projectId}/activate`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G12 Project activation"
+  );
+
+  expectStatus(
+    await api(actor, `/project-operations/tasks/${tasks[1].id}/dependencies`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: { predecessorTaskId: tasks[0].id }
+    }),
+    201,
+    "G12 dependency A to B"
+  );
+  expectStatus(
+    await api(actor, `/project-operations/tasks/${tasks[2].id}/dependencies`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: { predecessorTaskId: tasks[1].id }
+    }),
+    201,
+    "G12 dependency B to C"
+  );
+  expectError(
+    await api(actor, `/project-operations/tasks/${tasks[0].id}/dependencies`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: { predecessorTaskId: tasks[2].id }
+    }),
+    409,
+    "PROJECT_DEPENDENCY_CYCLE",
+    "G12 dependency cycle guard"
+  );
+  expectError(
+    await api(actor, `/project-operations/tasks/${tasks[1].id}/start`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "PROJECT_TASK_DEPENDENCY_UNSATISFIED",
+    "G12 predecessor completion guard"
+  );
+  expectStatus(
+    await api(actor, `/project-operations/tasks/${tasks[0].id}/complete`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G12 task A completion"
+  );
+  expectStatus(
+    await api(actor, `/project-operations/tasks/${tasks[1].id}/start`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G12 task B start"
+  );
+  expectStatus(
+    await api(actor, `/project-operations/tasks/${tasks[1].id}/complete`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G12 task B completion"
+  );
+  expectStatus(
+    await api(actor, `/project-operations/tasks/${tasks[2].id}/complete`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G12 milestone completion"
+  );
+  const blocker = await api<{ update: { id: string } }>(
+    actor,
+    `/project-operations/projects/${projectId}/updates`,
+    {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        phasePlanId: designPhaseId,
+        taskId: null,
+        updateType: "BLOCKER",
+        summary: "Controlled completion blocker",
+        resolvesUpdateId: null
+      }
+    }
+  );
+  expectStatus(blocker, 201, "G12 blocker creation");
+  expectError(
+    await api(actor, `/project-operations/projects/${projectId}/complete`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    409,
+    "PROJECT_BLOCKER_UNRESOLVED",
+    "G12 unresolved blocker completion guard"
+  );
+  expectStatus(
+    await api(actor, `/project-operations/projects/${projectId}/updates`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        phasePlanId: designPhaseId,
+        taskId: null,
+        updateType: "BLOCKER_RESOLVED",
+        summary: "Controlled blocker resolution",
+        resolvesUpdateId: blocker.body.update.id
+      }
+    }),
+    201,
+    "G12 blocker resolution"
+  );
+  expectError(
+    await api(actor, `/project-operations/projects/${projectId}/updates`, {
+      method: "POST",
+      tenantId: tenantA,
+      body: {
+        phasePlanId: null,
+        taskId: null,
+        updateType: "BLOCKER_RESOLVED",
+        summary: "Duplicate blocker resolution",
+        resolvesUpdateId: blocker.body.update.id
+      }
+    }),
+    409,
+    "PROJECT_BLOCKER_ALREADY_RESOLVED",
+    "G12 single blocker resolution"
+  );
+  let updateMutationRejected = false;
+  try {
+    await maintenance`
+      update project_operations.project_updates set summary='forbidden mutation'
+      where id=${blocker.body.update.id}
+    `;
+  } catch {
+    updateMutationRejected = true;
+  }
+  if (!updateMutationRejected) throw new Error("G12 Project Update history was mutable.");
+
+  const phaseState = await api<{ phases: Array<{ state: string; phase_key: string }> }>(
+    actor,
+    `/project-operations/projects/${projectId}/phase-state`,
+    { tenantId: tenantA }
+  );
+  expectStatus(phaseState, 200, "G12 derived phase state");
+  if (phaseState.body.phases.find((phase) => phase.phase_key === "DESIGN")?.state !== "COMPLETE")
+    throw new Error("G12 FROZEN Formula did not derive DESIGN phase COMPLETE.");
+  expectStatus(
+    await api(actor, `/project-operations/projects/${projectId}/complete`, {
+      method: "POST",
+      tenantId: tenantA
+    }),
+    200,
+    "G12 Project completion"
+  );
+  const projection = await createPostgresProjectOperationsStore(runtime).findProjectForCommercial({
+    tenantId: tenantA,
+    projectId
+  });
+  if (
+    !projection ||
+    projection.status !== "COMPLETED" ||
+    projection.sourceServiceOrderId !== orderId ||
+    projection.requiredTaskCount !== 3 ||
+    projection.completedRequiredTaskCount !== 3
+  )
+    throw new Error("G12 ProjectOperationsSource did not expose a bounded G13 projection.");
+  if (
+    await createPostgresProjectOperationsStore(runtime).findProjectForCommercial({
+      tenantId: tenantB,
+      projectId
+    })
+  )
+    throw new Error("G12 ProjectOperationsSource leaked a cross-tenant projection.");
+
+  const upstreamAfter = await maintenance<{ source: string; records: string }[]>`
+    select 'g4' source, json_agg(x order by x.id)::text records from (
+      select id,status,updated_at from design_studio.formula_versions where tenant_id=${tenantA}
+    ) x
+    union all select 'g5', json_agg(x order by x.id)::text from (
+      select id,status,updated_at from trial_sensory.trials where tenant_id=${tenantA}
+    ) x
+    union all select 'g6', json_agg(x order by x.id)::text from (
+      select id,decision,assessed_at from release_readiness.assessments where tenant_id=${tenantA}
+    ) x
+    union all select 'g9', json_agg(x order by x.id)::text from (
+      select id,status,updated_at from production.production_orders where tenant_id=${tenantA}
+    ) x
+    union all select 'g10', json_agg(x order by x.id)::text from (
+      select id,decision,decided_at from quality_control.batch_release_decisions where tenant_id=${tenantA}
+    ) x
+    union all select 'g11', json_agg(x order by x.id)::text from (
+      select id,status,updated_at from lab_services.service_orders where tenant_id=${tenantA}
+    ) x
+  `;
+  if (!isDeepStrictEqual(upstreamBefore, upstreamAfter))
+    throw new Error("G12 commands mutated upstream G4-G11 authority.");
+  const orderAfter = await api<{ serviceOrder: { status: string } }>(
+    actor,
+    `/lab-services/service-orders/${orderId}`,
+    { tenantId: tenantA }
+  );
+  expectStatus(orderAfter, 200, "G12 source Service Order preservation");
+  if (orderAfter.body.serviceOrder.status !== "CONFIRMED")
+    throw new Error("G12 completion changed the G11 Service Order lifecycle.");
+
+  await signInInBrowser(page, fixture("B"));
+  await page.goto(new URL("/project-operations", stagingUrl).toString(), {
+    waitUntil: "networkidle"
+  });
+  await expectHeading(page, "Project Operations");
+  await page.goto(new URL(`/project-operations/projects/${projectId}`, stagingUrl).toString(), {
+    waitUntil: "networkidle"
+  });
+  await expectVisible(page, "Operational Project");
+  await signOutInBrowser(page);
+
+  const auditActions = await maintenance<{ action: string }[]>`
+    select action from platform.audit_events
+    where tenant_id=${tenantA} and action like 'project-operations.%'
+  `;
+  for (const action of [
+    "project-operations.project.created",
+    "project-operations.phase-plan.updated",
+    "project-operations.task.created",
+    "project-operations.dependency.created",
+    "project-operations.artifact-linked",
+    "project-operations.primary-artifact-promoted",
+    "project-operations.update.created",
+    "project-operations.project.completed"
+  ])
+    if (!auditActions.some((event) => event.action === action))
+      throw new Error(`G12 transactional audit event missing: ${action}.`);
+  console.log("G12_STAGING_PROJECT_OPERATIONS_ACCEPTANCE=PASS");
+  console.log("G12_STAGING_CROSS_GATE_AUTHORITY=PASS");
+  console.log("G12_STAGING_TENANT_SECURITY=PASS");
 }
 
 async function seedPlatformReferenceMaterial(): Promise<MaterialSummary> {

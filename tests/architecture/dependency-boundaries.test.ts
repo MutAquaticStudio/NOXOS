@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import { moduleDefinitions } from "../../apps/nox-os/src/modules/definitions";
 
 function sourceFiles(directory: string): string[] {
-  return fg.sync([directory + "/**/*.{ts,tsx}"], { onlyFiles: true });
+  return fg.sync([directory + "/**/*.{ts,tsx}"], {
+    onlyFiles: true,
+    ignore: ["**/node_modules/**", "**/dist/**", "**/.vercel/**"]
+  });
 }
 
 function importsFrom(directory: string): string[] {
@@ -78,10 +81,10 @@ describe("dependency architecture", () => {
   });
 
   it("keeps engineering-governance names out of runtime route literals", () => {
-    const runtimeSources = sourceFiles("apps/nox-os").map((file) => readFileSync(file, "utf8"));
     const forbiddenRuntimeRoute =
       /["'`]\/(?:api\/v1\/)?(?:gate-[^"'`/]*|g[0-9]+(?:\/|["'`])|phase-[^"'`/]*|milestone-[^"'`/]*)/i;
 
-    expect(runtimeSources.join("\n")).not.toMatch(forbiddenRuntimeRoute);
+    for (const file of sourceFiles("apps/nox-os"))
+      expect(readFileSync(file, "utf8")).not.toMatch(forbiddenRuntimeRoute);
   }, 15000);
 });

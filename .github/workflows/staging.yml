@@ -326,6 +326,20 @@ jobs:
           path: ${{ steps.g11-evidence.outputs.artifact_path }}
           if-no-files-found: error
           retention-days: 365
+      - id: g12-evidence
+        run: |
+          artifact_path="$RUNNER_TEMP/g12-evidence/G12_STAGING_${GITHUB_SHA}.env"
+          node scripts/evidence/write-g12-staging-evidence.mjs "$artifact_path"
+          echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
+        env:
+          NOX_STAGING_URL: ${{ steps.deploy.outputs.staging_url }}
+      - name: Upload G12 exact-SHA Staging evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g12-staging-evidence-${{ github.sha }}
+          path: ${{ steps.g12-evidence.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 365
       - name: Record exact accepted Staging identity
         run: |
           echo "EXPECTED_STAGING_SHA=${GITHUB_SHA}"

@@ -117,6 +117,11 @@ try {
       key: "module.lab-services",
       enabled: true
     });
+    await store.upsertTenantEntitlement({
+      tenantId: tenant.id,
+      key: "module.project-operations",
+      enabled: true
+    });
     return tenant;
   });
 

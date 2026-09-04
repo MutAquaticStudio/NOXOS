@@ -10,6 +10,7 @@ export * from "./release-readiness-store.js";
 export * from "./production-store.js";
 export * from "./quality-control-store.js";
 export * from "./lab-services-store.js";
+export * from "./project-operations-store.js";
 export * from "./staging-fixture-maintenance.js";
 
 export type RuntimeDatabaseOptions = {

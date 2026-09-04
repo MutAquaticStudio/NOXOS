@@ -21,6 +21,7 @@
     "@nox-os/platform": "workspace:*",
     "@nox-os/procurement": "workspace:*",
     "@nox-os/production": "workspace:*",
+    "@nox-os/project-operations": "workspace:*",
     "@nox-os/quality-control": "workspace:*",
     "@nox-os/release-readiness": "workspace:*",
     "@nox-os/scientific": "workspace:*",
