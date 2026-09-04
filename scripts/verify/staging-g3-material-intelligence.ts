@@ -1308,7 +1308,8 @@ async function runG12StagingAcceptance(
   if (!formula?.bundle_hash) throw new Error("G12 requires the accepted G4 FROZEN Formula seam.");
   const upstreamBefore = await maintenance<{ source: string; records: string }[]>`
     select 'g4' source, json_agg(x order by x.id)::text records from (
-      select id,status,updated_at from design_studio.formula_versions where tenant_id=${tenantA}
+      select id,status,bundle_hash,frozen_at,created_at
+      from design_studio.formula_versions where tenant_id=${tenantA}
     ) x
     union all select 'g5', json_agg(x order by x.id)::text from (
       select id,status,updated_at from trial_sensory.trials where tenant_id=${tenantA}
