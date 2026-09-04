@@ -89,6 +89,10 @@ const LazyLabServicesExperience = lazy(async () => {
   const module = await import("./lab-services");
   return { default: module.LabServicesExperience };
 });
+const LazyProjectOperationsExperience = lazy(async () => {
+  const module = await import("./project-operations");
+  return { default: module.ProjectOperationsExperience };
+});
 
 const publicIdentity = publicEnvironment({
   VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
@@ -636,6 +640,14 @@ function AuthenticatedApplication({
                   tenantId={activeTenant?.tenantId}
                   modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
                 />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/project-operations/*"
+            element={
+              <Suspense fallback={<p className="nox-ai-context">Loading Project Operations…</p>}>
+                <LazyProjectOperationsExperience api={api} />
               </Suspense>
             }
           />

@@ -1,0 +1,717 @@
+import type { Sql, TransactionSql } from "postgres";
+import type {
+  ProjectArtifactReference,
+  ProjectArtifactType,
+  ProjectOperationsCommercialProjection,
+  ProjectOperationsStore
+} from "@nox-os/project-operations";
+import { ProjectOperationsProblem } from "@nox-os/project-operations";
+
+type Db = Sql | TransactionSql;
+const audit = async (
+  sql: Db,
+  c: { tenantId: string; actorUserId: string; requestId: string; correlationId: string },
+  action: string,
+  type: string,
+  id: string
+) =>
+  sql`insert into platform.audit_events (tenant_id,actor_user_id,action,resource_type,resource_id,request_id,correlation_id) values (${c.tenantId},${c.actorUserId},${action},${type},${id},${c.requestId},${c.correlationId})`;
+const activeMember = async (sql: Db, tenantId: string, userId: string) =>
+  (
+    await sql`select 1 from platform.tenant_memberships m join platform.platform_users u on u.id=m.user_id where m.tenant_id=${tenantId} and m.user_id=${userId} and m.status='ACTIVE' and u.status='ACTIVE'`
+  )[0] !== undefined;
+const project = async (sql: Db, tenantId: string, id: string, lock = false) => {
+  const r = lock
+    ? await sql`select * from project_operations.projects where tenant_id=${tenantId} and id=${id} for update`
+    : await sql`select * from project_operations.projects where tenant_id=${tenantId} and id=${id}`;
+  if (!r[0])
+    throw new ProjectOperationsProblem(
+      404,
+      "PROJECT_NOT_FOUND",
+      "Operational Project was not found."
+    );
+  return r[0] as any;
+};
+const allowedPrimary: Record<string, readonly string[]> = {
+  BRIEF: ["DESIGN_BRIEF"],
+  DESIGN: ["DESIGN_PROJECT", "FORMULA_VERSION"],
+  TRIAL: ["TRIAL"],
+  SENSORY: ["SENSORY_EVALUATION"],
+  READINESS: ["READINESS_ASSESSMENT"],
+  PRODUCTION: ["PRODUCTION_ORDER", "PRODUCTION_BATCH"],
+  QC_RELEASE: ["QC_INSPECTION", "BATCH_RELEASE_DECISION"]
+};
+
+export class PostgresProjectOperationsStore implements ProjectOperationsStore {
+  constructor(private readonly sql: Sql) {}
+  async listProjects(tenantId: string) {
+    return this
+      .sql`select p.*, count(t.id) filter(where t.required)::int as required_task_count, count(t.id) filter(where t.required and t.status='DONE')::int as completed_required_task_count from project_operations.projects p left join project_operations.project_tasks t on t.tenant_id=p.tenant_id and t.project_id=p.id where p.tenant_id=${tenantId} group by p.id order by p.updated_at desc`;
+  }
+  async findProject(tenantId: string, id: string) {
+    const p = await this
+      .sql`select * from project_operations.projects where tenant_id=${tenantId} and id=${id}`;
+    if (!p[0]) return undefined;
+    const [phases, tasks, links, updates] = await Promise.all([
+      this
+        .sql`select * from project_operations.project_phase_plans where tenant_id=${tenantId} and project_id=${id} order by phase_order`,
+      this
+        .sql`select * from project_operations.project_tasks where tenant_id=${tenantId} and project_id=${id} order by created_at`,
+      this
+        .sql`select * from project_operations.project_artifact_links where tenant_id=${tenantId} and project_id=${id} order by created_at`,
+      this
+        .sql`select * from project_operations.project_updates where tenant_id=${tenantId} and project_id=${id} order by created_at`
+    ]);
+    return { project: p[0], phases, tasks, links, updates };
+  }
+  async createProject(input: any) {
+    return this.sql.begin(async (tx) => {
+      if (!(await activeMember(tx, input.tenantId, input.ownerUserId)))
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_OWNER_NOT_ACTIVE_MEMBER",
+          "Project owner must be an active Tenant member."
+        );
+      if (input.projectType === "CLIENT_SERVICE") {
+        const source =
+          await tx`select o.id,o.status from lab_services.service_orders o where o.tenant_id=${input.tenantId} and o.id=${input.sourceServiceOrderId}`;
+        const lines =
+          await tx`select id from lab_services.service_order_lines where tenant_id=${input.tenantId} and service_order_id=${input.sourceServiceOrderId}`;
+        if (!source[0] || !["CONFIRMED", "IN_PROGRESS"].includes(source[0].status) || !lines.length)
+          throw new ProjectOperationsProblem(
+            409,
+            "PROJECT_SOURCE_INVALID",
+            "Confirmed Service Order with scope is required."
+          );
+      }
+      const rows = await tx<
+        any[]
+      >`insert into project_operations.projects (tenant_id,project_code,project_type,name,description,source_service_order_id,owner_user_id,priority,created_by_user_id,target_start_date,target_completion_date) values (${input.tenantId},${input.projectCode},${input.projectType},${input.name},${input.description ?? null},${input.sourceServiceOrderId ?? null},${input.ownerUserId},${input.priority},${input.actorUserId},${input.targetStartDate ?? null},${input.targetCompletionDate ?? null}) returning *`;
+      await audit(
+        tx,
+        input,
+        "project-operations.project.created",
+        "OperationalProject",
+        rows[0].id
+      );
+      return rows[0];
+    });
+  }
+  async updateProject(input: any) {
+    return this.sql.begin(async (tx) => {
+      const p = await project(tx, input.tenantId, input.projectId, true);
+      if (["COMPLETED", "CANCELLED"].includes(p.status))
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_TERMINAL",
+          "Terminal Project is immutable."
+        );
+      if (
+        input.changes.ownerUserId &&
+        !(await activeMember(tx, input.tenantId, input.changes.ownerUserId))
+      )
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_OWNER_NOT_ACTIVE_MEMBER",
+          "Owner must be active."
+        );
+      const c = input.changes;
+      const r = await tx<
+        any[]
+      >`update project_operations.projects set name=coalesce(${c.name ?? null},name),description=coalesce(${c.description ?? null},description),owner_user_id=coalesce(${c.ownerUserId ?? null},owner_user_id),priority=coalesce(${c.priority ?? null},priority),target_start_date=coalesce(${c.targetStartDate ?? null},target_start_date),target_completion_date=coalesce(${c.targetCompletionDate ?? null},target_completion_date),updated_at=now() where tenant_id=${input.tenantId} and id=${p.id} returning *`;
+      await audit(tx, input, "project-operations.project.updated", "OperationalProject", p.id);
+      return r[0];
+    });
+  }
+  async activateProject(input: any) {
+    return this.sql.begin(async (tx) => {
+      const p = await project(tx, input.tenantId, input.projectId, true);
+      if (p.status !== "DRAFT")
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_NOT_ACTIVATABLE",
+          "Only DRAFT Project can activate."
+        );
+      if (!(await activeMember(tx, input.tenantId, p.owner_user_id)))
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_OWNER_NOT_ACTIVE_MEMBER",
+          "Owner must be active."
+        );
+      const phases =
+        await tx`select id from project_operations.project_phase_plans where tenant_id=${input.tenantId} and project_id=${p.id}`;
+      const tasks =
+        await tx`select * from project_operations.project_tasks where tenant_id=${input.tenantId} and project_id=${p.id}`;
+      if (!phases.length && !tasks.length)
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_PLAN_REQUIRED",
+          "Project needs a task or phase plan."
+        );
+      await this.assertScope(tx, input.tenantId, p, tasks, false);
+      const r = await tx<
+        any[]
+      >`update project_operations.projects set status='ACTIVE',activated_by_user_id=${input.actorUserId},activated_at=now(),updated_at=now() where id=${p.id} returning *`;
+      await audit(tx, input, "project-operations.project.activated", "OperationalProject", p.id);
+      return r[0];
+    });
+  }
+  async holdProject(input: any) {
+    return this.transition(input, "ACTIVE", "ON_HOLD", "held", "project-operations.project.held");
+  }
+  async resumeProject(input: any) {
+    return this.transition(
+      input,
+      "ON_HOLD",
+      "ACTIVE",
+      "resumed",
+      "project-operations.project.resumed"
+    );
+  }
+  private async transition(input: any, from: string, to: string, label: string, action: string) {
+    return this.sql.begin(async (tx) => {
+      const p = await project(tx, input.tenantId, input.projectId, true);
+      if (p.status !== from)
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_STATE_INVALID",
+          "Project transition is invalid."
+        );
+      if (to === "ON_HOLD" && !input.reason)
+        throw new ProjectOperationsProblem(
+          400,
+          "PROJECT_HOLD_REASON_REQUIRED",
+          "Hold reason required."
+        );
+      if (to === "ACTIVE" && p.project_type === "CLIENT_SERVICE")
+        await this.assertSourceLive(tx, input.tenantId, p);
+      const r = await tx<
+        any[]
+      >`update project_operations.projects set status=${to},hold_reason=${to === "ON_HOLD" ? input.reason : null},${to === "ON_HOLD" ? tx`held_by_user_id=${input.actorUserId},held_at=now()` : tx`resumed_by_user_id=${input.actorUserId},resumed_at=now()`},updated_at=now() where id=${p.id} returning *`;
+      await audit(tx, input, action, "OperationalProject", p.id);
+      return r[0];
+    });
+  }
+  async completeProject(input: any) {
+    return this.sql.begin(async (tx) => {
+      const p = await project(tx, input.tenantId, input.projectId, true);
+      if (p.status !== "ACTIVE")
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_NOT_COMPLETABLE",
+          "Project is not active."
+        );
+      const tasks = await tx<
+        any[]
+      >`select * from project_operations.project_tasks where tenant_id=${input.tenantId} and project_id=${p.id} for update`;
+      if (
+        tasks.some((t) => t.status === "IN_PROGRESS") ||
+        tasks.some((t) => t.required && t.status !== "DONE")
+      )
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_TASKS_INCOMPLETE",
+          "Required Tasks must be DONE."
+        );
+      await this.assertScope(tx, input.tenantId, p, tasks, true);
+      const blockers =
+        await tx`select 1 from project_operations.project_updates b where b.tenant_id=${input.tenantId} and b.project_id=${p.id} and b.update_type='BLOCKER' and not exists(select 1 from project_operations.project_updates r where r.tenant_id=b.tenant_id and r.resolves_update_id=b.id)`;
+      if (blockers[0])
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_BLOCKER_UNRESOLVED",
+          "Project has unresolved blocker."
+        );
+      const phases = await this.phaseState(input.tenantId, p.id);
+      if ((phases as any[]).some((x) => x.required && x.state !== "COMPLETE"))
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_PHASES_INCOMPLETE",
+          "Required phases must be complete."
+        );
+      const r = await tx<
+        any[]
+      >`update project_operations.projects set status='COMPLETED',completed_by_user_id=${input.actorUserId},completed_at=now(),updated_at=now() where id=${p.id} returning *`;
+      await audit(tx, input, "project-operations.project.completed", "OperationalProject", p.id);
+      return r[0];
+    });
+  }
+  async cancelProject(input: any) {
+    return this.sql.begin(async (tx) => {
+      const p = await project(tx, input.tenantId, input.projectId, true);
+      if (!["DRAFT", "ACTIVE", "ON_HOLD"].includes(p.status))
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_STATE_INVALID",
+          "Project cannot be cancelled."
+        );
+      if (p.status !== "DRAFT" && !input.reason)
+        throw new ProjectOperationsProblem(
+          400,
+          "PROJECT_CANCELLATION_REASON_REQUIRED",
+          "Cancellation reason required."
+        );
+      const r = await tx<
+        any[]
+      >`update project_operations.projects set status='CANCELLED',cancellation_reason=${input.reason ?? null},cancelled_by_user_id=${input.actorUserId},cancelled_at=now(),updated_at=now() where id=${p.id} returning *`;
+      await audit(tx, input, "project-operations.project.cancelled", "OperationalProject", p.id);
+      return r[0];
+    });
+  }
+  async replacePhasePlans(input: any) {
+    return this.sql.begin(async (tx) => {
+      const p = await project(tx, input.tenantId, input.projectId, true);
+      if (p.status !== "DRAFT")
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_PHASE_IMMUTABLE",
+          "Phase identity is frozen after activation."
+        );
+      await tx`delete from project_operations.project_phase_plans where tenant_id=${input.tenantId} and project_id=${p.id}`;
+      for (const phase of input.phases)
+        await tx`insert into project_operations.project_phase_plans (tenant_id,project_id,phase_key,phase_order,required,owner_user_id,planned_start_date,planned_due_date,notes,created_by_user_id) values (${input.tenantId},${p.id},${phase.phaseKey},${phase.phaseOrder},${phase.required},${phase.ownerUserId ?? null},${phase.plannedStartDate ?? null},${phase.plannedDueDate ?? null},${phase.notes ?? null},${input.actorUserId})`;
+      await audit(tx, input, "project-operations.phase-plan.updated", "OperationalProject", p.id);
+      return tx`select * from project_operations.project_phase_plans where tenant_id=${input.tenantId} and project_id=${p.id} order by phase_order`;
+    });
+  }
+  async createTask(input: any) {
+    return this.sql.begin(async (tx) => {
+      const p = await project(tx, input.tenantId, input.projectId, true);
+      if (["COMPLETED", "CANCELLED"].includes(p.status))
+        throw new ProjectOperationsProblem(409, "PROJECT_TERMINAL", "Project terminal.");
+      if (input.assigneeUserId && !(await activeMember(tx, input.tenantId, input.assigneeUserId)))
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_ASSIGNEE_NOT_ACTIVE_MEMBER",
+          "Assignee not active."
+        );
+      if (p.project_type === "INTERNAL" && input.sourceServiceOrderLineId)
+        throw new ProjectOperationsProblem(
+          400,
+          "PROJECT_TASK_SOURCE_SCOPE_INVALID",
+          "Internal task cannot have Service Order scope."
+        );
+      if (input.sourceServiceOrderLineId)
+        await this.assertLine(tx, input.tenantId, p, input.sourceServiceOrderLineId);
+      const r = await tx<
+        any[]
+      >`insert into project_operations.project_tasks (tenant_id,project_id,phase_plan_id,source_service_order_line_id,task_kind,title,description,priority,required,assignee_user_id, due_date,created_by_user_id) values (${input.tenantId},${p.id},${input.phasePlanId ?? null},${input.sourceServiceOrderLineId ?? null},${input.taskKind},${input.title},${input.description ?? null},${input.priority},${input.required},${input.assigneeUserId ?? null},${input.dueDate ?? null},${input.actorUserId}) returning *`;
+      await audit(tx, input, "project-operations.task.created", "ProjectTask", r[0].id);
+      return r[0];
+    });
+  }
+  async updateTask(input: any) {
+    const t = await this.sql<
+      any[]
+    >`select * from project_operations.project_tasks where tenant_id=${input.tenantId} and id=${input.taskId}`;
+    if (!t[0]) throw new ProjectOperationsProblem(404, "PROJECT_TASK_NOT_FOUND", "Task not found.");
+    if (t[0].status !== "TODO")
+      throw new ProjectOperationsProblem(
+        409,
+        "PROJECT_TASK_NOT_EDITABLE",
+        "Only TODO Task can change identity."
+      );
+    return this.sql.begin(async (tx) => {
+      const c = input.changes;
+      const r = await tx<
+        any[]
+      >`update project_operations.project_tasks set title=coalesce(${c.title ?? null},title),description=coalesce(${c.description ?? null},description),priority=coalesce(${c.priority ?? null},priority),required=coalesce(${c.required ?? null},required),assignee_user_id=coalesce(${c.assigneeUserId ?? null},assignee_user_id),due_date=coalesce(${c.dueDate ?? null},due_date),updated_at=now() where id=${input.taskId} returning *`;
+      await audit(tx, input, "project-operations.task.updated", "ProjectTask", input.taskId);
+      return r[0];
+    });
+  }
+  async startTask(input: any) {
+    return this.transitionTask(input, "IN_PROGRESS");
+  }
+  async completeTask(input: any) {
+    return this.transitionTask(input, "DONE");
+  }
+  private async transitionTask(input: any, to: string) {
+    return this.sql.begin(async (tx) => {
+      const rows = await tx<
+        any[]
+      >`select t.*,p.status as project_status,p.project_type,p.source_service_order_id from project_operations.project_tasks t join project_operations.projects p on p.id=t.project_id and p.tenant_id=t.tenant_id where t.tenant_id=${input.tenantId} and t.id=${input.taskId} for update`;
+      const t = rows[0];
+      if (!t) throw new ProjectOperationsProblem(404, "PROJECT_TASK_NOT_FOUND", "Task not found.");
+      if (
+        t.project_status !== "ACTIVE" ||
+        t.status !== "TODO" ||
+        (to === "IN_PROGRESS" && t.task_kind === "MILESTONE")
+      )
+        throw new ProjectOperationsProblem(
+          409,
+          to === "DONE" ? "PROJECT_TASK_NOT_COMPLETABLE" : "PROJECT_TASK_NOT_STARTABLE",
+          "Task transition is invalid."
+        );
+      if (t.project_type === "CLIENT_SERVICE") await this.assertSourceLive(tx, input.tenantId, t);
+      const deps =
+        await tx`select predecessor.status from project_operations.task_dependencies d join project_operations.project_tasks predecessor on predecessor.id=d.predecessor_task_id and predecessor.tenant_id=d.tenant_id where d.tenant_id=${input.tenantId} and d.successor_task_id=${t.id}`;
+      if (deps.some((d: any) => d.status !== "DONE"))
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_TASK_DEPENDENCY_UNSATISFIED",
+          "Predecessor task not done."
+        );
+      const r = await tx<
+        any[]
+      >`update project_operations.project_tasks set status=${to},${to === "DONE" ? tx`completed_by_user_id=${input.actorUserId},completed_at=now()` : tx`started_by_user_id=${input.actorUserId},started_at=now()`},updated_at=now() where id=${t.id} returning *`;
+      await audit(
+        tx,
+        input,
+        to === "DONE" ? "project-operations.task.completed" : "project-operations.task.started",
+        "ProjectTask",
+        t.id
+      );
+      return r[0];
+    });
+  }
+  async cancelTask(input: any) {
+    return this.sql.begin(async (tx) => {
+      const r = await tx<
+        any[]
+      >`select t.*,p.status project_status from project_operations.project_tasks t join project_operations.projects p on p.id=t.project_id where t.tenant_id=${input.tenantId} and t.id=${input.taskId} for update`;
+      const t = r[0];
+      if (
+        !t ||
+        t.project_status !== "ACTIVE" ||
+        !["TODO", "IN_PROGRESS"].includes(t.status) ||
+        ((t.status === "IN_PROGRESS" || t.required) && !input.reason)
+      )
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_TASK_NOT_EDITABLE",
+          "Task cannot be cancelled."
+        );
+      const u = await tx<
+        any[]
+      >`update project_operations.project_tasks set status='CANCELLED',cancellation_reason=${input.reason ?? null},cancelled_by_user_id=${input.actorUserId},cancelled_at=now(),updated_at=now() where id=${t.id} returning *`;
+      await audit(tx, input, "project-operations.task.cancelled", "ProjectTask", t.id);
+      return u[0];
+    });
+  }
+  async createDependency(input: any) {
+    return this.sql.begin(async (tx) => {
+      const successor = (
+        await tx<
+          any[]
+        >`select t.*,p.status project_status from project_operations.project_tasks t join project_operations.projects p on p.id=t.project_id where t.tenant_id=${input.tenantId} and t.id=${input.successorTaskId} for update`
+      )[0];
+      const predecessor = (
+        await tx<
+          any[]
+        >`select * from project_operations.project_tasks where tenant_id=${input.tenantId} and id=${input.predecessorTaskId}`
+      )[0];
+      if (
+        !successor ||
+        !predecessor ||
+        successor.project_id !== predecessor.project_id ||
+        successor.status !== "TODO" ||
+        !["DRAFT", "ACTIVE"].includes(successor.project_status)
+      )
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_DEPENDENCY_INVALID",
+          "Dependency is invalid."
+        );
+      const cycle =
+        await tx`with recursive path(id) as (select successor_task_id from project_operations.task_dependencies where tenant_id=${input.tenantId} and predecessor_task_id=${successor.id} union select d.successor_task_id from project_operations.task_dependencies d join path p on p.id=d.predecessor_task_id where d.tenant_id=${input.tenantId}) select 1 from path where id=${predecessor.id}`;
+      if (cycle[0])
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_DEPENDENCY_CYCLE",
+          "Dependency creates cycle."
+        );
+      const r = await tx<
+        any[]
+      >`insert into project_operations.task_dependencies (tenant_id,project_id,predecessor_task_id,successor_task_id,created_by_user_id) values (${input.tenantId},${successor.project_id},${predecessor.id},${successor.id},${input.actorUserId}) returning *`;
+      await audit(tx, input, "project-operations.dependency.created", "TaskDependency", r[0].id);
+      return r[0];
+    });
+  }
+  async removeDependency(input: any) {
+    await this.sql.begin(async (tx) => {
+      const r = await tx<
+        any[]
+      >`delete from project_operations.task_dependencies where tenant_id=${input.tenantId} and id=${input.dependencyId} and successor_task_id=${input.taskId} returning id`;
+      if (!r[0])
+        throw new ProjectOperationsProblem(
+          404,
+          "PROJECT_DEPENDENCY_NOT_FOUND",
+          "Dependency not found."
+        );
+      await audit(
+        tx,
+        input,
+        "project-operations.dependency.removed",
+        "TaskDependency",
+        input.dependencyId
+      );
+    });
+  }
+  async createArtifactLink(input: any) {
+    return this.sql.begin(async (tx) => {
+      const p = await project(tx, input.tenantId, input.projectId, true);
+      if (["COMPLETED", "CANCELLED"].includes(p.status))
+        throw new ProjectOperationsProblem(409, "PROJECT_TERMINAL", "Project terminal.");
+      const artifact = await this.resolveArtifact({
+        tenantId: input.tenantId,
+        artifactType: input.artifactType,
+        artifactId: input.artifactId
+      });
+      if (!artifact)
+        throw new ProjectOperationsProblem(
+          404,
+          "PROJECT_ARTIFACT_NOT_FOUND",
+          "Artifact not found."
+        );
+      if (input.phasePlanId && input.relationship === "PRIMARY") {
+        const phase = (
+          await tx<
+            any[]
+          >`select phase_key from project_operations.project_phase_plans where tenant_id=${input.tenantId} and id=${input.phasePlanId} and project_id=${p.id} for update`
+        )[0];
+        if (!phase || !allowedPrimary[phase.phase_key].includes(input.artifactType))
+          throw new ProjectOperationsProblem(
+            409,
+            "PROJECT_ARTIFACT_PHASE_MISMATCH",
+            "Artifact cannot be primary for phase."
+          );
+        await tx`update project_operations.project_artifact_links set status='REVOKED',revoked_by_user_id=${input.actorUserId},revoked_at=now(),revocation_reason='Replaced by promoted primary' where tenant_id=${input.tenantId} and project_id=${p.id} and phase_plan_id=${input.phasePlanId} and relationship='PRIMARY' and status='ACTIVE'`;
+      }
+      const r = await tx<
+        any[]
+      >`insert into project_operations.project_artifact_links (tenant_id,project_id,phase_plan_id,artifact_type,artifact_id,relationship,created_by_user_id) values (${input.tenantId},${p.id},${input.phasePlanId ?? null},${input.artifactType},${input.artifactId},${input.relationship},${input.actorUserId}) returning *`;
+      await audit(tx, input, "project-operations.artifact-linked", "ProjectArtifactLink", r[0].id);
+      return r[0];
+    });
+  }
+  async revokeArtifactLink(input: any) {
+    return this.sql.begin(async (tx) => {
+      const r = await tx<
+        any[]
+      >`update project_operations.project_artifact_links set status='REVOKED',revoked_by_user_id=${input.actorUserId},revoked_at=now(),revocation_reason=${input.reason} where tenant_id=${input.tenantId} and id=${input.linkId} and status='ACTIVE' returning *`;
+      if (!r[0])
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_ARTIFACT_LINK_ALREADY_REVOKED",
+          "Link cannot be revoked."
+        );
+      await audit(
+        tx,
+        input,
+        "project-operations.artifact-link-revoked",
+        "ProjectArtifactLink",
+        input.linkId
+      );
+      return r[0];
+    });
+  }
+  async promotePrimary(input: any) {
+    return this.sql.begin(async (tx) => {
+      const old = (
+        await tx<
+          any[]
+        >`select * from project_operations.project_artifact_links where tenant_id=${input.tenantId} and id=${input.linkId} and status='ACTIVE' for update`
+      )[0];
+      if (!old)
+        throw new ProjectOperationsProblem(
+          404,
+          "PROJECT_ARTIFACT_LINK_NOT_FOUND",
+          "Link not found."
+        );
+      if (!old.phase_plan_id)
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_ARTIFACT_PHASE_MISMATCH",
+          "Primary needs phase."
+        );
+      await tx`update project_operations.project_artifact_links set status='REVOKED',revoked_by_user_id=${input.actorUserId},revoked_at=now(),revocation_reason='Promoted alternate primary' where tenant_id=${input.tenantId} and project_id=${old.project_id} and phase_plan_id=${old.phase_plan_id} and relationship='PRIMARY' and status='ACTIVE'`;
+      const r = await tx<
+        any[]
+      >`update project_operations.project_artifact_links set relationship='PRIMARY' where id=${old.id} returning *`;
+      await audit(
+        tx,
+        input,
+        "project-operations.primary-artifact-promoted",
+        "ProjectArtifactLink",
+        old.id
+      );
+      return r[0];
+    });
+  }
+  async createUpdate(input: any) {
+    return this.sql.begin(async (tx) => {
+      await project(tx, input.tenantId, input.projectId, true);
+      if (input.updateType === "BLOCKER_RESOLVED") {
+        const b = (
+          await tx<
+            any[]
+          >`select * from project_operations.project_updates where tenant_id=${input.tenantId} and id=${input.resolvesUpdateId} and project_id=${input.projectId} and update_type='BLOCKER' for update`
+        )[0];
+        if (!b)
+          throw new ProjectOperationsProblem(
+            409,
+            "PROJECT_BLOCKER_RESOLUTION_INVALID",
+            "Blocker resolution invalid."
+          );
+      }
+      const r = await tx<
+        any[]
+      >`insert into project_operations.project_updates (tenant_id,project_id,phase_plan_id,task_id,update_type,summary,resolves_update_id,created_by_user_id) values (${input.tenantId},${input.projectId},${input.phasePlanId ?? null},${input.taskId ?? null},${input.updateType},${input.summary},${input.resolvesUpdateId ?? null},${input.actorUserId}) returning *`;
+      await audit(tx, input, "project-operations.update.created", "ProjectUpdate", r[0].id);
+      return r[0];
+    });
+  }
+  async phaseState(tenantId: string, projectId: string) {
+    const phases = await this.sql<
+      any[]
+    >`select p.*,l.artifact_type,l.artifact_id from project_operations.project_phase_plans p left join project_operations.project_artifact_links l on l.tenant_id=p.tenant_id and l.phase_plan_id=p.id and l.relationship='PRIMARY' and l.status='ACTIVE' where p.tenant_id=${tenantId} and p.project_id=${projectId} order by p.phase_order`;
+    return Promise.all(
+      phases.map(async (p) => {
+        if (!p.artifact_id)
+          return { ...p, state: p.phase_order === 1 ? "AVAILABLE" : "NOT_STARTED" };
+        const a = await this.resolveArtifact({
+          tenantId,
+          artifactType: p.artifact_type,
+          artifactId: p.artifact_id
+        });
+        const s = a?.canonicalStatus ?? "MISSING";
+        const state = [
+          "FROZEN",
+          "PREPARED",
+          "COMPLETED",
+          "READY",
+          "RELEASED",
+          "INTENT_CONFIRMED"
+        ].includes(s)
+          ? "COMPLETE"
+          : ["CANCELLED", "ARCHIVED", "ABORTED", "REJECTED", "BLOCKED", "AMBIGUOUS"].includes(s)
+            ? "BLOCKED"
+            : s === "REVIEW_REQUIRED" || s === "HOLD"
+              ? "NEEDS_ACTION"
+              : s === "REVISION_REQUIRED"
+                ? "REVISION_REQUIRED"
+                : "ACTIVE";
+        return { ...p, state };
+      })
+    );
+  }
+  async timeline(tenantId: string, projectId: string) {
+    return this
+      .sql`select * from project_operations.project_updates where tenant_id=${tenantId} and project_id=${projectId} order by created_at`;
+  }
+  async findProjectForCommercial(input: {
+    tenantId: string;
+    projectId: string;
+  }): Promise<ProjectOperationsCommercialProjection | undefined> {
+    const p = (
+      await this.sql<
+        any[]
+      >`select * from project_operations.projects where tenant_id=${input.tenantId} and id=${input.projectId}`
+    )[0];
+    if (!p) return undefined;
+    const t = (
+      await this.sql<
+        any[]
+      >`select count(*) filter(where required)::int required,count(*) filter(where required and status='DONE')::int done from project_operations.project_tasks where tenant_id=${input.tenantId} and project_id=${p.id}`
+    )[0];
+    return {
+      projectId: p.id,
+      projectCode: p.project_code,
+      projectType: p.project_type,
+      status: p.status,
+      sourceServiceOrderId: p.source_service_order_id,
+      requiredTaskCount: t.required,
+      completedRequiredTaskCount: t.done,
+      requiredPhases: (await this.phaseState(input.tenantId, p.id))
+        .filter((x: any) => x.required)
+        .map((x: any) => ({ phaseKey: x.phase_key, state: x.state })) as any
+    };
+  }
+  async resolveArtifact(input: {
+    tenantId: string;
+    artifactType: ProjectArtifactType;
+    artifactId: string;
+  }): Promise<ProjectArtifactReference | undefined> {
+    const q: Record<string, string> = {
+      DESIGN_PROJECT: "select id,tenant_id,name label,status from design_studio.projects",
+      DESIGN_BRIEF: "select id,tenant_id,title label,status from design_studio.design_briefs",
+      FORMULA_VERSION:
+        "select id,tenant_id,formula_id::text label,status from design_studio.formula_versions",
+      TRIAL: "select id,tenant_id,trial_code label,status from trial_sensory.trials",
+      SENSORY_EVALUATION:
+        "select id,tenant_id,id::text label,status from trial_sensory.sensory_evaluations",
+      READINESS_ASSESSMENT:
+        "select id,tenant_id,id::text label,status from release_readiness.assessments",
+      PRODUCTION_ORDER:
+        "select id,tenant_id,order_number label,status from production.production_orders",
+      PRODUCTION_BATCH:
+        "select id,tenant_id,batch_number label,status from production.production_batches",
+      QC_INSPECTION:
+        "select id,tenant_id,inspection_number label,status from quality_control.batch_inspections",
+      BATCH_RELEASE_DECISION:
+        "select id,tenant_id,id::text label,decision status from quality_control.batch_release_decisions"
+    };
+    const query = q[input.artifactType];
+    if (!query) return undefined;
+    const rows = await this.sql.unsafe(`${query} where tenant_id=$1 and id=$2`, [
+      input.tenantId,
+      input.artifactId
+    ]);
+    const r: any = rows[0];
+    return r
+      ? {
+          type: input.artifactType,
+          artifactId: r.id,
+          tenantId: r.tenant_id,
+          label: r.label,
+          canonicalStatus: r.status,
+          lineage: {}
+        }
+      : undefined;
+  }
+  private async assertSourceLive(sql: Db, tenantId: string, p: any) {
+    const r =
+      await sql`select status from lab_services.service_orders where tenant_id=${tenantId} and id=${p.source_service_order_id}`;
+    if (!r[0] || r[0].status === "CANCELLED")
+      throw new ProjectOperationsProblem(
+        409,
+        "PROJECT_SOURCE_CANCELLED",
+        "Source Service Order is cancelled."
+      );
+  }
+  private async assertLine(sql: Db, tenantId: string, p: any, line: string) {
+    const r =
+      await sql`select 1 from lab_services.service_order_lines where tenant_id=${tenantId} and service_order_id=${p.source_service_order_id} and id=${line}`;
+    if (!r[0])
+      throw new ProjectOperationsProblem(
+        409,
+        "PROJECT_TASK_SOURCE_SCOPE_INVALID",
+        "Task source scope is invalid."
+      );
+  }
+  private async assertScope(sql: Db, tenantId: string, p: any, tasks: any[], done: boolean) {
+    if (p.project_type !== "CLIENT_SERVICE") return;
+    await this.assertSourceLive(sql, tenantId, p);
+    const lines = await sql<
+      any[]
+    >`select id from lab_services.service_order_lines where tenant_id=${tenantId} and service_order_id=${p.source_service_order_id}`;
+    for (const l of lines)
+      if (
+        !tasks.some(
+          (t) =>
+            t.source_service_order_line_id === l.id &&
+            t.required &&
+            t.status !== "CANCELLED" &&
+            (!done || t.status === "DONE")
+        )
+      )
+        throw new ProjectOperationsProblem(
+          409,
+          "PROJECT_SCOPE_NOT_COVERED",
+          "Every Service Order line needs required operational work."
+        );
+  }
+}
+export const createPostgresProjectOperationsStore = (sql: Sql): ProjectOperationsStore =>
+  new PostgresProjectOperationsStore(sql);

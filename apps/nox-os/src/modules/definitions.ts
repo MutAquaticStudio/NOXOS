@@ -148,6 +148,19 @@ export const moduleProfiles = {
     mobilePriority: ["find customer", "review service order", "record interaction"],
     reactBitsIntensity: "none"
   }),
+  projectOperations: profile({
+    id: "project-operations",
+    name: "Project Operations",
+    archetype: "operations",
+    secondaryArchetype: "data-grid",
+    density: "compact",
+    primaryObject: "OperationalProject",
+    primaryTasks: ["review operational plan", "track required work", "record internal update"],
+    navigation: { inspector: true, aiSidecar: false, workspaceTabs: true, splitView: true },
+    supportedViews: ["table", "form", "list"],
+    mobilePriority: ["find project", "view phase state", "complete task"],
+    reactBitsIntensity: "none"
+  }),
   production: profile({
     id: "production",
     name: "Production",
@@ -482,6 +495,92 @@ export const moduleDefinitions: readonly ModuleDefinition[] = [
           "module.procurement.receipt.cancel"
         ],
         TENANT_MEMBER: ["module.procurement.read"]
+      }
+    }
+  }),
+  defineModule({
+    id: "project-operations",
+    displayName: "Project Operations",
+    routeRoot: "/project-operations",
+    childRoutes: ["/project-operations/projects/:projectId"],
+    apiNamespace: "project-operations",
+    navigationGroup: "Operations",
+    lifecycle: "ACTIVE",
+    dependencies: [
+      "platform",
+      "lab-services",
+      "design-studio",
+      "trial-sensory",
+      "release-readiness",
+      "production",
+      "quality-control"
+    ],
+    permissions: ["module.project-operations.read"],
+    entitlement: "module.project-operations",
+    featureFlag: "module.project-operations",
+    uxProfile: moduleProfiles.projectOperations,
+    owner: "Project Operations owner",
+    icon: "briefcase",
+    authorization: {
+      permissions: [
+        "module.project-operations.read",
+        "module.project-operations.project.create",
+        "module.project-operations.project.edit",
+        "module.project-operations.project.activate",
+        "module.project-operations.project.hold",
+        "module.project-operations.project.resume",
+        "module.project-operations.project.complete",
+        "module.project-operations.project.cancel",
+        "module.project-operations.phase.manage",
+        "module.project-operations.task.create",
+        "module.project-operations.task.edit",
+        "module.project-operations.task.start",
+        "module.project-operations.task.complete",
+        "module.project-operations.task.cancel",
+        "module.project-operations.dependency.manage",
+        "module.project-operations.artifact-link.manage",
+        "module.project-operations.update.create"
+      ],
+      defaultRoleGrants: {
+        TENANT_OWNER: [
+          "module.project-operations.read",
+          "module.project-operations.project.create",
+          "module.project-operations.project.edit",
+          "module.project-operations.project.activate",
+          "module.project-operations.project.hold",
+          "module.project-operations.project.resume",
+          "module.project-operations.project.complete",
+          "module.project-operations.project.cancel",
+          "module.project-operations.phase.manage",
+          "module.project-operations.task.create",
+          "module.project-operations.task.edit",
+          "module.project-operations.task.start",
+          "module.project-operations.task.complete",
+          "module.project-operations.task.cancel",
+          "module.project-operations.dependency.manage",
+          "module.project-operations.artifact-link.manage",
+          "module.project-operations.update.create"
+        ],
+        TENANT_ADMIN: [
+          "module.project-operations.read",
+          "module.project-operations.project.create",
+          "module.project-operations.project.edit",
+          "module.project-operations.project.activate",
+          "module.project-operations.project.hold",
+          "module.project-operations.project.resume",
+          "module.project-operations.project.complete",
+          "module.project-operations.project.cancel",
+          "module.project-operations.phase.manage",
+          "module.project-operations.task.create",
+          "module.project-operations.task.edit",
+          "module.project-operations.task.start",
+          "module.project-operations.task.complete",
+          "module.project-operations.task.cancel",
+          "module.project-operations.dependency.manage",
+          "module.project-operations.artifact-link.manage",
+          "module.project-operations.update.create"
+        ],
+        TENANT_MEMBER: ["module.project-operations.read"]
       }
     }
   }),
