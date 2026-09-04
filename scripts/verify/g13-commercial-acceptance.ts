@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { Page } from "@playwright/test";
 import type { createRuntimeDatabase } from "@nox-os/database";
+import { createPostgresCommercialOrdersStore } from "@nox-os/database";
 type Sql = ReturnType<typeof createRuntimeDatabase>;
 
 type ApiResult<T = unknown> = { status: number; body: T };
@@ -790,6 +791,11 @@ export async function runG13Acceptance({
     "G13 duplicate Shipment guard"
   );
   const batchShipment = await createShipment(batchFulfillmentId, "B");
+  const movementCountBeforeShipment = (
+    await runtime<{ count: string }[]>`
+    select count(*)::text count from inventory.stock_movements where tenant_id=${tenantA}
+  `
+  )[0]!.count;
   for (const shipmentId of [materialShipment, batchShipment]) {
     expectStatus(
       await api(actor, `/commercial-orders/shipments/${shipmentId}/ship`, {
@@ -825,6 +831,29 @@ export async function runG13Acceptance({
     200,
     "G13 Commercial Order close"
   );
+
+  const movementCountAfterShipment = (
+    await runtime<{ count: string }[]>`
+    select count(*)::text count from inventory.stock_movements where tenant_id=${tenantA}
+  `
+  )[0]!.count;
+  if (movementCountAfterShipment !== movementCountBeforeShipment)
+    throw new Error("G13 Shipment created an additional Inventory Movement.");
+  const analytics = createPostgresCommercialOrdersStore(runtime);
+  const projection = (await analytics.listCommercialOrders({ tenantId: tenantA })).find(
+    (row) => row.orderId === orderId
+  );
+  if (
+    projection?.commercialStatus !== "CLOSED" ||
+    projection.fulfillmentStatus !== "FULFILLED" ||
+    projection.shippingStatus !== "DELIVERED" ||
+    (await analytics.listCommercialOrders({ tenantId: tenantB })).some(
+      (row) => row.orderId === orderId
+    )
+  )
+    throw new Error(
+      "G13 G14 read projection failed closed-state or tenant-isolation verification."
+    );
 
   const cancellation = await api<{ order: OrderEnvelope }>(actor, "/commercial-orders/orders", {
     method: "POST",
