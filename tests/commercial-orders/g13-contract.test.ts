@@ -95,4 +95,13 @@ describe("G13 Commercial Orders contract", () => {
       }).success
     ).toBe(false);
   });
+
+  it("uses the actual G9 completion timestamp when selecting a released batch for acceptance", () => {
+    const verifier = readFileSync(
+      resolve(process.cwd(), "scripts/verify/staging-g3-material-intelligence.ts"),
+      "utf8"
+    );
+    expect(verifier).toContain("order by batch.completed_at desc, batch.id desc limit 1");
+    expect(verifier).not.toContain("order by batch.created_at desc limit 1");
+  });
 });

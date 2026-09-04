@@ -1821,7 +1821,7 @@ async function runG13StagingAcceptance(
       ) decision on true
       where batch.tenant_id=${tenantA} and batch.actual_output_mass_mg >= 1000
         and decision.decision='RELEASED'
-      order by batch.created_at desc limit 1
+      order by batch.completed_at desc, batch.id desc limit 1
     `
   )[0];
   if (!batch) throw new Error("G13 requires one current G10 RELEASED Batch.");
