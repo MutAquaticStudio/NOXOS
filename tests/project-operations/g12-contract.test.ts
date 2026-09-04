@@ -103,9 +103,14 @@ describe("G12 Project Operations contract", () => {
   it("probes immutable G4 FormulaVersion fields without assuming a mutable timestamp", () => {
     const upstreamAuthorityProbe = stagingAcceptance.slice(
       stagingAcceptance.indexOf("const upstreamBefore"),
-      stagingAcceptance.indexOf("const created", stagingAcceptance.indexOf("const upstreamBefore"))
+      stagingAcceptance.indexOf(
+        "const orderAfter",
+        stagingAcceptance.indexOf("const upstreamBefore")
+      )
     );
-    expect(upstreamAuthorityProbe).toContain("select id,status,bundle_hash,frozen_at,created_at");
+    const formulaVersionProjection = "select id,status,bundle_hash,frozen_at,created_at";
+    expect(upstreamAuthorityProbe).toContain(formulaVersionProjection);
+    expect(upstreamAuthorityProbe.split(formulaVersionProjection)).toHaveLength(3);
     expect(upstreamAuthorityProbe).toContain(
       "from design_studio.formula_versions where tenant_id=${tenantA}"
     );
