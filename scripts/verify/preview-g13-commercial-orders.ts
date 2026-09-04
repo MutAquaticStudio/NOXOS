@@ -1,6 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { chromium, type Page } from "@playwright/test";
+import { createRuntimeDatabase, createStagingFixtureMaintenanceDatabase } from "@nox-os/database";
+import { runG13Acceptance } from "./g13-commercial-acceptance.js";
 
 type ApiResult<T = unknown> = { status: number; body: T };
 
@@ -10,6 +13,27 @@ const email = required("NOX_PREVIEW_MATERIAL_USER_EMAIL");
 const password = required("NOX_PREVIEW_MATERIAL_USER_PASSWORD");
 const protectionBypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 const captureDirectory = process.env.G13_VISUAL_CAPTURE_DIR;
+const projectRef = required("SUPABASE_PREVIEW_PROJECT_REF");
+const actorUserId = required("NOX_PREVIEW_MATERIAL_USER_ID");
+const runtimeDatabaseUrl = required("NOX_PREVIEW_RUNTIME_DATABASE_URL");
+if (
+  process.env.NOX_EXPECTED_ENV !== "preview" ||
+  projectRef !== "uurkjmkhvtqydeikncaw" ||
+  projectRef === required("SUPABASE_PRODUCTION_PROJECT_REF") ||
+  decodeURIComponent(new URL(runtimeDatabaseUrl).username) !== `nox_app_runtime.${projectRef}`
+)
+  throw new Error("G13 Preview journey requires the isolated Preview project and runtime role.");
+const runtime = createRuntimeDatabase({
+  connectionUrl: runtimeDatabaseUrl,
+  applicationName: "nox-os-g13-preview-acceptance",
+  expectedRole: "nox_app_runtime"
+});
+const maintenance = createStagingFixtureMaintenanceDatabase({
+  runtimeConnectionUrl: runtimeDatabaseUrl,
+  projectRef,
+  databasePassword: required("SUPABASE_PREVIEW_DB_PASSWORD")
+});
+let otherTenantId: string | undefined;
 
 if (!/^[0-9a-f]{40}$/i.test(expectedSha))
   throw new Error("G13 Preview acceptance requires a full immutable source SHA.");
@@ -57,8 +81,98 @@ try {
   await selectTenant(page, tenantId);
   await visible(page, page.getByRole("heading", { name: "Create Draft Commercial Order" }));
   await capture(page, "commercial-orders-authoring-desktop", "/commercial-orders/new");
+  const suffix = randomUUID().replaceAll("-", "").slice(0, 18);
+  const other = await api<{ tenant: { id: string } }>(page, tenantId, "/platform/tenants", "POST", {
+    name: `G13 Preview Isolation ${suffix}`,
+    slug: `g13-preview-${suffix}`,
+    initialOwnerUserId: actorUserId
+  });
+  if (other.status !== 201) throw new Error("G13 Preview isolation tenant fixture failed.");
+  otherTenantId = other.body.tenant.id;
+  const enabled = await api(
+    page,
+    otherTenantId,
+    `/platform/tenants/${otherTenantId}/entitlements/module.commercial-orders`,
+    "PUT",
+    { enabled: true }
+  );
+  if (enabled.status !== 200) throw new Error("G13 Preview isolation entitlement fixture failed.");
+  const lot = (
+    await runtime<{ id: string; material_id: string; location_id: string }[]>`
+    with stock as (
+      select lot_id, location_id, sum(quantity_mg) quantity from (
+        select lot_id,to_location_id location_id,quantity_mg from inventory.stock_movements
+        where tenant_id=${tenantId} and to_location_id is not null
+        union all
+        select lot_id,from_location_id,-quantity_mg from inventory.stock_movements
+        where tenant_id=${tenantId} and from_location_id is not null
+      ) movements group by lot_id,location_id
+    )
+    select lot.id::text,lot.material_id::text,stock.location_id::text
+    from inventory.material_lots lot join stock on stock.lot_id=lot.id
+    join inventory.locations location on location.id=stock.location_id and location.tenant_id=lot.tenant_id
+    where lot.tenant_id=${tenantId} and lot.lifecycle_status='OPEN'
+      and lot.availability_status='AVAILABLE' and location.status='ACTIVE'
+      and (lot.expires_at is null or lot.expires_at>now())
+      and stock.quantity-coalesce((select sum(quantity_mg) from inventory.stock_reservations r
+        where r.tenant_id=lot.tenant_id and r.lot_id=lot.id and r.location_id=stock.location_id
+          and r.status='ACTIVE'),0)>1000
+    order by lot.created_at desc,lot.id desc limit 1
+  `
+  )[0];
+  if (!lot)
+    throw new Error("G13 Preview requires the G7 stock prepared by the existing Preview journey.");
+  const actor = await accessToken(page);
+  await runG13Acceptance({
+    page,
+    tenantA: tenantId,
+    tenantB: otherTenantId,
+    actor,
+    otherActor: actor,
+    actorUserId,
+    suffix,
+    runtime,
+    maintenance,
+    stock: { locationId: lot.location_id, lots: new Map([[lot.material_id, lot.id]]) },
+    api: async <T>(
+      auth: string,
+      path: string,
+      options: { method?: "GET" | "POST" | "PATCH" | "PUT"; body?: unknown; tenantId?: string } = {}
+    ) => {
+      const response = await fetch(url(`/api/v1${path}`), {
+        method: options.method ?? "GET",
+        headers: {
+          ...bypassHeaders(),
+          authorization: `Bearer ${auth}`,
+          "x-nox-tenant-id": options.tenantId ?? tenantId,
+          "content-type": "application/json"
+        },
+        body: options.body === undefined ? undefined : JSON.stringify(options.body)
+      });
+      return { status: response.status, body: (await response.json()) as T };
+    },
+    ensureActorPage: async () => {
+      await selectTenant(page, tenantId);
+    },
+    baseUrl: previewUrl,
+    expectedSourceSha: expectedSha,
+    environment: "preview",
+    g13VisualCaptureDirectory: captureDirectory
+  });
 } finally {
   await browser.close();
+  try {
+    const cleanupTenantId = otherTenantId;
+    if (cleanupTenantId)
+      await maintenance.begin(async (tx) => {
+        await tx`delete from platform.tenant_entitlements where tenant_id=${cleanupTenantId}`;
+        await tx`delete from platform.tenant_memberships where tenant_id=${cleanupTenantId}`;
+        await tx`delete from platform.tenants where id=${cleanupTenantId}`;
+      });
+  } finally {
+    await runtime.end({ timeout: 5 });
+    await maintenance.end({ timeout: 5 });
+  }
 }
 
 console.log("G13_AUTHENTICATED_PREVIEW_ACCEPTANCE=PASS");
