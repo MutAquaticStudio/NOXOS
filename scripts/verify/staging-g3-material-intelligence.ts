@@ -630,7 +630,9 @@ function expectError(
   label: string
 ): void {
   if (result.status !== status || result.body.error?.code !== code) {
-    throw new Error(\n      `${label} did not fail closed with ${status} ${code}: ${JSON.stringify(result.body)}.`\n    );
+    throw new Error(
+      `${label} did not fail closed with ${status} ${code}: ${JSON.stringify(result.body)}.`
+    );
   }
 }
 
