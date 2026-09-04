@@ -14,6 +14,7 @@ const migration = readFileSync(
   "utf8"
 );
 const application = readFileSync(resolve(root, "apps/nox-os/src/app.tsx"), "utf8");
+const shellStyles = readFileSync(resolve(root, "packages/ui/src/styles.css"), "utf8");
 
 describe("G12 Project Operations contract", () => {
   it("owns exactly six G12 tables and no mutable phase truth", () => {
@@ -68,5 +69,10 @@ describe("G12 Project Operations contract", () => {
   it("routes the Project Operations workspace through its single route authority", () => {
     expect(application).toContain('path="/project-operations/*"');
     expect(application).toContain('definition.descriptor.id !== "project-operations"');
+  });
+  it("keeps tenant selection usable on the compact operational workspace", () => {
+    expect(shellStyles).toContain(
+      ".nox-system-actions > :not(:first-child):not(.nox-tenant-selector)"
+    );
   });
 });

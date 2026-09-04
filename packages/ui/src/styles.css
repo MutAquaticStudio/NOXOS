@@ -1260,7 +1260,9 @@ kbd {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .nox-system-actions > :not(:first-child) {
+  /* Keep the active tenant authority available on compact shells. Hiding it
+     would strand multi-tenant workspaces on tablet and mobile viewports. */
+  .nox-system-actions > :not(:first-child):not(.nox-tenant-selector) {
     display: none;
   }
 
