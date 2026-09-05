@@ -1075,6 +1075,8 @@ export async function runG13Acceptance({
   });
   await page.getByLabel("Current tenant").selectOption(tenantA);
   await expectHeading(page, orderNumber);
+  if (await page.getByRole("alert").count())
+    throw new Error("G13 Order detail retained an error after loading the selected workspace.");
   await captureG13(page, "commercial-orders-detail-desktop", `/commercial-orders/${orderId}`);
 
   console.log(`G13_${environment.toUpperCase()}_COMMERCIAL_ORDERS_ACCEPTANCE=PASS`);

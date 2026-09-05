@@ -751,7 +751,10 @@ function QuoteDetail({ api, permissions }: { api: ScopedApi; permissions: string
   const refresh = useCallback(
     () =>
       void api<any>(`/commercial-orders/quotes/${quoteId}`)
-        .then(setData)
+        .then((value) => {
+          setData(value);
+          setError(undefined);
+        })
         .catch(() => setError("Quote was not found or is not accessible.")),
     [api, quoteId]
   );
@@ -846,7 +849,10 @@ function OrderDetail({ api, permissions }: { api: ScopedApi; permissions: string
   const refresh = useCallback(
     () =>
       void api<any>(`/commercial-orders/orders/${orderId}`)
-        .then(setData)
+        .then((value) => {
+          setData(value);
+          setError(undefined);
+        })
         .catch(() => setError("Commercial Order was not found or is not accessible.")),
     [api, orderId]
   );
