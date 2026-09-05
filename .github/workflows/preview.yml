@@ -135,6 +135,8 @@ jobs:
       # only in trusted post-merge Staging after its deployment URL is provider-verified.
 
   authenticated-g3-material-intelligence:
+    outputs:
+      preview_url: ${{ steps.preview.outputs.preview_url }}
     if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-24.04
     environment: Preview
@@ -253,21 +255,6 @@ jobs:
           NOX_PREVIEW_MATERIAL_USER_PASSWORD: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_PASSWORD }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           G12_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g12-preview-visual
-      - name: Verify authenticated Commercial Orders Preview
-        run: pnpm verify:preview:g13-commercial-orders
-        env:
-          NOX_PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
-          NOX_PREVIEW_MATERIAL_USER_EMAIL: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_EMAIL }}
-          NOX_PREVIEW_MATERIAL_USER_PASSWORD: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_PASSWORD }}
-          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-          G13_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g13-preview-visual
-          NOX_PREVIEW_MATERIAL_USER_ID: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_ID }}
-          NOX_PREVIEW_RUNTIME_DATABASE_URL: ${{ secrets.NOX_PREVIEW_RUNTIME_DATABASE_URL }}
-          SUPABASE_PREVIEW_PROJECT_REF: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
-          SUPABASE_PRODUCTION_PROJECT_REF: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF || secrets.SUPABASE_PRODUCTION_PROJECT_REF }}
-          SUPABASE_PREVIEW_DB_PASSWORD: ${{ secrets.SUPABASE_PREVIEW_DB_PASSWORD }}
-          SUPABASE_URL: ${{ vars.SUPABASE_PREVIEW_URL || secrets.SUPABASE_PREVIEW_URL }}
-          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PREVIEW_PUBLISHABLE_KEY || secrets.SUPABASE_PREVIEW_PUBLISHABLE_KEY }}
       - id: g3-preview-evidence
         run: |
           artifact_path="$RUNNER_TEMP/g3-preview-evidence/G3_PREVIEW_${EXPECTED_SOURCE_SHA}.env"
@@ -457,13 +444,52 @@ jobs:
           path: ${{ runner.temp }}/g12-preview-visual
           if-no-files-found: error
           retention-days: 365
+
+  # Failed G13 acceptance can be rerun without redeploying or replaying G3–G12.
+  # A new source SHA still runs both jobs and creates fresh evidence.
+  authenticated-g13-commercial-orders:
+    needs: authenticated-g3-material-intelligence
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    environment: Preview
+    timeout-minutes: 15
+    env:
+      EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      NOX_EXPECTED_ENV: preview
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Verify authenticated Commercial Orders Preview
+        run: pnpm verify:preview:g13-commercial-orders
+        env:
+          NOX_PREVIEW_URL: ${{ needs.authenticated-g3-material-intelligence.outputs.preview_url }}
+          NOX_PREVIEW_MATERIAL_USER_EMAIL: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_EMAIL }}
+          NOX_PREVIEW_MATERIAL_USER_PASSWORD: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_PASSWORD }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          G13_VISUAL_CAPTURE_DIR: ${{ runner.temp }}/g13-preview-visual
+          NOX_PREVIEW_MATERIAL_USER_ID: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_ID }}
+          NOX_PREVIEW_RUNTIME_DATABASE_URL: ${{ secrets.NOX_PREVIEW_RUNTIME_DATABASE_URL }}
+          SUPABASE_PREVIEW_PROJECT_REF: ${{ vars.SUPABASE_PREVIEW_PROJECT_REF || secrets.SUPABASE_PREVIEW_PROJECT_REF }}
+          SUPABASE_PRODUCTION_PROJECT_REF: ${{ vars.SUPABASE_PRODUCTION_PROJECT_REF || secrets.SUPABASE_PRODUCTION_PROJECT_REF }}
+          SUPABASE_PREVIEW_DB_PASSWORD: ${{ secrets.SUPABASE_PREVIEW_DB_PASSWORD }}
       - id: g13-preview-evidence
         run: |
           artifact_path="$RUNNER_TEMP/g13-preview-evidence/G13_PREVIEW_${EXPECTED_SOURCE_SHA}.env"
           node scripts/evidence/write-g13-preview-evidence.mjs "$artifact_path"
           echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
         env:
-          NOX_PREVIEW_URL: ${{ steps.preview.outputs.preview_url }}
+          NOX_PREVIEW_URL: ${{ needs.authenticated-g3-material-intelligence.outputs.preview_url }}
       - name: Upload G13 exact-SHA Preview evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

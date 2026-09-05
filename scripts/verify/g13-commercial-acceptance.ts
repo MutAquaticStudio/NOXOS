@@ -1019,12 +1019,10 @@ export async function runG13Acceptance({
       tenantId: tenantB
     }
   );
-  if (!(
-    (crossTenantOrder.status === 404 &&
-      crossTenantOrder.body.error?.code === "COMMERCIAL_ORDER_NOT_FOUND") ||
-    (crossTenantOrder.status === 403 &&
-      crossTenantOrder.body.error?.code === "TENANT_ACCESS_DENIED")
-  ))
+  if (
+    crossTenantOrder.status !== 404 ||
+    crossTenantOrder.body.error?.code !== "COMMERCIAL_ORDER_NOT_FOUND"
+  )
     throw new Error(
       `G13 cross-tenant Commercial Order read did not fail closed: ${JSON.stringify(crossTenantOrder.body)}`
     );
