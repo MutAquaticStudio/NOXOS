@@ -88,15 +88,12 @@ try {
   const alternateOwner = platformUsers.body.users?.find(
     (user) => user.id && user.id !== actorUserId && user.status === "ACTIVE"
   )?.id;
-  if (!alternateOwner) {
-    throw new Error(
-      "G13 Preview isolation requires an existing active PlatformUser distinct from the acceptance actor."
-    );
-  }
+  const isolatedOwnerId =
+    alternateOwner ?? (await provisionPreviewIsolationUser(page, tenantId, suffix));
   const other = await api<{ tenant: { id: string } }>(page, tenantId, "/platform/tenants", "POST", {
     name: `G13 Preview Isolation ${suffix}`,
     slug: `g13-preview-${suffix}`,
-    initialOwnerUserId: alternateOwner
+    initialOwnerUserId: isolatedOwnerId
   });
   if (other.status !== 201) throw new Error("G13 Preview isolation tenant fixture failed.");
   otherTenantId = other.body.tenant.id;
@@ -214,6 +211,39 @@ function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required for G13 Preview acceptance.`);
   return value;
+}
+async function provisionPreviewIsolationUser(
+  page: Page,
+  tenantId: string,
+  suffix: string
+): Promise<string> {
+  const authResponse = await fetch(
+    `${required("SUPABASE_URL").replace(/\/$/, "")}/auth/v1/signup`,
+    {
+      method: "POST",
+      headers: {
+        apikey: required("SUPABASE_PUBLISHABLE_KEY"),
+        authorization: `Bearer ${required("SUPABASE_PUBLISHABLE_KEY")}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        email: `nox-g13-isolation-${suffix}@example.invalid`,
+        password: `${randomUUID()}Aa9!`
+      })
+    }
+  );
+  const authBody = (await authResponse.json()) as { user?: { id?: string } };
+  const userId = authBody.user?.id;
+  if (!authResponse.ok || !userId) {
+    throw new Error("G13 Preview isolation Auth fixture could not be provisioned.");
+  }
+  const provisioned = await api(page, tenantId, "/platform/users", "POST", {
+    userId,
+    displayName: "G13 Preview isolation user"
+  });
+  if (provisioned.status !== 201)
+    throw new Error("G13 Preview isolation PlatformUser fixture could not be provisioned.");
+  return userId;
 }
 function url(path: string) {
   return new URL(path, previewUrl).toString();
