@@ -471,7 +471,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
       - name: Verify authenticated Commercial Orders Preview
-        run: pnpm verify:preview:g13-commercial-orders
+        run: pnpm build:packages && pnpm verify:preview:g13-commercial-orders
         env:
           NOX_PREVIEW_URL: ${{ needs.authenticated-g3-material-intelligence.outputs.preview_url }}
           NOX_PREVIEW_MATERIAL_USER_EMAIL: ${{ secrets.NOX_PREVIEW_MATERIAL_USER_EMAIL }}

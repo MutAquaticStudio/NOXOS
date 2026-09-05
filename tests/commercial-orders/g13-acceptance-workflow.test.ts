@@ -20,6 +20,9 @@ describe("G13 exact-SHA evidence workflow", () => {
     );
     expect(commercial).not.toContain("deploy:preview");
     expect(commercial).not.toContain("db:migrate");
+    expect(commercial.indexOf("pnpm build:packages")).toBeLessThan(
+      commercial.indexOf("pnpm verify:preview:g13-commercial-orders")
+    );
     expect(commercial.indexOf("pnpm verify:preview:g13-commercial-orders")).toBeLessThan(
       commercial.indexOf("write-g13-preview-evidence.mjs")
     );
