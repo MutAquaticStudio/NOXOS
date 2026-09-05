@@ -669,6 +669,7 @@ function AuthenticatedApplication({
             element={
               <Suspense fallback={<p className="nox-ai-context">Loading Commercial Orders…</p>}>
                 <LazyCommercialOrdersExperience
+                  key={activeTenant?.tenantId ?? "no-workspace"}
                   api={api}
                   tenantId={activeTenant?.tenantId}
                   modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
