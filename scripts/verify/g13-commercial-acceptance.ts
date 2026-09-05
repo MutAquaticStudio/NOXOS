@@ -1065,11 +1065,15 @@ export async function runG13Acceptance({
   await page.goto(new URL("/commercial-orders", baseUrl).toString(), {
     waitUntil: "networkidle"
   });
+  // A full navigation restores Auth, but intentionally does not choose among
+  // multiple workspaces. Select through the real shell after each page load.
+  await page.getByLabel("Current tenant").selectOption(tenantA);
   await expectHeading(page, "Commercial Orders");
   await captureG13(page, "commercial-orders-registry-desktop", "/commercial-orders");
   await page.goto(new URL(`/commercial-orders/${orderId}`, baseUrl).toString(), {
     waitUntil: "networkidle"
   });
+  await page.getByLabel("Current tenant").selectOption(tenantA);
   await expectHeading(page, orderNumber);
   await captureG13(page, "commercial-orders-detail-desktop", `/commercial-orders/${orderId}`);
 
