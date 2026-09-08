@@ -331,15 +331,11 @@ export class TrialSensoryApi {
         const candidates = await this.options
           .revisionPortFactory(tenantApplicationContext(context))
           .createRevisionCandidate(revisionContext);
-        await this.options.application.store.recordAudit({
+        await this.options.application.store.recordRevisionRequest({
           ...commandContext(context, request),
-          action: "revision.requested",
-          resourceType: "SensoryEvaluation",
-          resourceId: sourceEvaluationId,
-          metadata: {
-            sourceTrialId,
-            parentFormulaVersionId: revisionContext.parentFormulaVersionId
-          }
+          sourceTrialId,
+          sourceEvaluationId,
+          parentFormulaVersionId: revisionContext.parentFormulaVersionId
         });
         return { status: 200, body: { revisionContext, candidates } };
       })

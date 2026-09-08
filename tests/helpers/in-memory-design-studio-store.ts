@@ -1,4 +1,5 @@
-import { computeFormulaBundleHash } from "@nox-os/design-studio";
+import { computeFormulaBundleHash, DesignStudioProblem } from "@nox-os/design-studio";
+import { randomUUID } from "node:crypto";
 import type {
   DesignBrief,
   DesignProject,
@@ -18,16 +19,36 @@ export class InMemoryDesignStudioStore implements DesignStudioStore {
   readonly briefs = new Map<string, DesignBrief>();
   readonly formulaVersions = new Map<string, FrozenFormulaVersion>();
   readonly audits: Array<Parameters<DesignStudioStore["recordAudit"]>[0]> = [];
+  private readonly creations = new Map<
+    string,
+    { payload: string; value: DesignProject | DesignBrief }
+  >();
 
-  async createProject(input: {
-    tenantId: string;
-    name: string;
-    description: string | null;
-    actorUserId: string;
-  }): Promise<DesignProject> {
+  private creation(
+    input:
+      | Parameters<DesignStudioStore["createProject"]>[0]
+      | Parameters<DesignStudioStore["createBrief"]>[0],
+    kind: string
+  ) {
+    const { requestId: _requestId, correlationId: _correlationId, ...payload } = input;
+    const key = input.operationKey
+      ? `${kind}:${input.tenantId}:${input.actorUserId}:${input.operationKey}`
+      : undefined;
+    const fingerprint = JSON.stringify(payload);
+    const prior = key ? this.creations.get(key) : undefined;
+    if (prior && prior.payload !== fingerprint)
+      throw new DesignStudioProblem(409, "IDEMPOTENCY_KEY_CONFLICT", "Operation key conflict.");
+    return { key, fingerprint, prior };
+  }
+
+  async createProject(
+    input: Parameters<DesignStudioStore["createProject"]>[0]
+  ): Promise<DesignProject> {
+    const replay = this.creation(input, "project");
+    if (replay.prior) return structuredClone(replay.prior.value as DesignProject);
     const now = new Date("2026-08-31T00:00:00.000Z");
     const value: DesignProject = {
-      id: PROJECT_ID,
+      id: input.operationKey ? randomUUID() : PROJECT_ID,
       tenantId: input.tenantId,
       name: input.name,
       description: input.description,
@@ -36,7 +57,17 @@ export class InMemoryDesignStudioStore implements DesignStudioStore {
       createdAt: now,
       updatedAt: now
     };
+    await this.recordAudit({
+      tenantId: input.tenantId,
+      actorUserId: input.actorUserId,
+      action: "project.created",
+      resourceType: "DesignProject",
+      resourceId: value.id,
+      requestId: input.requestId,
+      correlationId: input.correlationId
+    });
     this.projects.set(value.id, value);
+    if (replay.key) this.creations.set(replay.key, { payload: replay.fingerprint, value });
     return structuredClone(value);
   }
 
@@ -52,9 +83,11 @@ export class InMemoryDesignStudioStore implements DesignStudioStore {
   }
 
   async createBrief(input: Parameters<DesignStudioStore["createBrief"]>[0]): Promise<DesignBrief> {
+    const replay = this.creation(input, "brief");
+    if (replay.prior) return structuredClone(replay.prior.value as DesignBrief);
     const now = new Date("2026-08-31T00:00:00.000Z");
     const value: DesignBrief = {
-      id: BRIEF_ID,
+      id: input.operationKey ? randomUUID() : BRIEF_ID,
       tenantId: input.tenantId,
       projectId: input.projectId,
       workflowMode: input.workflowMode,
@@ -69,7 +102,18 @@ export class InMemoryDesignStudioStore implements DesignStudioStore {
       createdAt: now,
       updatedAt: now
     };
+    await this.recordAudit({
+      tenantId: input.tenantId,
+      actorUserId: input.actorUserId,
+      action: "brief.updated",
+      resourceType: "DesignBrief",
+      resourceId: value.id,
+      requestId: input.requestId,
+      correlationId: input.correlationId,
+      metadata: { operation: "CREATED" }
+    });
     this.briefs.set(value.id, value);
+    if (replay.key) this.creations.set(replay.key, { payload: replay.fingerprint, value });
     return structuredClone(value);
   }
 

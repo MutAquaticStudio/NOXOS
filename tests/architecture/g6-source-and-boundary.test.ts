@@ -62,7 +62,11 @@ describe("Gate 6 source and bounded-context architecture", () => {
   it("does not expose ChemicalEntity or accept browser-owned evidence authority", () => {
     expect(packageSource).not.toMatch(/canonicalSmiles|isomericSmiles|InChIKey|molecularFormula/i);
     const api = readFileSync("packages/release-readiness/src/api.ts", "utf8");
-    expect(api).toContain("releaseProfileSchema.parse(request.body)");
+    // Command metadata extends the canonical profile; the API behavioral test
+    // separately proves browser-owned evidence is stripped rather than trusted.
+    expect(api).toMatch(
+      /releaseProfileSchema\s*\.extend\(\{ idempotencyKey: uuid\.optional\(\) \}\)\s*\.parse\(request\.body\)/
+    );
     expect(api).not.toMatch(/request\.body.*(?:checks|evidenceSnapshot|formulaLines)/s);
   });
 });

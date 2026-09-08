@@ -215,7 +215,8 @@ async function fulfillmentEnvelope(
 ): Promise<any | undefined> {
   const fulfillment = (
     await sql<any[]>`
-      select * from commercial.fulfillments where tenant_id=${tenantId} and id=${fulfillmentId}
+      select *, extract(epoch from updated_at)::text as revision
+      from commercial.fulfillments where tenant_id=${tenantId} and id=${fulfillmentId}
     `
   )[0];
   if (!fulfillment) return undefined;
@@ -975,18 +976,29 @@ export class PostgresCommercialOrdersStore implements CommercialOrdersStore {
     return fulfillmentEnvelope(this.sql, tenantId, fulfillmentId);
   }
   async updateFulfillment(
-    input: CommercialCommandContext & { fulfillmentId: string; notes?: string | null }
+    input: CommercialCommandContext & {
+      fulfillmentId: string;
+      expectedRevision: string;
+      notes?: string | null;
+    }
   ) {
     return this.sql.begin(async (tx) => {
       const f = (
         await tx<
           any[]
-        >`select * from commercial.fulfillments where tenant_id=${input.tenantId} and id=${input.fulfillmentId} for update`
+        >`select *, extract(epoch from updated_at)::text as revision from commercial.fulfillments where tenant_id=${input.tenantId} and id=${input.fulfillmentId} for update`
       )[0];
       if (!f) problem(404, "COMMERCIAL_FULFILLMENT_NOT_FOUND", "Fulfillment was not found.");
       if (f.status !== "DRAFT")
         problem(409, "COMMERCIAL_FULFILLMENT_NOT_EDITABLE", "Fulfillment is immutable.");
-      await tx`update commercial.fulfillments set notes=${input.notes ?? null},updated_at=now() where id=${f.id}`;
+      if (!input.expectedRevision)
+        problem(409, "COMMERCIAL_FULFILLMENT_STALE", "Reload fulfillment before saving.");
+      // A lost-response retry must not write or audit a second time. Compare the
+      // desired state under the same lock used by the line editor.
+      if (f.notes === (input.notes ?? null)) return fulfillmentEnvelope(tx, input.tenantId, f.id);
+      if (f.revision !== input.expectedRevision)
+        problem(409, "COMMERCIAL_FULFILLMENT_STALE", "Fulfillment changed. Reload before saving.");
+      await tx`update commercial.fulfillments set notes=${input.notes ?? null},updated_at=greatest(clock_timestamp(), updated_at + interval '1 microsecond') where id=${f.id}`;
       await audit(tx, input, "commercial.fulfillment.updated", "CommercialFulfillment", f.id);
       return fulfillmentEnvelope(tx, input.tenantId, f.id);
     });
@@ -994,6 +1006,7 @@ export class PostgresCommercialOrdersStore implements CommercialOrdersStore {
   async replaceFulfillmentLines(
     input: CommercialCommandContext & {
       fulfillmentId: string;
+      expectedRevision: string;
       lines: readonly Record<string, unknown>[];
     }
   ) {
@@ -1001,11 +1014,37 @@ export class PostgresCommercialOrdersStore implements CommercialOrdersStore {
       const f = (
         await tx<
           any[]
-        >`select * from commercial.fulfillments where tenant_id=${input.tenantId} and id=${input.fulfillmentId} for update`
+        >`select *, extract(epoch from updated_at)::text as revision from commercial.fulfillments where tenant_id=${input.tenantId} and id=${input.fulfillmentId} for update`
       )[0];
       if (!f) problem(404, "COMMERCIAL_FULFILLMENT_NOT_FOUND", "Fulfillment was not found.");
       if (f.status !== "DRAFT")
         problem(409, "COMMERCIAL_FULFILLMENT_NOT_EDITABLE", "Fulfillment is immutable.");
+      if (!input.expectedRevision)
+        problem(409, "COMMERCIAL_FULFILLMENT_STALE", "Reload current lines before saving.");
+      const current = await tx<
+        any[]
+      >`select * from commercial.fulfillment_lines where tenant_id=${input.tenantId} and fulfillment_id=${f.id}`;
+      // PUT is a set replacement: an identical desired set is a no-op, including
+      // a retry after a lost response. Never delete/recreate rows or audit a no-op.
+      const key = (orderLineId: unknown, allocationId: unknown, quantity: unknown) =>
+        JSON.stringify([
+          String(orderLineId).toLowerCase(),
+          allocationId ? String(allocationId).toLowerCase() : null,
+          BigInt(String(quantity)).toString()
+        ]);
+      const saved = current
+        .map((l) => key(l.order_line_id, l.allocation_id, l.quantity_value))
+        .sort();
+      const desired = input.lines
+        .map((l) => key(l.orderLineId, l.allocationId, l.quantityValue))
+        .sort();
+      if (JSON.stringify(saved) === JSON.stringify(desired)) return current;
+      if (f.revision !== input.expectedRevision)
+        problem(
+          409,
+          "COMMERCIAL_FULFILLMENT_STALE",
+          "Fulfillment changed. Reload current lines before saving."
+        );
       await tx`delete from commercial.fulfillment_lines where tenant_id=${input.tenantId} and fulfillment_id=${f.id}`;
       for (const raw of input.lines) {
         const l: any = raw;
@@ -1026,6 +1065,7 @@ export class PostgresCommercialOrdersStore implements CommercialOrdersStore {
           problem(409, "COMMERCIAL_LINE_INVALID", "Physical fulfillment requires allocation.");
         await tx`insert into commercial.fulfillment_lines (tenant_id,fulfillment_id,order_line_id,allocation_id,quantity_value) values (${input.tenantId},${f.id},${line.id},${l.allocationId ?? null},${l.quantityValue})`;
       }
+      await tx`update commercial.fulfillments set updated_at=greatest(clock_timestamp(), updated_at + interval '1 microsecond') where tenant_id=${input.tenantId} and id=${f.id}`;
       await audit(tx, input, "commercial.fulfillment.lines.updated", "CommercialFulfillment", f.id);
       return tx<
         any[]

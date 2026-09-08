@@ -137,6 +137,13 @@ export const updateTaskSchema = z
   .strict()
   .refine((x) => Object.keys(x).length > 0);
 export const reasonSchema = z.object({ reason: text(2000) }).strict();
+export const projectCommandGuardSchema = z
+  .object({
+    idempotencyKey: projectUuidSchema.optional(),
+    expectedRevision: text(120).optional()
+  })
+  .strict();
+export const guardedHoldSchema = reasonSchema.extend(projectCommandGuardSchema.shape);
 export const createDependencySchema = z.object({ predecessorTaskId: projectUuidSchema }).strict();
 export const createArtifactLinkSchema = z
   .object({
@@ -148,6 +155,7 @@ export const createArtifactLinkSchema = z
   .strict();
 export const createUpdateSchema = z
   .object({
+    ...projectCommandGuardSchema.shape,
     phasePlanId: projectUuidSchema.nullable().optional(),
     taskId: projectUuidSchema.nullable().optional(),
     updateType: updateTypeSchema,
@@ -171,6 +179,8 @@ export type ProjectCommandContext = {
   actorUserId: string;
   requestId: string;
   correlationId: string;
+  idempotencyKey?: string;
+  expectedRevision?: string;
 };
 export type ProjectArtifactReference = {
   type: ProjectArtifactType;

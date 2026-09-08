@@ -84,6 +84,7 @@ export type TenantMembershipUpdate = {
 export interface PlatformStore {
   transaction<T>(operation: (store: PlatformStore) => Promise<T>): Promise<T>;
   findPlatformUser(userId: string): Promise<PlatformUserRecord | undefined>;
+  lockPlatformUser(userId: string): Promise<PlatformUserRecord | undefined>;
   listPlatformUsers(): Promise<PlatformUserRecord[]>;
   insertPlatformUser(input: {
     id: string;
@@ -138,6 +139,7 @@ export interface PlatformStore {
 }
 
 type PlatformUserRow = {
+  revision: string;
   id: string;
   display_name: string | null;
   status: PlatformUserStatus;
@@ -147,6 +149,7 @@ type PlatformUserRow = {
 };
 
 type TenantRow = {
+  revision: string;
   id: string;
   name: string;
   slug: string;
@@ -156,6 +159,7 @@ type TenantRow = {
 };
 
 type MembershipRow = {
+  revision: string;
   tenant_id: string;
   user_id: string;
   role_key: TenantRoleKey;
@@ -165,6 +169,7 @@ type MembershipRow = {
 };
 
 type MembershipWithTenantRow = MembershipRow & {
+  tenant_revision: string;
   tenant_name: string;
   tenant_slug: string;
   tenant_status: TenantStatus;
@@ -195,6 +200,7 @@ type AuditEventRow = {
 
 function toPlatformUser(row: PlatformUserRow): PlatformUserRecord {
   return {
+    revision: row.revision,
     id: row.id,
     displayName: row.display_name,
     status: row.status,
@@ -206,6 +212,7 @@ function toPlatformUser(row: PlatformUserRow): PlatformUserRecord {
 
 function toTenant(row: TenantRow): TenantRecord {
   return {
+    revision: row.revision,
     id: row.id,
     name: row.name,
     slug: row.slug,
@@ -217,6 +224,7 @@ function toTenant(row: TenantRow): TenantRecord {
 
 function toMembership(row: MembershipRow): TenantMembershipRecord {
   return {
+    revision: row.revision,
     tenantId: row.tenant_id,
     userId: row.user_id,
     roleKey: row.role_key,
@@ -265,16 +273,25 @@ class PostgresPlatformStore implements PlatformStore {
 
   async findPlatformUser(userId: string): Promise<PlatformUserRecord | undefined> {
     const rows = await this.sql<PlatformUserRow[]>`
-      select id, display_name, status, platform_role_key, created_at, updated_at
+      select id, display_name, status, platform_role_key, created_at, updated_at, extract(epoch from updated_at)::text as revision
       from platform.platform_users
       where id = ${userId}
     `;
     return rows[0] ? toPlatformUser(rows[0]) : undefined;
   }
 
+  async lockPlatformUser(userId: string): Promise<PlatformUserRecord | undefined> {
+    const rows = await this.sql<PlatformUserRow[]>`
+      select id, display_name, status, platform_role_key, created_at, updated_at,
+        extract(epoch from updated_at)::text as revision
+      from platform.platform_users where id=${userId} for update
+    `;
+    return rows[0] ? toPlatformUser(rows[0]) : undefined;
+  }
+
   async listPlatformUsers(): Promise<PlatformUserRecord[]> {
     const rows = await this.sql<PlatformUserRow[]>`
-      select id, display_name, status, platform_role_key, created_at, updated_at
+      select id, display_name, status, platform_role_key, created_at, updated_at, extract(epoch from updated_at)::text as revision
       from platform.platform_users
       order by created_at, id
     `;
@@ -295,7 +312,7 @@ class PostgresPlatformStore implements PlatformStore {
         ${input.status ?? "ACTIVE"},
         ${input.platformRoleKey ?? null}
       )
-      returning id, display_name, status, platform_role_key, created_at, updated_at
+      returning id, display_name, status, platform_role_key, created_at, updated_at, extract(epoch from updated_at)::text as revision
     `;
     return toPlatformUser(rows[0]);
   }
@@ -313,9 +330,9 @@ class PostgresPlatformStore implements PlatformStore {
           when ${update.platformRoleKey === undefined} then platform_role_key
           else ${update.platformRoleKey ?? null}
         end,
-        updated_at = now()
+        updated_at = greatest(clock_timestamp(), updated_at + interval '1 microsecond')
       where id = ${userId}
-      returning id, display_name, status, platform_role_key, created_at, updated_at
+      returning id, display_name, status, platform_role_key, created_at, updated_at, extract(epoch from updated_at)::text as revision
     `;
     return rows[0] ? toPlatformUser(rows[0]) : undefined;
   }
@@ -370,7 +387,7 @@ class PostgresPlatformStore implements PlatformStore {
 
   async findTenant(tenantId: string): Promise<TenantRecord | undefined> {
     const rows = await this.sql<TenantRow[]>`
-      select id, name, slug, status, created_at, updated_at
+      select id, name, slug, status, created_at, updated_at, extract(epoch from updated_at)::text as revision
       from platform.tenants
       where id = ${tenantId}
     `;
@@ -379,7 +396,7 @@ class PostgresPlatformStore implements PlatformStore {
 
   async findTenantBySlug(slug: string): Promise<TenantRecord | undefined> {
     const rows = await this.sql<TenantRow[]>`
-      select id, name, slug, status, created_at, updated_at
+      select id, name, slug, status, created_at, updated_at, extract(epoch from updated_at)::text as revision
       from platform.tenants
       where slug = ${slug}
     `;
@@ -388,7 +405,7 @@ class PostgresPlatformStore implements PlatformStore {
 
   async listTenants(): Promise<TenantRecord[]> {
     const rows = await this.sql<TenantRow[]>`
-      select id, name, slug, status, created_at, updated_at
+      select id, name, slug, status, created_at, updated_at, extract(epoch from updated_at)::text as revision
       from platform.tenants
       order by created_at, id
     `;
@@ -403,7 +420,7 @@ class PostgresPlatformStore implements PlatformStore {
     const rows = await this.sql<TenantRow[]>`
       insert into platform.tenants (name, slug, status)
       values (${input.name}, ${input.slug}, ${input.status ?? "ACTIVE"})
-      returning id, name, slug, status, created_at, updated_at
+      returning id, name, slug, status, created_at, updated_at, extract(epoch from updated_at)::text as revision
     `;
     return toTenant(rows[0]);
   }
@@ -414,9 +431,9 @@ class PostgresPlatformStore implements PlatformStore {
       set
         name = case when ${update.name === undefined} then name else ${update.name ?? null} end,
         status = case when ${update.status === undefined} then status else ${update.status ?? null} end,
-        updated_at = now()
+        updated_at = greatest(clock_timestamp(), updated_at + interval '1 microsecond')
       where id = ${tenantId}
-      returning id, name, slug, status, created_at, updated_at
+      returning id, name, slug, status, created_at, updated_at, extract(epoch from updated_at)::text as revision
     `;
     return rows[0] ? toTenant(rows[0]) : undefined;
   }
@@ -430,11 +447,13 @@ class PostgresPlatformStore implements PlatformStore {
         membership.status,
         membership.created_at,
         membership.updated_at,
+        extract(epoch from membership.updated_at)::text as revision,
         tenant.name as tenant_name,
         tenant.slug as tenant_slug,
         tenant.status as tenant_status,
         tenant.created_at as tenant_created_at,
-        tenant.updated_at as tenant_updated_at
+        tenant.updated_at as tenant_updated_at,
+        extract(epoch from tenant.updated_at)::text as tenant_revision
       from platform.tenant_memberships as membership
       join platform.tenants as tenant on tenant.id = membership.tenant_id
       where membership.user_id = ${userId}
@@ -443,6 +462,7 @@ class PostgresPlatformStore implements PlatformStore {
     return rows.map((row) => ({
       ...toMembership(row),
       tenant: {
+        revision: row.tenant_revision,
         id: row.tenant_id,
         name: row.tenant_name,
         slug: row.tenant_slug,
@@ -455,7 +475,7 @@ class PostgresPlatformStore implements PlatformStore {
 
   async listTenantMemberships(tenantId: string): Promise<TenantMembershipRecord[]> {
     const rows = await this.sql<MembershipRow[]>`
-      select tenant_id, user_id, role_key, status, created_at, updated_at
+      select tenant_id, user_id, role_key, status, created_at, updated_at, extract(epoch from updated_at)::text as revision
       from platform.tenant_memberships
       where tenant_id = ${tenantId}
       order by created_at, user_id
@@ -468,7 +488,7 @@ class PostgresPlatformStore implements PlatformStore {
     userId: string
   ): Promise<TenantMembershipRecord | undefined> {
     const rows = await this.sql<MembershipRow[]>`
-      select tenant_id, user_id, role_key, status, created_at, updated_at
+      select tenant_id, user_id, role_key, status, created_at, updated_at, extract(epoch from updated_at)::text as revision
       from platform.tenant_memberships
       where tenant_id = ${tenantId} and user_id = ${userId}
     `;
@@ -484,7 +504,7 @@ class PostgresPlatformStore implements PlatformStore {
     const rows = await this.sql<MembershipRow[]>`
       insert into platform.tenant_memberships (tenant_id, user_id, role_key, status)
       values (${input.tenantId}, ${input.userId}, ${input.roleKey}, ${input.status ?? "ACTIVE"})
-      returning tenant_id, user_id, role_key, status, created_at, updated_at
+      returning tenant_id, user_id, role_key, status, created_at, updated_at, extract(epoch from updated_at)::text as revision
     `;
     return toMembership(rows[0]);
   }
@@ -499,16 +519,16 @@ class PostgresPlatformStore implements PlatformStore {
       set
         role_key = case when ${update.roleKey === undefined} then role_key else ${update.roleKey ?? null} end,
         status = case when ${update.status === undefined} then status else ${update.status ?? null} end,
-        updated_at = now()
+        updated_at = greatest(clock_timestamp(), updated_at + interval '1 microsecond')
       where tenant_id = ${tenantId} and user_id = ${userId}
-      returning tenant_id, user_id, role_key, status, created_at, updated_at
+      returning tenant_id, user_id, role_key, status, created_at, updated_at, extract(epoch from updated_at)::text as revision
     `;
     return rows[0] ? toMembership(rows[0]) : undefined;
   }
 
   async lockTenant(tenantId: string): Promise<TenantRecord | undefined> {
     const rows = await this.sql<TenantRow[]>`
-      select id, name, slug, status, created_at, updated_at
+      select id, name, slug, status, created_at, updated_at, extract(epoch from updated_at)::text as revision
       from platform.tenants
       where id = ${tenantId}
       for update

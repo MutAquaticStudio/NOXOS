@@ -194,6 +194,7 @@ export type ErrorCode =
   | "PLATFORM_USER_NOT_FOUND"
   | "MEMBER_NOT_FOUND"
   | "PLATFORM_USER_ALREADY_PROVISIONED"
+  | "PLATFORM_RESOURCE_STALE"
   | "TENANT_SLUG_CONFLICT"
   | "MEMBERSHIP_ALREADY_EXISTS"
   | "LAST_ACTIVE_PLATFORM_OWNER_REQUIRED"
@@ -381,6 +382,7 @@ export const tenantSlugSchema = z
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
 export type PlatformUserRecord = {
+  revision: string;
   id: string;
   displayName: string | null;
   status: PlatformUserStatus;
@@ -390,6 +392,7 @@ export type PlatformUserRecord = {
 };
 
 export type TenantRecord = {
+  revision: string;
   id: string;
   name: string;
   slug: string;
@@ -399,6 +402,7 @@ export type TenantRecord = {
 };
 
 export type TenantMembershipRecord = {
+  revision: string;
   tenantId: string;
   userId: string;
   roleKey: TenantRoleKey;

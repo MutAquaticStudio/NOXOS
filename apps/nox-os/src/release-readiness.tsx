@@ -1,7 +1,15 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { matchPath, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  useWorkspaceObject,
+  useUnsavedChanges,
+  NoxDialog,
+  NoxReadFeedback,
+  type NoxReadState
+} from "@nox-os/ui";
+import { Link, matchPath, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import type { BrowserReleaseAssessment } from "@nox-os/release-readiness/browser";
 import type { ApiClient } from "./platform-control";
+import { NoxApiError } from "./api-client";
 
 const permissions = {
   read: "module.release-readiness.assessment.read",
@@ -15,7 +23,26 @@ function has(values: readonly string[], permission: string): boolean {
 }
 
 function message(reason: unknown): string {
-  return reason instanceof Error ? reason.message : "Release Readiness operation failed.";
+  if (reason instanceof NoxApiError) {
+    switch (reason.code) {
+      case "PERMISSION_DENIED":
+      case "TENANT_ACCESS_DENIED":
+        return "You do not have access to this assessment operation.";
+      case "NOT_FOUND":
+        return "The requested assessment or FormulaVersion is not available.";
+      case "FORMULA_VERSION_NOT_FROZEN":
+        return "Select a frozen FormulaVersion before running an assessment.";
+      case "APPROVAL_EVIDENCE_REQUIRED":
+        return "Valid Formula approval evidence is required before assessment.";
+      case "UNSUPPORTED_COMPOSITION_KIND":
+        return "This composition kind cannot be assessed for release readiness.";
+      case "IDEMPOTENCY_CONFLICT":
+        return "This request key belongs to a different assessment request. Review the current assessment before starting a new request.";
+    }
+    if (reason.status === 401) return "Your session needs to be restored. Sign in again.";
+    if (reason.status === 400) return "Check the FormulaVersion and release profile values.";
+  }
+  return "The response could not be confirmed. Retry the unchanged request to recover its result.";
 }
 
 function Registry({
@@ -29,16 +56,60 @@ function Registry({
 }) {
   const navigate = useNavigate();
   const [assessments, setAssessments] = useState<BrowserReleaseAssessment[]>([]);
-  const [error, setError] = useState<string>();
+  const [readState, setReadState] = useState<NoxReadState>("LOADING");
+  const [reload, setReload] = useState(0);
+  const [search, setSearch] = useSearchParams();
+  const formulaFilter = search.get("formula") ?? "";
+  const decisionFilter = search.get("decision") ?? "";
+  const applicationFilter = search.get("application") ?? "";
+  const setFilter = (key: string, value: string) => {
+    // BrowserRouter updates history before its transition renders. Compose rapid
+    // filter gestures from that current URL, not a previous render's query.
+    const next = new URLSearchParams(window.location.search);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setSearch(next, { replace: key === "formula" });
+  };
+  const visible = assessments.filter(
+    (item) =>
+      (!formulaFilter ||
+        item.formulaVersionId.toLowerCase().includes(formulaFilter.trim().toLowerCase())) &&
+      (!decisionFilter || item.decision === decisionFilter) &&
+      (!applicationFilter || item.releaseProfile.applicationKey === applicationFilter)
+  );
   useEffect(() => {
     let current = true;
+    setReadState("LOADING");
+    setAssessments([]);
     void api<{ assessments: BrowserReleaseAssessment[] }>("/release-readiness", { tenantId })
-      .then((result) => current && setAssessments(result.assessments))
-      .catch((reason) => current && setError(message(reason)));
+      .then((result) => {
+        const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (
+          !Array.isArray(result.assessments) ||
+          result.assessments.some(
+            (item) =>
+              !item ||
+              !uuid.test(item.id) ||
+              !uuid.test(item.formulaVersionId) ||
+              !["READY", "REVIEW_REQUIRED", "BLOCKED"].includes(item.decision) ||
+              typeof item.releaseProfile?.applicationKey !== "string" ||
+              !Number.isFinite(item.releaseProfile?.dosagePct) ||
+              typeof item.policyKey !== "string" ||
+              typeof item.policyVersion !== "string" ||
+              typeof item.assessedAt !== "string" ||
+              !Number.isFinite(Date.parse(item.assessedAt))
+          )
+        )
+          throw new Error("Invalid registry response");
+        if (!current) return;
+        setAssessments(result.assessments);
+        setReadState("READY");
+      })
+      .catch(() => current && setReadState("ERROR"));
     return () => {
       current = false;
     };
-  }, [api, tenantId]);
+  }, [api, tenantId, reload]);
 
   return (
     <section className="nox-design-studio" aria-labelledby="release-registry-title">
@@ -56,12 +127,79 @@ function Registry({
           New Assessment
         </button>
       </header>
-      {error ? (
-        <p role="alert" className="nox-design-warning">
-          {error}
+      <fieldset className="nox-inline-form" disabled={readState !== "READY"}>
+        <legend>Filter assessments</legend>
+        <label>
+          FormulaVersion ID
+          <input
+            value={formulaFilter}
+            onChange={(event) => setFilter("formula", event.target.value)}
+          />
+        </label>
+        <div>
+          <label htmlFor="release-decision-filter">Recorded decision</label>
+          <select
+            id="release-decision-filter"
+            value={decisionFilter}
+            onChange={(event) => setFilter("decision", event.target.value)}
+          >
+            <option value="">All decisions</option>
+            {["READY", "REVIEW_REQUIRED", "BLOCKED"].map((value) => (
+              <option key={value} value={value}>
+                {value.replaceAll("_", " ")}
+              </option>
+            ))}
+            {decisionFilter && !["READY", "REVIEW_REQUIRED", "BLOCKED"].includes(decisionFilter) ? (
+              <option value={decisionFilter}>Unknown filter: {decisionFilter}</option>
+            ) : null}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="release-application-filter">Application</label>
+          <select
+            id="release-application-filter"
+            value={applicationFilter}
+            onChange={(event) => setFilter("application", event.target.value)}
+          >
+            <option value="">All applications</option>
+            {[
+              ...new Set([
+                ...assessments.map((item) => item.releaseProfile.applicationKey),
+                ...(applicationFilter ? [applicationFilter] : [])
+              ])
+            ].map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button
+          type="button"
+          disabled={!formulaFilter && !decisionFilter && !applicationFilter}
+          onClick={() => {
+            const next = new URLSearchParams(window.location.search);
+            for (const key of ["formula", "decision", "application"]) next.delete(key);
+            setSearch(next);
+          }}
+        >
+          Clear filters
+        </button>
+      </fieldset>
+      <NoxReadFeedback
+        state={readState}
+        subject="Release Assessments"
+        retry={() => setReload((value) => value + 1)}
+      />
+      {readState === "READY" ? (
+        <p role="status">
+          {visible.length} of {assessments.length} loaded assessments
         </p>
       ) : null}
-      <div className="nox-material-table-wrap">
+      <p className="nox-design-muted">
+        Recorded READY is not Batch release. Open the assessment for its policy and evidence.
+      </p>
+      <div className="nox-table-wrap" tabIndex={0} role="region" aria-label="Assessment results">
         <table className="nox-material-table">
           <caption className="sr-only">Immutable release assessment registry</caption>
           <thead>
@@ -75,16 +213,15 @@ function Registry({
             </tr>
           </thead>
           <tbody>
-            {assessments.map((item) => (
+            {visible.map((item) => (
               <tr key={item.id}>
                 <td>
-                  <button
-                    type="button"
-                    className="nox-design-back"
-                    onClick={() => navigate(`/release-readiness/${item.id}`)}
+                  <Link
+                    to={`/release-readiness/${item.id}`}
+                    aria-label={`Open assessment ${item.id} for FormulaVersion ${item.formulaVersionId}`}
                   >
-                    <code>{item.formulaVersionId.slice(0, 8)}</code>
-                  </button>
+                    <code>{item.formulaVersionId}</code>
+                  </Link>
                 </td>
                 <td>
                   {item.releaseProfile.applicationKey} · {item.releaseProfile.dosagePct}%
@@ -102,8 +239,11 @@ function Registry({
           </tbody>
         </table>
       </div>
-      {assessments.length === 0 ? (
+      {readState === "READY" && assessments.length === 0 ? (
         <p className="nox-design-muted">No release assessments.</p>
+      ) : null}
+      {readState === "READY" && assessments.length > 0 && visible.length === 0 ? (
+        <p>No assessments match these filters. Clear filters to review the loaded records.</p>
       ) : null}
     </section>
   );
@@ -117,8 +257,21 @@ function NewAssessment({ api, tenantId }: { api: ApiClient; tenantId: string }) 
   const [dosagePct, setDosagePct] = useState(20);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string>();
+  const sending = useRef(false);
+  const command = useRef<{ fingerprint: string; key: string } | undefined>(undefined);
+  const [uncertain, setUncertain] = useState(false);
+  const [discard, setDiscard] = useState(false);
+  const dirty = Boolean(
+    formulaVersionId || applicationKey !== "fine-fragrance" || dosagePct !== 20
+  );
+  useUnsavedChanges(dirty || working || uncertain);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (sending.current) return;
+    sending.current = true;
+    const fingerprint = JSON.stringify([tenantId, formulaVersionId, applicationKey, dosagePct]);
+    if (command.current?.fingerprint !== fingerprint)
+      command.current = { fingerprint, key: crypto.randomUUID() };
     setWorking(true);
     setError(undefined);
     try {
@@ -131,14 +284,17 @@ function NewAssessment({ api, tenantId }: { api: ApiClient; tenantId: string }) 
             formulaVersionId,
             applicationKey,
             dosagePct,
-            policyKey: "g6-known-limit-v1"
+            policyKey: "g6-known-limit-v1",
+            idempotencyKey: command.current.key
           }
         }
       );
       navigate(`/release-readiness/${result.assessment.id}`);
     } catch (reason) {
       setError(message(reason));
+      setUncertain(!(reason instanceof NoxApiError && reason.status >= 400 && reason.status < 500));
     } finally {
+      sending.current = false;
       setWorking(false);
     }
   };
@@ -149,7 +305,8 @@ function NewAssessment({ api, tenantId }: { api: ApiClient; tenantId: string }) 
           <button
             type="button"
             className="nox-design-back"
-            onClick={() => navigate("/release-readiness")}
+            disabled={working}
+            onClick={() => (dirty || uncertain ? setDiscard(true) : navigate("/release-readiness"))}
           >
             ← Assessments
           </button>
@@ -161,14 +318,18 @@ function NewAssessment({ api, tenantId }: { api: ApiClient; tenantId: string }) 
         <label>
           Approved FormulaVersion
           <input
+            disabled={working || uncertain}
             value={formulaVersionId}
             onChange={(event) => setFormulaVersionId(event.target.value)}
             required
           />
         </label>
-        <label>
-          Application
+        <label htmlFor="release-profile-application">
+          <span id="release-profile-application-label">Application</span>
           <select
+            id="release-profile-application"
+            aria-labelledby="release-profile-application-label"
+            disabled={working || uncertain}
             value={applicationKey}
             onChange={(event) => setApplicationKey(event.target.value)}
           >
@@ -179,6 +340,7 @@ function NewAssessment({ api, tenantId }: { api: ApiClient; tenantId: string }) 
         <label>
           Dosage %
           <input
+            disabled={working || uncertain}
             type="number"
             min="0.000001"
             max="100"
@@ -205,6 +367,26 @@ function NewAssessment({ api, tenantId }: { api: ApiClient; tenantId: string }) 
           {error}
         </p>
       ) : null}
+      {uncertain ? (
+        <p role="status">
+          The profile is locked while the outcome is unknown. Retry sends the same request key, not
+          a new assessment request. Leaving does not cancel a request that reached the server.
+        </p>
+      ) : null}
+      {discard ? (
+        <NoxDialog title="Leave assessment form?" onClose={() => setDiscard(false)}>
+          <p>
+            Your entered profile will be discarded. Leaving does not undo an assessment already
+            accepted by the server.
+          </p>
+          <button type="button" onClick={() => setDiscard(false)}>
+            Keep editing
+          </button>
+          <button type="button" onClick={() => navigate("/release-readiness")}>
+            Leave form
+          </button>
+        </NoxDialog>
+      ) : null}
     </section>
   );
 }
@@ -222,8 +404,30 @@ function Detail({
 }) {
   const navigate = useNavigate();
   const [assessment, setAssessment] = useState<BrowserReleaseAssessment>();
+  const sending = useRef(false);
+  const commandKey = useRef<string | undefined>(undefined);
   const [error, setError] = useState<string>();
   const [working, setWorking] = useState(false);
+  const workspaceObject = useMemo(
+    () =>
+      !error && assessment?.id === assessmentId
+        ? {
+            id: assessment.id,
+            objectType: "ReleaseAssessment",
+            title: `Assessment · ${assessment.decision.replaceAll("_", " ")}`,
+            route: `/release-readiness/${assessment.id}`,
+            readOnly: true,
+            properties: [
+              { label: "Decision", value: assessment.decision },
+              { label: "FormulaVersion", value: assessment.formulaVersionId },
+              { label: "Policy", value: `${assessment.policyKey} · ${assessment.policyVersion}` },
+              { label: "Bundle hash", value: assessment.formulaBundleHash }
+            ]
+          }
+        : undefined,
+    [assessment, assessmentId, error]
+  );
+  useWorkspaceObject(workspaceObject);
   useEffect(() => {
     let current = true;
     void api<{ assessment: BrowserReleaseAssessment }>(
@@ -236,7 +440,7 @@ function Detail({
       current = false;
     };
   }, [api, tenantId, assessmentId]);
-  if (error)
+  if (error && !assessment)
     return (
       <p role="alert" className="nox-design-warning">
         {error}
@@ -244,16 +448,21 @@ function Detail({
     );
   if (!assessment) return <p aria-busy="true">Loading immutable assessment…</p>;
   const reassess = async () => {
+    if (sending.current || !canReassess) return;
+    sending.current = true;
+    commandKey.current ??= crypto.randomUUID();
     setWorking(true);
+    setError(undefined);
     try {
       const result = await api<{ assessment: BrowserReleaseAssessment }>(
         `/release-readiness/assessments/${assessment.id}/reassess`,
-        { method: "POST", tenantId }
+        { method: "POST", tenantId, body: { idempotencyKey: commandKey.current } }
       );
       navigate(`/release-readiness/${result.assessment.id}`);
     } catch (reason) {
       setError(message(reason));
     } finally {
+      sending.current = false;
       setWorking(false);
     }
   };
@@ -272,9 +481,14 @@ function Detail({
           <h1 id="release-detail-title">{assessment.decision.replaceAll("_", " ")}</h1>
         </div>
         <button type="button" disabled={!canReassess || working} onClick={() => void reassess()}>
-          Reassess Current Evidence
+          {error ? "Retry same reassessment request" : "Reassess Current Evidence"}
         </button>
       </header>
+      {error ? (
+        <p role="alert">
+          {error} No new request key will be generated when retrying this reassessment.
+        </p>
+      ) : null}
       <dl className="nox-design-intent-list">
         <div>
           <dt>FormulaVersion</dt>
@@ -315,8 +529,14 @@ function Detail({
         This decision applies only to the recorded release profile, policy version, and immutable
         evidence snapshot. It is not a production or batch release.
       </p>
-      <div className="nox-material-table-wrap">
-        <table className="nox-material-table">
+      {assessment.checks.length === 0 ? (
+        <p role="status">
+          No check evidence was returned. Do not infer verified readiness from an empty evidence
+          list.
+        </p>
+      ) : null}
+      <div className="nox-table-wrap" role="region" aria-label="Assessment evidence" tabIndex={0}>
+        <table className="nox-table" aria-label="Assessment checks">
           <thead>
             <tr>
               <th>Group</th>
@@ -327,6 +547,11 @@ function Detail({
             </tr>
           </thead>
           <tbody>
+            {assessment.checks.length === 0 ? (
+              <tr>
+                <td colSpan={5}>No checks returned.</td>
+              </tr>
+            ) : null}
             {assessment.checks.map((check, index) => (
               <tr key={`${check.checkKey}-${check.materialId ?? "formula"}-${index}`}>
                 <td>
@@ -376,7 +601,7 @@ export function ReleaseReadinessExperience({
   }
   if (location.pathname === "/release-readiness/new") {
     return has(modulePermissions, permissions.create) && has(modulePermissions, permissions.run) ? (
-      <NewAssessment api={api} tenantId={tenantId} />
+      <NewAssessment key={tenantId} api={api} tenantId={tenantId} />
     ) : (
       <section>
         <h1>Assessment permission required</h1>
@@ -387,6 +612,7 @@ export function ReleaseReadinessExperience({
   if (detail?.params.assessmentId) {
     return (
       <Detail
+        key={`${tenantId}:${detail.params.assessmentId}`}
         api={api}
         tenantId={tenantId}
         assessmentId={detail.params.assessmentId}
@@ -398,6 +624,7 @@ export function ReleaseReadinessExperience({
   }
   return (
     <Registry
+      key={tenantId}
       api={api}
       tenantId={tenantId}
       canCreate={

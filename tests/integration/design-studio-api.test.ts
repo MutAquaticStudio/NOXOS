@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ApiRequest, TenantRequestContext } from "@nox-os/contracts";
 import { InternalApiRouter } from "@nox-os/platform";
 import { LocalFeatureFlagResolver } from "@nox-os/module-registry";
@@ -165,6 +165,87 @@ function fixture() {
     });
   return { store, request };
 }
+
+describe("G4 creation replay HTTP contract", () => {
+  const operationKey = "71000000-0000-4000-8000-000000000001";
+  const create = {
+    path: "/design-studio/projects",
+    method: "POST",
+    actor: "owner-a",
+    tenantId: IDS.tenantA
+  };
+
+  it("replays the same project once, rejects changed intent and rechecks permission", async () => {
+    const { request, store } = fixture();
+    const body = { name: "Replay study", operationKey };
+    const first = await request({ ...create, body });
+    const replay = await request({ ...create, body });
+    expect(first.status).toBe(201);
+    expect(replay.body).toEqual(first.body);
+    expect(store.audits.filter((event) => event.action === "project.created")).toHaveLength(1);
+    const conflict = await request({ ...create, body: { ...body, name: "Different study" } });
+    expect(conflict.status).toBe(409);
+    expect(JSON.stringify(conflict.body)).toContain("IDEMPOTENCY_KEY_CONFLICT");
+    expect((await request({ ...create, actor: "reader-a", body })).status).toBe(403);
+    const otherTenant = await request({ ...create, actor: "owner-b", tenantId: IDS.tenantB, body });
+    expect(otherTenant.status).toBe(201);
+    expect(otherTenant.body).not.toEqual(first.body);
+  });
+
+  it("replays Brief creation without another audit and rejects changed payload", async () => {
+    const { request, store } = fixture();
+    const project = await request({ ...create, body: { name: "Study", operationKey } });
+    const projectId = (project.body as { project: { id: string } }).project.id;
+    const body = {
+      operationKey,
+      workflowMode: "FORMULA_GENERATION",
+      rawBrief: "Quiet citrus",
+      applicationKey: "fine-fragrance",
+      targetDosagePct: 20
+    };
+    const command = { ...create, path: `/design-studio/projects/${projectId}/briefs`, body };
+    const first = await request(command);
+    expect(first.status).toBe(201);
+    expect((await request(command)).body).toEqual(first.body);
+    expect(store.audits.filter((event) => event.action === "brief.updated")).toHaveLength(1);
+    expect(
+      (await request({ ...command, body: { ...body, rawBrief: "Changed citrus" } })).status
+    ).toBe(409);
+    expect((await request({ ...command, actor: "owner-b", tenantId: IDS.tenantB })).status).toBe(
+      404
+    );
+  });
+
+  it("validates operation keys and passes trace identity into the atomic store call", async () => {
+    const { request, store } = fixture();
+    const call = vi.spyOn(store, "createProject");
+    expect(
+      (await request({ ...create, body: { name: "Study", operationKey: "invalid" } })).status
+    ).toBe(400);
+    expect(call).not.toHaveBeenCalled();
+    await request({ ...create, body: { name: "Study", operationKey } });
+    expect(call).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationKey,
+        requestId: "req_g4",
+        correlationId: "corr_g4",
+        tenantId: IDS.tenantA,
+        actorUserId: IDS.ownerA
+      })
+    );
+  });
+
+  it("does not report success when the atomic creation store fails", async () => {
+    const { request, store } = fixture();
+    vi.spyOn(store, "createProject").mockRejectedValueOnce(new Error("controlled storage failure"));
+    // The transport's existing error boundary owns sanitization. Domain router
+    // must propagate the failure rather than return a success response.
+    await expect(request({ ...create, body: { name: "Study", operationKey } })).rejects.toThrow(
+      "controlled storage failure"
+    );
+    expect(store.audits).toHaveLength(0);
+  });
+});
 
 async function prepareConfirmedBrief(request: ReturnType<typeof fixture>["request"]) {
   const projectResponse = await request({

@@ -108,6 +108,15 @@ export interface TrialSensoryStore {
     requestId: string;
     correlationId: string;
   }): Promise<SensoryEvaluation | undefined>;
+  recordRevisionRequest(input: {
+    tenantId: string;
+    actorUserId: string;
+    requestId: string;
+    correlationId: string;
+    sourceTrialId: string;
+    sourceEvaluationId: string;
+    parentFormulaVersionId: string;
+  }): Promise<void>;
   recordAudit(input: {
     tenantId: string;
     actorUserId: string;

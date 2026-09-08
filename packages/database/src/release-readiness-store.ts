@@ -7,6 +7,7 @@ import { canReadMaterial } from "@nox-os/material-intelligence";
 import {
   RELEASE_READINESS_POLICY_KEY,
   RELEASE_READINESS_POLICY_VERSION,
+  ReleaseReadinessProblem,
   tenantSafeCurrentRegulatoryProjection,
   type ApprovalTraceEvidence,
   type RegulatoryEvidenceSnapshot,
@@ -117,6 +118,39 @@ class PostgresReleaseReadinessStore implements ReleaseReadinessStore {
       throw new Error("Release assessment requires a transaction-capable SQL client.");
     }
     return this.sql.begin(async (tx) => {
+      const commandIntent = {
+        profile: input.releaseProfile,
+        supersedesAssessmentId: input.supersedesAssessmentId
+      };
+      if (input.context.idempotencyKey) {
+        await tx`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["g6-command", input.context.tenantId, input.context.actorUserId, input.context.idempotencyKey])}, 0))`;
+        const prior = await tx<{ resource_id: string; matches: boolean }[]>`
+          select resource_id, metadata->'commandIntent' = ${tx.json(databaseJson(commandIntent))} as matches
+          from platform.audit_events where tenant_id=${input.context.tenantId}
+            and actor_user_id=${input.context.actorUserId} and resource_type='ReleaseAssessment'
+            and action in ('release-readiness.assessed','release-readiness.reassessed')
+            and metadata->>'idempotencyKey'=${input.context.idempotencyKey}
+        `;
+        if (prior.length) {
+          if (prior.length !== 1 || !prior[0].matches)
+            throw new ReleaseReadinessProblem(
+              409,
+              "IDEMPOTENCY_CONFLICT",
+              "This command key was already used for a different assessment request."
+            );
+          const result = await new PostgresReleaseReadinessStore(tx).findAssessment(
+            input.context.tenantId,
+            prior[0].resource_id
+          );
+          if (!result)
+            throw new ReleaseReadinessProblem(
+              409,
+              "IDEMPOTENCY_CONFLICT",
+              "Previous command result is unavailable."
+            );
+          return result;
+        }
+      }
       if (input.supersedesAssessmentId) {
         const lineage = await tx<{ id: string }[]>`
           select id from release_readiness.assessments
@@ -168,7 +202,10 @@ class PostgresReleaseReadinessStore implements ReleaseReadinessStore {
               policyKey: RELEASE_READINESS_POLICY_KEY,
               policyVersion: RELEASE_READINESS_POLICY_VERSION,
               decision: input.decision,
-              supersedesAssessmentId: input.supersedesAssessmentId
+              supersedesAssessmentId: input.supersedesAssessmentId,
+              ...(input.context.idempotencyKey
+                ? { idempotencyKey: input.context.idempotencyKey, commandIntent }
+                : {})
             })
           )}
         )

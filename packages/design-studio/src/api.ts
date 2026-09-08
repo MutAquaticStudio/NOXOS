@@ -49,10 +49,12 @@ const fileReferenceId = z
   .regex(/^file_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 const nonEmpty = z.string().trim().min(1).max(4000);
 const projectCreateSchema = z.object({
+  operationKey: uuid.optional(),
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().max(4000).nullable().optional()
 });
 const briefCreateSchema = z.object({
+  operationKey: uuid.optional(),
   workflowMode: designWorkflowModeSchema,
   rawBrief: nonEmpty,
   applicationKey: z.string().trim().min(1).max(120),
@@ -243,9 +245,11 @@ export class DesignStudioApi {
           tenantId: context.tenant.tenantId,
           name: input.name,
           description: input.description ?? null,
-          actorUserId: context.actor.userId
+          actorUserId: context.actor.userId,
+          operationKey: input.operationKey,
+          requestId: request.context.requestId,
+          correlationId: request.context.correlationId
         });
-        await this.audit(context, request, "project.created", "DesignProject", project.id);
         return { status: 201, body: { project } };
       })
     );
@@ -280,10 +284,10 @@ export class DesignStudioApi {
               input.assetReferences.length > 0 ? "INTERPRETER_UNAVAILABLE" : "TEXT_ONLY"
           },
           normalizedIntent: draft.intent,
-          actorUserId: context.actor.userId
-        });
-        await this.audit(context, request, "brief.updated", "DesignBrief", designBrief.id, {
-          operation: "CREATED"
+          actorUserId: context.actor.userId,
+          operationKey: input.operationKey,
+          requestId: request.context.requestId,
+          correlationId: request.context.correlationId
         });
         return { status: 201, body: { brief: designBrief, intentDraft: draft } };
       })

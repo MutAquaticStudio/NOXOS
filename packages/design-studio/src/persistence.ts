@@ -77,6 +77,9 @@ export interface DesignStudioStore {
     name: string;
     description: string | null;
     actorUserId: string;
+    operationKey?: string;
+    requestId: string;
+    correlationId: string;
   }): Promise<DesignProject>;
   listProjects(tenantId: string): Promise<DesignProject[]>;
   findProject(tenantId: string, projectId: string): Promise<DesignProject | undefined>;
@@ -88,6 +91,9 @@ export interface DesignStudioStore {
     briefPayload: Record<string, unknown>;
     normalizedIntent: NormalizedOlfactoryIntent;
     actorUserId: string;
+    operationKey?: string;
+    requestId: string;
+    correlationId: string;
   }): Promise<DesignBrief>;
   findBrief(tenantId: string, briefId: string): Promise<DesignBrief | undefined>;
   updateBrief(input: {

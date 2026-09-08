@@ -1,5 +1,15 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
-import { matchPath, useLocation, useNavigate } from "react-router-dom";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type ReactNode
+} from "react";
+import { matchPath, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { NoxDialog, useWorkspaceObject, useUnsavedChanges } from "@nox-os/ui";
 import {
   formatMassMg,
   type AccordArchitecturePlan,
@@ -11,6 +21,8 @@ import {
   type OsmoTaxonomyAssignmentType
 } from "@nox-os/design-studio/browser";
 import type { ApiClient } from "./platform-control";
+import { resolveDevelopmentContext } from "./development-context";
+import { compareCandidateLines } from "./candidate-diff";
 
 const READ = "module.design-studio.studio.read";
 const MANAGE_BRIEF = "module.design-studio.brief.manage";
@@ -396,38 +408,271 @@ function AccordPlanView({
   );
 }
 
-function FormulaCandidates({
+export function FormulaCandidates({
   candidates,
   selected,
   onSelect,
   onFreeze,
-  canFreeze
+  canFreeze,
+  readOnly = false
 }: {
   candidates: FormulaCandidate[];
   selected: number;
   onSelect: (index: number) => void;
-  onFreeze: () => void;
+  onFreeze: () => void | boolean | Promise<boolean>;
   canFreeze: boolean;
+  readOnly?: boolean;
 }) {
+  const headingId = useId();
+  const [showDiff, setShowDiff] = useState(false);
+  const [baselineId, setBaselineId] = useState(candidates[0]?.candidateId);
+  const [freezeTarget, setFreezeTarget] = useState<FormulaCandidate>();
+  const [freezing, setFreezing] = useState(false);
+  const freezeInFlight = useRef(false);
+  const [freezeError, setFreezeError] = useState<string>();
   const candidate = candidates[selected];
+  const baseline = candidates.find((value) => value.candidateId === baselineId) ?? candidates[0];
+  const differences = useMemo(
+    () => (baseline && candidate ? compareCandidateLines(baseline.lines, candidate.lines) : []),
+    [baseline, candidate]
+  );
+  if (!candidate) return <p role="status">No candidate direction is available.</p>;
+  const validForFreeze =
+    canFreeze &&
+    !readOnly &&
+    candidate.validation.structuralValidation === "PASS" &&
+    candidate.validation.materialEligibility === "PASS";
+  const confirmFreeze = async () => {
+    if (!validForFreeze || freezeTarget !== candidate || freezeInFlight.current) return;
+    freezeInFlight.current = true;
+    setFreezing(true);
+    setFreezeError(undefined);
+    try {
+      const succeeded = await onFreeze();
+      if (succeeded === false)
+        setFreezeError(
+          "Freeze was not confirmed by the server. Review the current result before retrying."
+        );
+      else setFreezeTarget(undefined);
+    } catch {
+      setFreezeError("Freeze did not complete. No successful result has been confirmed.");
+    } finally {
+      freezeInFlight.current = false;
+      setFreezing(false);
+    }
+  };
   return (
-    <section className="nox-design-plan" aria-labelledby="formula-candidates-title">
+    <section className="nox-design-plan" aria-labelledby={headingId}>
       <p className="nox-ai-context">HUMAN SELECTION REQUIRED</p>
-      <h2 id="formula-candidates-title">Formula candidates</h2>
+      <h2 id={headingId}>Formula candidates</h2>
+      <div className="nox-candidate-controls">
+        <div className="nox-candidate-paging" aria-label="Candidate pages">
+          <button
+            type="button"
+            aria-label="Previous direction"
+            disabled={selected === 0}
+            onClick={() => onSelect(selected - 1)}
+          >
+            ←
+          </button>
+          <span role="status">
+            {selected + 1} / {candidates.length} · {candidate.generationStrategy}
+          </span>
+          <button
+            type="button"
+            aria-label="Next direction"
+            disabled={selected === candidates.length - 1}
+            onClick={() => onSelect(selected + 1)}
+          >
+            →
+          </button>
+        </div>
+        <label>
+          <input
+            type="checkbox"
+            checked={showDiff}
+            onChange={(event) => setShowDiff(event.target.checked)}
+          />{" "}
+          Show composition differences
+        </label>
+        {showDiff && baseline ? (
+          <label>
+            Compare against
+            <select
+              value={baseline.candidateId}
+              onChange={(event) => setBaselineId(event.target.value)}
+            >
+              {candidates.map((value) => (
+                <option key={value.candidateId} value={value.candidateId}>
+                  {value.generationStrategy}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+      </div>
+      <div
+        className="nox-table-wrap nox-candidate-comparison"
+        tabIndex={0}
+        role="region"
+        aria-label="Candidate comparison"
+      >
+        <table>
+          <caption>Compare returned directions — source values, not AI confidence scores</caption>
+          <thead>
+            <tr>
+              <th scope="col">Property</th>
+              {candidates.map((value) => (
+                <th
+                  scope="col"
+                  key={value.candidateId}
+                  data-selected={value.candidateId === candidate.candidateId}
+                >
+                  {value.generationStrategy}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(
+              [
+                [
+                  "Composition",
+                  (value: FormulaCandidate) => value.compositionKind.replaceAll("_", " ")
+                ],
+                ["Materials", (value: FormulaCandidate) => String(value.lines.length)],
+                [
+                  "Structural validation",
+                  (value: FormulaCandidate) => value.validation.structuralValidation
+                ],
+                [
+                  "Material eligibility",
+                  (value: FormulaCandidate) => value.validation.materialEligibility
+                ],
+                [
+                  "Known-limit screening",
+                  (value: FormulaCandidate) => value.validation.knownLimitScreening
+                ],
+                [
+                  "Unresolved constraints",
+                  (value: FormulaCandidate) =>
+                    value.validation.unresolvedConstraints.join(" · ") || "None reported"
+                ],
+                ["Engine", (value: FormulaCandidate) => value.engineVersion],
+                ["Taxonomy", (value: FormulaCandidate) => value.taxonomyVersion]
+              ] as const
+            ).map(([label, valueOf]) => (
+              <tr key={label}>
+                <th scope="row">{label}</th>
+                {candidates.map((value) => (
+                  <td
+                    key={value.candidateId}
+                    data-selected={value.candidateId === candidate.candidateId}
+                  >
+                    {valueOf(value)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div className="nox-design-candidate-tabs" role="tablist" aria-label="Formula directions">
         {candidates.map((value, index) => (
           <button
             type="button"
             role="tab"
+            id={`${headingId}-direction-${index}`}
+            aria-controls={`${headingId}-composition`}
+            tabIndex={selected === index ? 0 : -1}
             aria-selected={selected === index}
             key={value.candidateId}
             onClick={() => onSelect(index)}
+            onKeyDown={(event) => {
+              const next =
+                event.key === "ArrowRight"
+                  ? (index + 1) % candidates.length
+                  : event.key === "ArrowLeft"
+                    ? (index + candidates.length - 1) % candidates.length
+                    : event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? candidates.length - 1
+                        : undefined;
+              if (next === undefined) return;
+              event.preventDefault();
+              onSelect(next);
+              event.currentTarget.parentElement
+                ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+                [next]?.focus();
+            }}
           >
             {value.generationStrategy}
           </button>
         ))}
       </div>
-      <div className="nox-table-wrap" tabIndex={0}>
+      {showDiff && baseline ? (
+        <section className="nox-candidate-diff" role="region" aria-label="Composition differences">
+          <h3>
+            {baseline.generationStrategy} → {candidate.generationStrategy}
+          </h3>
+          <p>Exact source mass and Material snapshot comparison. No mutation or quality score.</p>
+          {differences.every((row) => row.state === "Unchanged") ? (
+            <p>No composition differences.</p>
+          ) : null}
+          <ul>
+            {differences
+              .filter((row) => row.state !== "Unchanged")
+              .map((row) => (
+                <li key={row.materialId}>
+                  <strong>
+                    {(row.after ?? row.before)!.materialSnapshot.material.displayName}
+                  </strong>{" "}
+                  · {row.state}
+                  <dl>
+                    <div>
+                      <dt>Mass</dt>
+                      <dd>
+                        {row.before ? formatMassMg(row.before.normalizedMassMg) : "Not present"} →{" "}
+                        {row.after ? formatMassMg(row.after.normalizedMassMg) : "Not present"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Active</dt>
+                      <dd>
+                        {row.before ? formatMassMg(row.before.activeAromaticMassMg) : "—"} →{" "}
+                        {row.after ? formatMassMg(row.after.activeAromaticMassMg) : "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Carrier</dt>
+                      <dd>
+                        {row.before ? formatMassMg(row.before.carrierSolventMassMg) : "—"} →{" "}
+                        {row.after ? formatMassMg(row.after.carrierSolventMassMg) : "—"}
+                      </dd>
+                    </div>
+                    {row.before &&
+                    row.after &&
+                    row.before.materialSnapshot.snapshotHash !==
+                      row.after.materialSnapshot.snapshotHash ? (
+                      <div>
+                        <dt>Material evidence</dt>
+                        <dd>Snapshot changed</dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                </li>
+              ))}
+          </ul>
+        </section>
+      ) : null}
+      <div
+        className="nox-table-wrap"
+        tabIndex={0}
+        role="tabpanel"
+        id={`${headingId}-composition`}
+        aria-labelledby={`${headingId}-direction-${selected}`}
+      >
         <table>
           <thead>
             <tr>
@@ -495,10 +740,99 @@ function FormulaCandidates({
         Scientific capability: {candidate.scientificContext.capability}. Deterministic baseline;
         human-perception validity is not claimed.
       </p>
-      <button type="button" disabled={!canFreeze} onClick={onFreeze}>
-        Use This Formula
-      </button>
+      {!readOnly ? (
+        <div className="nox-candidate-action">
+          <button
+            type="button"
+            disabled={!validForFreeze || freezing}
+            onClick={() => {
+              setFreezeError(undefined);
+              setFreezeTarget(candidate);
+            }}
+          >
+            {candidate.compositionKind === "ACCORD_FORMULATION"
+              ? "Freeze & Lock"
+              : "Use This Formula"}
+          </button>
+        </div>
+      ) : (
+        <p role="status">
+          Previous response · read-only context. It cannot be frozen from this history view.
+        </p>
+      )}
+      {freezeTarget && !readOnly ? (
+        <NoxDialog
+          title="Freeze exact Formula"
+          onClose={() => {
+            if (!freezing) setFreezeTarget(undefined);
+          }}
+        >
+          <p>
+            This creates an immutable FormulaVersion with frozen Material snapshots, lineage, hash
+            and audit. It does not approve the Formula or create a Trial.
+          </p>
+          <dl className="nox-design-intent-list">
+            <div>
+              <dt>Direction</dt>
+              <dd>{freezeTarget.generationStrategy}</dd>
+            </div>
+            <div>
+              <dt>Candidate</dt>
+              <dd>{freezeTarget.candidateId}</dd>
+            </div>
+            <div>
+              <dt>Composition</dt>
+              <dd>{freezeTarget.compositionKind.replaceAll("_", " ")}</dd>
+            </div>
+            <div>
+              <dt>Exact total</dt>
+              <dd>
+                {formatMassMg(
+                  freezeTarget.lines
+                    .reduce((mass, line) => mass + BigInt(line.normalizedMassMg), 0n)
+                    .toString()
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>Version</dt>
+              <dd>New immutable version assigned by the server on success.</dd>
+            </div>
+          </dl>
+          {freezeTarget !== candidate || !validForFreeze ? (
+            <p role="alert">
+              The selected candidate or its availability changed. Close and review the current
+              result.
+            </p>
+          ) : null}
+          {freezeError ? <p role="alert">{freezeError}</p> : null}
+          <button type="button" disabled={freezing} onClick={() => setFreezeTarget(undefined)}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={!validForFreeze || freezeTarget !== candidate || freezing}
+            onClick={() => void confirmFreeze()}
+          >
+            {freezing ? "Freezing…" : "Confirm Freeze"}
+          </button>
+        </NoxDialog>
+      ) : null}
     </section>
+  );
+}
+
+function PreviousCandidates({ candidates }: { candidates: FormulaCandidate[] }) {
+  const [selected, setSelected] = useState(0);
+  return (
+    <FormulaCandidates
+      candidates={candidates}
+      selected={selected}
+      onSelect={setSelected}
+      onFreeze={() => {}}
+      canFreeze={false}
+      readOnly
+    />
   );
 }
 
@@ -534,6 +868,169 @@ function FrozenFormulaView({ value, onTrial }: { value: FrozenFormula; onTrial: 
   );
 }
 
+function FormulaRevisionReview({
+  api,
+  tenantId,
+  parent,
+  trialId,
+  evaluationId,
+  modulePermissions,
+  evidence
+}: {
+  api: ApiClient;
+  tenantId: string;
+  parent: FrozenFormula;
+  trialId: string;
+  evaluationId: string;
+  modulePermissions: readonly string[];
+  evidence: ReactNode;
+}) {
+  const navigate = useNavigate();
+  const [candidates, setCandidates] = useState<FormulaCandidate[]>([]);
+  const [previous, setPrevious] = useState<FormulaCandidate[][]>([]);
+  const [selected, setSelected] = useState(0);
+  const [working, setWorking] = useState(false);
+  const inFlight = useRef(false);
+  const [error, setError] = useState<string>();
+  const canRequest = has(modulePermissions, "module.trial-sensory.revision.request");
+  const generate = async () => {
+    if (!canRequest || inFlight.current) return;
+    inFlight.current = true;
+    setWorking(true);
+    setError(undefined);
+    try {
+      const result = await api<{
+        revisionContext: {
+          parentFormulaVersionId: string;
+          sourceTrialId: string;
+          sourceEvaluationId: string;
+        };
+        candidates: FormulaCandidate[];
+      }>(`/trials/${trialId}/evaluations/${evaluationId}/create-revision`, {
+        method: "POST",
+        tenantId
+      });
+      if (
+        result.revisionContext.parentFormulaVersionId !== parent.formulaVersionId ||
+        result.revisionContext.sourceTrialId !== trialId ||
+        result.revisionContext.sourceEvaluationId !== evaluationId ||
+        result.candidates.some(
+          (candidate) =>
+            candidate.projectId !== parent.candidate.projectId ||
+            candidate.sourceBriefId !== parent.candidate.sourceBriefId ||
+            candidate.compositionKind !== parent.compositionKind
+        )
+      )
+        throw new Error("Revision response does not match the selected parent and evidence.");
+      if (candidates.length) setPrevious((value) => [...value, candidates]);
+      setCandidates(result.candidates);
+      setSelected(0);
+    } catch (reason) {
+      setError(message(reason));
+    } finally {
+      inFlight.current = false;
+      setWorking(false);
+    }
+  };
+  const freeze = async () => {
+    const candidate = candidates[selected];
+    if (!canRequest || !has(modulePermissions, FREEZE_FORMULA) || !candidate || inFlight.current)
+      return false;
+    inFlight.current = true;
+    setWorking(true);
+    setError(undefined);
+    try {
+      const result = await api<{
+        formulaVersion: FrozenFormula & {
+          parentFormulaVersionId: string;
+          tenantId: string;
+        };
+      }>(`/design-studio/formula-versions/${parent.formulaVersionId}/revisions/freeze`, {
+        method: "POST",
+        tenantId,
+        body: {
+          sourceTrialId: trialId,
+          sourceEvaluationId: evaluationId,
+          strategy: candidate.generationStrategy,
+          formulaName: `${parent.name} · Revision`
+        }
+      });
+      const next = result.formulaVersion;
+      if (
+        !next.formulaVersionId ||
+        next.formulaVersionId === parent.formulaVersionId ||
+        next.parentFormulaVersionId !== parent.formulaVersionId ||
+        next.tenantId !== tenantId ||
+        next.status !== "FROZEN"
+      )
+        throw new Error(
+          "The server result does not confirm a new frozen revision with the selected lineage. Do not retry blindly; inspect the recorded result."
+        );
+      navigate(`/design-studio/formula-versions/${next.formulaVersionId}`);
+      return true;
+    } catch (reason) {
+      setError(message(reason));
+      return false;
+    } finally {
+      inFlight.current = false;
+      setWorking(false);
+    }
+  };
+  return (
+    <section className="nox-design-panel" aria-label="Formula revision review">
+      <h2>Revision from finalized Sensory evidence</h2>
+      <p>
+        Parent v{parent.versionNumber} remains immutable. Review the human observations before
+        generating a new Formula direction.
+      </p>
+      <dl className="nox-design-intent-list">
+        <div>
+          <dt>Parent FormulaVersion</dt>
+          <dd>{parent.formulaVersionId}</dd>
+        </div>
+        <div>
+          <dt>Source Trial</dt>
+          <dd>{trialId}</dd>
+        </div>
+        <div>
+          <dt>Source Evaluation</dt>
+          <dd>{evaluationId}</dd>
+        </div>
+      </dl>
+      {evidence}
+      {canRequest ? (
+        <button type="button" disabled={working} onClick={() => void generate()}>
+          {working
+            ? "Working…"
+            : candidates.length
+              ? "Generate revision again"
+              : "Generate revision directions"}
+        </button>
+      ) : (
+        <p role="status">
+          Read-only evidence. Revision permission is required to generate directions.
+        </p>
+      )}
+      {error ? <p role="alert">{error}</p> : null}
+      {candidates.length ? (
+        <FormulaCandidates
+          candidates={candidates}
+          selected={selected}
+          onSelect={setSelected}
+          onFreeze={freeze}
+          canFreeze={canRequest && has(modulePermissions, FREEZE_FORMULA) && !working && !error}
+        />
+      ) : null}
+      {previous.map((items, index) => (
+        <details key={index}>
+          <summary>Previous revision response {index + 1} · read-only</summary>
+          <PreviousCandidates candidates={items} />
+        </details>
+      ))}
+    </section>
+  );
+}
+
 function FormulaVersionEntry({
   api,
   tenantId,
@@ -546,8 +1043,73 @@ function FormulaVersionEntry({
   modulePermissions: readonly string[];
 }) {
   const navigate = useNavigate();
+  const [search] = useSearchParams();
+  const sourceTrialId = search.get("sourceTrialId");
+  const sourceEvaluationId = search.get("sourceEvaluationId");
   const [formula, setFormula] = useState<FrozenFormula>();
   const [error, setError] = useState<string>();
+  const [evidence, setEvidence] = useState<{
+    trial: {
+      id: string;
+      tenantId: string;
+      status: string;
+      formulaVersionId: string;
+      formulaBundleHash: string;
+    };
+    evaluation: {
+      id: string;
+      trialId: string;
+      status: string;
+      decision: string | null;
+      evaluationText?: string;
+      diagnosticNote?: string | null;
+      finalizedAt?: string | null;
+      deltas?: Array<{ phase: string; taxonomyTerm: string; confirmedDelta?: number | null }>;
+    } | null;
+  }>();
+  const [evidenceError, setEvidenceError] = useState<string>();
+  const [confirming, setConfirming] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [approvalError, setApprovalError] = useState<string>();
+  const workspaceObject = useMemo(
+    () =>
+      formula
+        ? {
+            id: formula.formulaVersionId,
+            objectType: "FormulaVersion",
+            readOnly: formula.status === "FROZEN",
+            title: `${formula.name} · v${formula.versionNumber}`,
+            route: `/design-studio/formula-versions/${formula.formulaVersionId}`,
+            development: resolveDevelopmentContext({
+              tenantId,
+              queryTenantId: tenantId,
+              formulaVersionId,
+              formula,
+              selectedTrialId: sourceTrialId,
+              selectedEvaluationId: sourceEvaluationId,
+              trial: evidence?.trial,
+              evaluation: evidence?.evaluation,
+              permissions: modulePermissions
+            }),
+            properties: [
+              { label: "Composition", value: formula.compositionKind.replaceAll("_", " ") },
+              { label: "State", value: formula.status },
+              { label: "Approval", value: formula.approvalState.replaceAll("_", " ") },
+              { label: "Bundle Hash", value: formula.bundleHash }
+            ]
+          }
+        : undefined,
+    [
+      formula,
+      tenantId,
+      formulaVersionId,
+      sourceTrialId,
+      sourceEvaluationId,
+      evidence,
+      modulePermissions
+    ]
+  );
+  useWorkspaceObject(workspaceObject);
   useEffect(() => {
     let current = true;
     void api<{ formulaVersion: FrozenFormula }>(
@@ -560,6 +1122,27 @@ function FormulaVersionEntry({
       current = false;
     };
   }, [api, tenantId, formulaVersionId]);
+  useEffect(() => {
+    let current = true;
+    setEvidence(undefined);
+    setEvidenceError(undefined);
+    if (!sourceTrialId || !sourceEvaluationId) return;
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuid.test(sourceTrialId) || !uuid.test(sourceEvaluationId)) {
+      setEvidenceError("The approval handoff contains an invalid evidence identifier.");
+      return;
+    }
+    void api<NonNullable<typeof evidence>>(`/trials/${sourceTrialId}`, { tenantId })
+      .then((payload) => {
+        if (current) setEvidence(payload);
+      })
+      .catch((reason) => {
+        if (current) setEvidenceError(message(reason));
+      });
+    return () => {
+      current = false;
+    };
+  }, [api, tenantId, formulaVersionId, sourceTrialId, sourceEvaluationId]);
   if (error)
     return (
       <p role="alert" className="nox-design-warning">
@@ -575,8 +1158,47 @@ function FormulaVersionEntry({
     eligible &&
     has(modulePermissions, "module.release-readiness.assessment.create") &&
     has(modulePermissions, "module.release-readiness.assessment.run");
+  const lineageMatches = Boolean(
+    evidence &&
+    evidence.trial.tenantId === tenantId &&
+    ["PREPARED", "COMPLETED"].includes(evidence.trial.status) &&
+    evidence.trial.id === sourceTrialId &&
+    evidence.trial.formulaVersionId === formula.formulaVersionId &&
+    evidence.trial.formulaBundleHash === formula.bundleHash &&
+    evidence.evaluation?.id === sourceEvaluationId &&
+    evidence.evaluation.trialId === sourceTrialId &&
+    evidence.evaluation.status === "FINAL"
+  );
+  const evidenceMatches = lineageMatches && evidence?.evaluation?.decision === "READY_FOR_APPROVAL";
+  const canApprove =
+    formula.approvalState === "NOT_APPROVED" &&
+    evidenceMatches &&
+    has(modulePermissions, "module.design-studio.formula.approve");
+  const approve = async () => {
+    if (!canApprove || approving) return;
+    setApproving(true);
+    setApprovalError(undefined);
+    try {
+      // G4 remains authoritative. Commit-time evidence revalidation is a recorded backend gap.
+      const result = await api<{ formulaVersion: FrozenFormula }>(
+        `/design-studio/formula-versions/${formula.formulaVersionId}/approve`,
+        { method: "POST", tenantId, body: { sourceTrialId, sourceEvaluationId } }
+      );
+      setFormula(result.formulaVersion);
+      setConfirming(false);
+    } catch (reason) {
+      setApprovalError(message(reason));
+      setConfirming(false);
+    } finally {
+      setApproving(false);
+    }
+  };
   return (
-    <section className="nox-design-studio" aria-labelledby="formula-version-title">
+    <section
+      className="nox-design-studio"
+      data-screen-id="DS-04"
+      aria-labelledby="formula-version-title"
+    >
       <header className="nox-design-header">
         <div>
           <button
@@ -622,6 +1244,165 @@ function FormulaVersionEntry({
           </dd>
         </div>
       </dl>
+      <section className="nox-design-panel" aria-labelledby="formula-composition-title">
+        <h2 id="formula-composition-title">Frozen composition</h2>
+        <div
+          className="nox-table-wrap"
+          tabIndex={0}
+          role="region"
+          aria-label="Frozen Formula lines"
+        >
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Material</th>
+                <th scope="col">Reference mass</th>
+                <th scope="col">Snapshot</th>
+              </tr>
+            </thead>
+            <tbody>
+              {formula.candidate.lines.map((line) => (
+                <tr key={line.materialId}>
+                  <td>
+                    <a href={`/materials/${line.materialId}`}>
+                      {line.materialSnapshot.material.displayName}
+                    </a>
+                  </td>
+                  <td>{formatMassMg(line.normalizedMassMg)}</td>
+                  <td>
+                    <code>{line.materialSnapshot.snapshotHash}</code>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      {formula.approvalState === "NOT_APPROVED" &&
+      evidence?.evaluation?.decision !== "REVISION_REQUIRED" ? (
+        <section className="nox-design-panel" aria-labelledby="formula-approval-title">
+          <h2 id="formula-approval-title">Approval review</h2>
+          <p>
+            Frozen composition is immutable. Approval is a separate G4 decision backed by FINAL G5
+            evidence.
+          </p>
+          {evidenceMatches ? (
+            <dl className="nox-definition-list">
+              <div>
+                <dt>Trial</dt>
+                <dd>{sourceTrialId}</dd>
+              </div>
+              <div>
+                <dt>Evaluation</dt>
+                <dd>{sourceEvaluationId}</dd>
+              </div>
+              <div>
+                <dt>Decision</dt>
+                <dd>FINAL · READY FOR APPROVAL</dd>
+              </div>
+            </dl>
+          ) : (
+            <p role="status">
+              {evidenceError ??
+                (sourceTrialId && !evidence
+                  ? "Loading approval evidence…"
+                  : "Exact FINAL READY FOR APPROVAL evidence is required. Open the corresponding Trial; no latest Trial is selected automatically.")}
+            </p>
+          )}
+          {canApprove ? (
+            <button
+              type="button"
+              className="nox-material-primary-action"
+              disabled={approving}
+              onClick={() => setConfirming(true)}
+            >
+              Approve Formula
+            </button>
+          ) : null}
+          {!has(modulePermissions, "module.design-studio.formula.approve") ? (
+            <p>Approval permission is not granted in this workspace.</p>
+          ) : null}
+          <button
+            type="button"
+            onClick={() =>
+              navigate(
+                sourceTrialId
+                  ? `/trials/${encodeURIComponent(sourceTrialId)}`
+                  : `/trials?formulaVersionId=${formula.formulaVersionId}`
+              )
+            }
+          >
+            Open Trial workspace
+          </button>
+          {approvalError ? (
+            <p role="alert" className="nox-design-warning">
+              {approvalError}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+      {confirming ? (
+        <NoxDialog
+          title="Confirm Formula approval"
+          onClose={() => {
+            if (!approving) setConfirming(false);
+          }}
+        >
+          <p>
+            Approve {formula.name} · v{formula.versionNumber} using the displayed FINAL Trial
+            evidence? This records a G4 approval and audit event. It does not release a Batch.
+          </p>
+          <button type="button" disabled={approving} onClick={() => setConfirming(false)}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="nox-material-primary-action"
+            disabled={approving}
+            onClick={() => void approve()}
+          >
+            {approving ? "Approving…" : "Confirm approval"}
+          </button>
+        </NoxDialog>
+      ) : null}
+      {!lineageMatches && evidence?.evaluation?.decision === "REVISION_REQUIRED" ? (
+        <p role="alert">
+          Revision evidence does not match this tenant, Trial and frozen FormulaVersion. No revision
+          action is available.
+        </p>
+      ) : null}
+      {lineageMatches && evidence?.evaluation?.decision === "REVISION_REQUIRED" ? (
+        <FormulaRevisionReview
+          key={`${tenantId}:${formula.formulaVersionId}:${sourceTrialId}:${sourceEvaluationId}`}
+          api={api}
+          tenantId={tenantId}
+          parent={formula}
+          trialId={sourceTrialId!}
+          evaluationId={sourceEvaluationId!}
+          modulePermissions={modulePermissions}
+          evidence={
+            <>
+              <p className="nox-evidence-raw">
+                {evidence.evaluation.evaluationText || "Raw observation unavailable."}
+              </p>
+              {evidence.evaluation.diagnosticNote ? (
+                <p>{evidence.evaluation.diagnosticNote}</p>
+              ) : null}
+              <ul>
+                {evidence.evaluation.deltas?.map((delta, index) => (
+                  <li key={index}>
+                    {delta.phase} · {delta.taxonomyTerm} · Confirmed:{" "}
+                    {delta.confirmedDelta ?? "Not confirmed"}
+                  </li>
+                ))}
+              </ul>
+              <p>
+                FINAL · {evidence.evaluation.finalizedAt ?? "Finalization timestamp unavailable"}
+              </p>
+            </>
+          }
+        />
+      ) : null}
       {!eligible ? (
         <p className="nox-design-warning">
           Release assessment is available only for an APPROVED, FROZEN FULL_FORMULA.
@@ -651,8 +1432,15 @@ export function DesignStudioExperience({
   const [assets, setAssets] = useState<AssetReference[]>([]);
   const [draft, setDraft] = useState<IntentDraft>();
   const [briefId, setBriefId] = useState<string>();
+  const [unsaved, setUnsaved] = useState(false);
+  const [briefOutOfDate, setBriefOutOfDate] = useState(false);
+  const projectAttempt = useRef<{ fingerprint: string; key: string } | undefined>(undefined);
+  const briefAttempt = useRef<{ fingerprint: string; key: string } | undefined>(undefined);
+  const submitting = useRef(false);
+  useUnsavedChanges(unsaved);
   const [plan, setPlan] = useState<AccordArchitecturePlan>();
   const [candidates, setCandidates] = useState<FormulaCandidate[]>([]);
+  const [previousCandidates, setPreviousCandidates] = useState<FormulaCandidate[][]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState(0);
   const [generationOptions, setGenerationOptions] = useState<{
     accordKey?: string;
@@ -723,6 +1511,7 @@ export function DesignStudioExperience({
   if (formulaVersionRoute?.params.formulaVersionId)
     return (
       <FormulaVersionEntry
+        key={`${tenantId}:${formulaVersionRoute.params.formulaVersionId}`}
         api={api}
         tenantId={tenantId}
         formulaVersionId={formulaVersionRoute.params.formulaVersionId}
@@ -758,41 +1547,58 @@ export function DesignStudioExperience({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!selectedTaxonomy) return;
+    if (!selectedTaxonomy || submitting.current) return;
+    submitting.current = true;
     setWorking(true);
     setError(undefined);
     try {
+      const projectBody = { name: projectName, description: null };
+      const projectFingerprint = JSON.stringify({ tenantId, ...projectBody });
+      if (projectAttempt.current?.fingerprint !== projectFingerprint)
+        projectAttempt.current = { fingerprint: projectFingerprint, key: crypto.randomUUID() };
       const project = await api<{ project: { id: string } }>("/design-studio/projects", {
         method: "POST",
         tenantId,
-        body: { name: projectName, description: null }
+        body: { ...projectBody, operationKey: projectAttempt.current.key }
       });
+      const briefBody = {
+        workflowMode: mode,
+        rawBrief: brief,
+        applicationKey,
+        targetDosagePct: dosage,
+        explicitTags: [{ ...selectedTaxonomy, targetStrength: 1 }],
+        explicitExclusions: excluded
+          .map((key) => taxonomyChoices.find((choice) => taxonomyKey(choice) === key))
+          .filter(Boolean),
+        signals: [],
+        assetReferences: assets
+      };
+      const briefFingerprint = JSON.stringify({
+        tenantId,
+        projectId: project.project.id,
+        ...briefBody
+      });
+      if (briefAttempt.current?.fingerprint !== briefFingerprint)
+        briefAttempt.current = { fingerprint: briefFingerprint, key: crypto.randomUUID() };
       const response = await api<{ brief: { id: string }; intentDraft: IntentDraft }>(
         `/design-studio/projects/${project.project.id}/briefs`,
         {
           method: "POST",
           tenantId,
-          body: {
-            workflowMode: mode,
-            rawBrief: brief,
-            applicationKey,
-            targetDosagePct: dosage,
-            explicitTags: [{ ...selectedTaxonomy, targetStrength: 1 }],
-            explicitExclusions: excluded
-              .map((key) => taxonomyChoices.find((choice) => taxonomyKey(choice) === key))
-              .filter(Boolean),
-            signals: [],
-            assetReferences: assets
-          }
+          body: { ...briefBody, operationKey: briefAttempt.current.key }
         }
       );
       setBriefId(response.brief.id);
+      setUnsaved(false);
+      setBriefOutOfDate(false);
       setDraft(response.intentDraft);
       setPlan(undefined);
+      if (candidates.length) setPreviousCandidates((current) => [...current, candidates]);
       setCandidates([]);
     } catch (reason) {
       setError(message(reason));
     } finally {
+      submitting.current = false;
       setWorking(false);
     }
   };
@@ -800,7 +1606,7 @@ export function DesignStudioExperience({
   const generate = async (
     options: { accordKey?: string; buildCompleteFromAccords?: boolean } = {}
   ) => {
-    if (!briefId) return;
+    if (!briefId || briefOutOfDate) return;
     setWorking(true);
     setError(undefined);
     try {
@@ -809,6 +1615,7 @@ export function DesignStudioExperience({
         { method: "POST", tenantId, body: { budget: { mode: "STANDARD" }, ...options } }
       );
       setGenerationOptions(options);
+      if (candidates.length) setPreviousCandidates((current) => [...current, candidates]);
       setCandidates(response.candidates);
       setSelectedCandidate(0);
     } catch (reason) {
@@ -819,7 +1626,7 @@ export function DesignStudioExperience({
   };
 
   const confirm = async () => {
-    if (!draft || !briefId) return;
+    if (!draft || !briefId || briefOutOfDate) return;
     setWorking(true);
     setError(undefined);
     try {
@@ -828,6 +1635,7 @@ export function DesignStudioExperience({
         tenantId,
         body: { intent: draft.intent }
       });
+      setUnsaved(false);
       if (mode === "ACCORD_ARCHITECTURE") {
         const response = await api<{ plan: AccordArchitecturePlan }>(
           `/design-studio/briefs/${briefId}/accord-plan`,
@@ -853,6 +1661,7 @@ export function DesignStudioExperience({
         { method: "PUT", tenantId, body: { plan } }
       );
       setPlan(response.plan);
+      setUnsaved(false);
     } catch (reason) {
       setError(message(reason));
     } finally {
@@ -879,11 +1688,7 @@ export function DesignStudioExperience({
   };
 
   const freeze = async () => {
-    if (!briefId || !candidates[selectedCandidate]) return;
-    if (
-      !window.confirm("Freeze this exact one-kilogram Formula and its current Material snapshots?")
-    )
-      return;
+    if (!briefId || !candidates[selectedCandidate] || briefOutOfDate) return false;
     setWorking(true);
     setError(undefined);
     try {
@@ -901,25 +1706,43 @@ export function DesignStudioExperience({
         }
       );
       setFrozen(response.formulaVersion);
+      setUnsaved(false);
+      return true;
     } catch (reason) {
       setError(message(reason));
+      return false;
     } finally {
       setWorking(false);
     }
   };
 
   return (
-    <section className="nox-design-studio" aria-labelledby="design-studio-title">
+    <section
+      className="nox-design-studio"
+      aria-labelledby="design-studio-title"
+      onChangeCapture={() => setUnsaved(true)}
+    >
       <header className="nox-design-header">
         <div>
           <button
             type="button"
             className="nox-design-back"
             onClick={() => {
+              if (
+                unsaved &&
+                !window.confirm(
+                  "Discard unsaved local edits and return to workflows? Saved server drafts are not deleted."
+                )
+              )
+                return;
+              setUnsaved(false);
               setMode(undefined);
+              projectAttempt.current = undefined;
+              briefAttempt.current = undefined;
               setDraft(undefined);
               setPlan(undefined);
               setCandidates([]);
+              setPreviousCandidates([]);
               setFrozen(undefined);
             }}
           >
@@ -933,8 +1756,45 @@ export function DesignStudioExperience({
           <strong>{formatMassMg("1000000")}</strong>
         </div>
       </header>
+      <nav className="nox-local-stages" aria-label="Design authoring stages">
+        <ol>
+          {[
+            "Brief",
+            "Intent review",
+            ...(mode === "ACCORD_ARCHITECTURE" ? ["Accord architecture"] : ["Generate", "Select"]),
+            "Freeze"
+          ].map((label) => (
+            <li
+              key={label}
+              aria-current={
+                label ===
+                (frozen
+                  ? "Freeze"
+                  : candidates.length
+                    ? "Select"
+                    : plan
+                      ? "Accord architecture"
+                      : draft
+                        ? "Intent review"
+                        : "Brief")
+                  ? "step"
+                  : undefined
+              }
+            >
+              {label}
+            </li>
+          ))}
+        </ol>
+      </nav>
       <div className="nox-design-layout">
-        <form className="nox-design-panel" onSubmit={submit}>
+        <form
+          className="nox-design-panel"
+          data-screen-id="DS-01"
+          onSubmit={submit}
+          onChangeCapture={() => {
+            if (briefId) setBriefOutOfDate(true);
+          }}
+        >
           <h2>Brief Composer</h2>
           <label>
             Project name
@@ -1047,6 +1907,12 @@ export function DesignStudioExperience({
           ) : null}
         </form>
         <div className="nox-design-results">
+          {briefOutOfDate ? (
+            <p role="status" className="nox-design-warning">
+              Brief inputs have changed. Interpret and review the updated brief before generating or
+              freezing. Previous results remain visible as stale context.
+            </p>
+          ) : null}
           {frozen ? (
             <FrozenFormulaView
               value={frozen}
@@ -1061,13 +1927,15 @@ export function DesignStudioExperience({
               selected={selectedCandidate}
               onSelect={setSelectedCandidate}
               onFreeze={freeze}
-              canFreeze={has(modulePermissions, FREEZE_FORMULA) && !working}
+              canFreeze={has(modulePermissions, FREEZE_FORMULA) && !working && !briefOutOfDate}
             />
           ) : plan ? (
             <AccordPlanView
               plan={plan}
               canDevelop={
-                has(modulePermissions, DEVELOP_ACCORD) && has(modulePermissions, GENERATE_FORMULA)
+                has(modulePermissions, DEVELOP_ACCORD) &&
+                has(modulePermissions, GENERATE_FORMULA) &&
+                !briefOutOfDate
               }
               onChange={setPlan}
               onSave={savePlan}
@@ -1083,7 +1951,8 @@ export function DesignStudioExperience({
               canConfirm={
                 has(modulePermissions, CONFIRM_INTENT) &&
                 (mode !== "ACCORD_ARCHITECTURE" || has(modulePermissions, PLAN_ACCORD)) &&
-                !working
+                !working &&
+                !briefOutOfDate
               }
             />
           ) : (
@@ -1096,6 +1965,23 @@ export function DesignStudioExperience({
               </p>
             </section>
           )}
+          {previousCandidates.length ? (
+            <section aria-label="Previous candidate responses">
+              <h2>Previous responses</h2>
+              <p>
+                Retained in this workspace for comparison only. Current Brief and validation remain
+                authoritative.
+              </p>
+              {previousCandidates.map((response, index) => (
+                <details key={index}>
+                  <summary>
+                    Previous response {index + 1} · {response.length} directions
+                  </summary>
+                  <PreviousCandidates candidates={response} />
+                </details>
+              ))}
+            </section>
+          ) : null}
           {trialReady ? (
             <p className="nox-design-warning" role="status">
               G5 TrialContext handoff prepared. No Trial was created in Gate 4.

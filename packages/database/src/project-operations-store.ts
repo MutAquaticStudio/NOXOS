@@ -13,17 +13,18 @@ const audit = async (
   c: { tenantId: string; actorUserId: string; requestId: string; correlationId: string },
   action: string,
   type: string,
-  id: string
+  id: string,
+  metadata: Record<string, unknown> = {}
 ) =>
-  sql`insert into platform.audit_events (tenant_id,actor_user_id,action,resource_type,resource_id,request_id,correlation_id) values (${c.tenantId},${c.actorUserId},${action},${type},${id},${c.requestId},${c.correlationId})`;
+  sql`insert into platform.audit_events (tenant_id,actor_user_id,action,resource_type,resource_id,request_id,correlation_id,metadata) values (${c.tenantId},${c.actorUserId},${action},${type},${id},${c.requestId},${c.correlationId},${sql.json(JSON.parse(JSON.stringify(metadata)))})`;
 const activeMember = async (sql: Db, tenantId: string, userId: string) =>
   (
     await sql`select 1 from platform.tenant_memberships m join platform.platform_users u on u.id=m.user_id where m.tenant_id=${tenantId} and m.user_id=${userId} and m.status='ACTIVE' and u.status='ACTIVE'`
   )[0] !== undefined;
 const project = async (sql: Db, tenantId: string, id: string, lock = false) => {
   const r = lock
-    ? await sql`select * from project_operations.projects where tenant_id=${tenantId} and id=${id} for update`
-    : await sql`select * from project_operations.projects where tenant_id=${tenantId} and id=${id}`;
+    ? await sql`select *,extract(epoch from updated_at)::text as revision from project_operations.projects where tenant_id=${tenantId} and id=${id} for update`
+    : await sql`select *,extract(epoch from updated_at)::text as revision from project_operations.projects where tenant_id=${tenantId} and id=${id}`;
   if (!r[0])
     throw new ProjectOperationsProblem(
       404,
@@ -46,7 +47,7 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
   constructor(private readonly sql: Sql) {}
   async listProjects(tenantId: string) {
     return this.sql`
-      select p.*,o.order_number as source_service_order_number,
+      select p.*,extract(epoch from p.updated_at)::text as revision,o.order_number as source_service_order_number,
         c.display_name as source_customer_display_name,
         u.display_name as owner_display_name,
         count(distinct t.id) filter(where t.required)::int as required_task_count,
@@ -69,7 +70,7 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
   }
   async findProject(tenantId: string, id: string) {
     const p = await this.sql`
-      select p.*,o.order_number as source_service_order_number,
+      select p.*,extract(epoch from p.updated_at)::text as revision,o.order_number as source_service_order_number,
         c.display_name as source_customer_display_name,o.status as source_service_order_status
         ,u.display_name as owner_display_name
       from project_operations.projects p
@@ -220,6 +221,15 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
   private async transition(input: any, from: string, to: string, label: string, action: string) {
     return this.sql.begin(async (tx) => {
       const p = await project(tx, input.tenantId, input.projectId, true);
+      const intent = {
+        action,
+        projectId: p.id,
+        expectedRevision: input.expectedRevision ?? null,
+        reason: input.reason ?? null
+      };
+      const prior = await this.commandReplay(tx, input, intent);
+      if (prior) return prior;
+      this.assertRevision(input, p);
       if (p.status !== from)
         throw new ProjectOperationsProblem(
           409,
@@ -237,7 +247,16 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
       const r = await tx<
         any[]
       >`update project_operations.projects set status=${to},hold_reason=${to === "ON_HOLD" ? input.reason : null},${to === "ON_HOLD" ? tx`held_by_user_id=${input.actorUserId},held_at=now()` : tx`resumed_by_user_id=${input.actorUserId},resumed_at=now()`},updated_at=now() where id=${p.id} returning *`;
-      await audit(tx, input, action, "OperationalProject", p.id);
+      await audit(
+        tx,
+        input,
+        action,
+        "OperationalProject",
+        p.id,
+        input.idempotencyKey
+          ? { idempotencyKey: input.idempotencyKey, commandIntent: intent, commandResult: r[0] }
+          : {}
+      );
       return r[0];
     });
   }
@@ -664,7 +683,20 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
   }
   async createUpdate(input: any) {
     return this.sql.begin(async (tx) => {
-      await project(tx, input.tenantId, input.projectId, true);
+      const p = await project(tx, input.tenantId, input.projectId, true);
+      const intent = {
+        action: "project-operations.update.created",
+        projectId: p.id,
+        expectedRevision: input.expectedRevision ?? null,
+        updateType: input.updateType,
+        summary: input.summary,
+        phasePlanId: input.phasePlanId ?? null,
+        taskId: input.taskId ?? null,
+        resolvesUpdateId: input.resolvesUpdateId ?? null
+      };
+      const prior = await this.commandReplay(tx, input, intent);
+      if (prior) return prior;
+      this.assertRevision(input, p);
       if (input.updateType === "BLOCKER_RESOLVED") {
         const b = (
           await tx<
@@ -690,9 +722,46 @@ export class PostgresProjectOperationsStore implements ProjectOperationsStore {
       const r = await tx<
         any[]
       >`insert into project_operations.project_updates (tenant_id,project_id,phase_plan_id,task_id,update_type,summary,resolves_update_id,created_by_user_id) values (${input.tenantId},${input.projectId},${input.phasePlanId ?? null},${input.taskId ?? null},${input.updateType},${input.summary},${input.resolvesUpdateId ?? null},${input.actorUserId}) returning *`;
-      await audit(tx, input, "project-operations.update.created", "ProjectUpdate", r[0].id);
+      await audit(
+        tx,
+        input,
+        "project-operations.update.created",
+        "ProjectUpdate",
+        r[0].id,
+        input.idempotencyKey
+          ? { idempotencyKey: input.idempotencyKey, commandIntent: intent, commandResult: r[0] }
+          : {}
+      );
       return r[0];
     });
+  }
+  private assertRevision(input: any, p: any) {
+    if (input.expectedRevision !== undefined && input.expectedRevision !== p.revision)
+      throw new ProjectOperationsProblem(
+        409,
+        "STALE_VERSION",
+        "Project changed. Reload its current revision before submitting."
+      );
+  }
+  /** Called with the Project row locked. Existing audit remains the receipt authority. */
+  private async commandReplay(tx: TransactionSql, input: any, intent: Record<string, unknown>) {
+    if (!input.idempotencyKey) return undefined;
+    const rows = await tx<{ matches: boolean; result: Record<string, unknown> }[]>`
+      select metadata->'commandIntent' = ${tx.json(JSON.parse(JSON.stringify(intent)))} as matches,
+        metadata->'commandResult' as result
+      from platform.audit_events where tenant_id=${input.tenantId} and actor_user_id=${input.actorUserId}
+        and action in ('project-operations.project.held','project-operations.project.resumed','project-operations.update.created')
+        and metadata->>'idempotencyKey'=${input.idempotencyKey}
+        and metadata->'commandIntent'->>'projectId'=${input.projectId}
+    `;
+    if (!rows.length) return undefined;
+    if (rows.length !== 1 || !rows[0].matches || !rows[0].result)
+      throw new ProjectOperationsProblem(
+        409,
+        "IDEMPOTENCY_KEY_CONFLICT",
+        "This command key was already used for a different Project request."
+      );
+    return rows[0].result;
   }
   async phaseState(tenantId: string, projectId: string) {
     return this.phaseStateWith(this.sql, tenantId, projectId);

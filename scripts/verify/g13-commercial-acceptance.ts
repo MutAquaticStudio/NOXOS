@@ -489,6 +489,15 @@ export async function runG13Acceptance({
     "G13 Batch allocation race cleanup"
   );
 
+  const fulfillmentRevision = async (id: string) => {
+    const result = await api<{ fulfillment: { revision: string } }>(
+      actor,
+      `/commercial-orders/fulfillments/${id}`,
+      { tenantId: tenantA }
+    );
+    expectStatus(result, 200, "G13 current Fulfillment revision");
+    return result.body.fulfillment.revision;
+  };
   const createFulfillment = async (number: string) => {
     const result = await api<{ fulfillment: Fulfillment }>(
       actor,
@@ -504,6 +513,7 @@ export async function runG13Acceptance({
       method: "PUT",
       tenantId: tenantA,
       body: {
+        expectedRevision: await fulfillmentRevision(materialFulfillmentId),
         lines: [
           {
             orderLineId: materialLine.id,
@@ -634,6 +644,7 @@ export async function runG13Acceptance({
       method: "PUT",
       tenantId: tenantA,
       body: {
+        expectedRevision: await fulfillmentRevision(staleFulfillmentId),
         lines: [
           {
             orderLineId: staleOrder.lineId,
@@ -687,6 +698,7 @@ export async function runG13Acceptance({
       method: "PUT",
       tenantId: tenantA,
       body: {
+        expectedRevision: await fulfillmentRevision(batchFulfillmentId),
         lines: [
           {
             orderLineId: manufacturedLine.id,
@@ -721,7 +733,10 @@ export async function runG13Acceptance({
     await api(actor, `/commercial-orders/fulfillments/${serviceFulfillmentId}/lines`, {
       method: "PUT",
       tenantId: tenantA,
-      body: { lines: [{ orderLineId: serviceLine.id, quantityValue: "1" }] }
+      body: {
+        expectedRevision: await fulfillmentRevision(serviceFulfillmentId),
+        lines: [{ orderLineId: serviceLine.id, quantityValue: "1" }]
+      }
     }),
     200,
     "G13 Service Fulfillment exact line"
@@ -939,6 +954,7 @@ export async function runG13Acceptance({
         method: "PUT",
         tenantId: tenantA,
         body: {
+          expectedRevision: await fulfillmentRevision(cancellationFulfillment.body.fulfillment.id),
           lines: [
             {
               orderLineId: cancelLine.id,

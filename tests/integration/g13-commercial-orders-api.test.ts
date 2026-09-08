@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApiRequest, TenantRequestContext } from "@nox-os/contracts";
 import {
+  CommercialOrdersProblem,
   commercialOrdersPermissions,
   createCommercialOrdersApi,
   type CommercialOrdersStore
@@ -54,6 +55,109 @@ function request(): ApiRequest {
 }
 
 describe("Gate 13 Commercial Orders inventory boundary", () => {
+  const fulfillmentApi = (command: ReturnType<typeof vi.fn>, granted = true, notes = false) => {
+    const router = new InternalApiRouter();
+    createCommercialOrdersApi({
+      store: {
+        replaceFulfillmentLines: command,
+        updateFulfillment: command
+      } as unknown as CommercialOrdersStore,
+      authorization: {
+        async tenantContext() {
+          const c = context();
+          c.authorization.modulePermissions = granted
+            ? [commercialOrdersPermissions.fulfillmentEdit]
+            : [];
+          return c;
+        }
+      },
+      definitions: moduleDefinitions,
+      featureFlags: new LocalFeatureFlagResolver(["module.commercial-orders"])
+    }).registerRoutes(router);
+    return (body: unknown) =>
+      router.dispatch({
+        ...request(),
+        method: "PUT",
+        path: `/commercial-orders/fulfillments/${orderId}${notes ? "" : "/lines"}`,
+        body
+      });
+  };
+  const replacement = {
+    expectedRevision: "1788600000.123456",
+    lines: [{ orderLineId: lineId, allocationId: lotId, quantityValue: "1" }]
+  };
+  it("requires a precise revision for notes and preserves current authorization", async () => {
+    const store = vi.fn(async () => ({}));
+    const call = fulfillmentApi(store, true, true);
+    expect((await call({ notes: "Updated notes" })).status).toBe(400);
+    for (const revision of [undefined, 1788600000, "1788600000.123", "bad"])
+      expect((await call({ notes: "Updated notes", expectedRevision: revision })).status).toBe(400);
+    expect(store).not.toHaveBeenCalled();
+    const body = { notes: "Updated notes", expectedRevision: replacement.expectedRevision };
+    expect((await call(body)).status).toBe(200);
+    expect(store).toHaveBeenCalledWith(
+      expect.objectContaining({ ...body, tenantId, actorUserId: actorId })
+    );
+    expect((await fulfillmentApi(store, false, true)(body)).status).toBe(403);
+    expect(store).toHaveBeenCalledTimes(1);
+  });
+  it("keeps stale notes conflicts in the standard 409 envelope", async () => {
+    const store = vi.fn(async () => {
+      throw new CommercialOrdersProblem(
+        409,
+        "COMMERCIAL_FULFILLMENT_STALE",
+        "Reload before saving."
+      );
+    });
+    const response = await fulfillmentApi(
+      store,
+      true,
+      true
+    )({
+      notes: "Updated notes",
+      expectedRevision: replacement.expectedRevision
+    });
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      error: { code: "COMMERCIAL_FULFILLMENT_STALE", requestId: "req_g13" }
+    });
+  });
+  it("requires the exact server revision before dispatching replacement", async () => {
+    const store = vi.fn(async () => []);
+    const call = fulfillmentApi(store);
+    for (const revision of [undefined, 1788600000, "1788600000.123", "not-a-revision"])
+      expect((await call({ ...replacement, expectedRevision: revision })).status).toBe(400);
+    expect(store).not.toHaveBeenCalled();
+    expect((await call(replacement)).status).toBe(200);
+    expect(store).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...replacement,
+        tenantId,
+        actorUserId: actorId,
+        fulfillmentId: orderId
+      })
+    );
+  });
+  it("returns a stale-write 409 without hiding it as a success or server error", async () => {
+    const store = vi.fn(async () => {
+      throw new CommercialOrdersProblem(
+        409,
+        "COMMERCIAL_FULFILLMENT_STALE",
+        "Reload current lines before saving."
+      );
+    });
+    const response = await fulfillmentApi(store)(replacement);
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      error: { code: "COMMERCIAL_FULFILLMENT_STALE", requestId: "req_g13" }
+    });
+    expect(store).toHaveBeenCalledTimes(1);
+  });
+  it("a supplied revision does not bypass fulfillment edit permission", async () => {
+    const store = vi.fn(async () => []);
+    expect((await fulfillmentApi(store, false)(replacement)).status).toBe(403);
+    expect(store).not.toHaveBeenCalled();
+  });
   it("preserves a G7 available-stock conflict as a 409 envelope", async () => {
     const inventoryConflict = Object.assign(
       new Error("Commercial reservation exceeds available stock."),
