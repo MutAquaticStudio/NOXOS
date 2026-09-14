@@ -6,32 +6,13 @@ import { acquireGuardFences } from "../dist/guard-fence.js";
 import { createTenantSessionRepository } from "../dist/tenant-session-repository.js";
 import { authenticateTenantSession } from "../../auth/dist/tenant-session.js";
 import { issueSessionSecret } from "../../auth/dist/session-crypto.js";
+import { parseStagingRuntimeUrl } from "./staging-connection.mjs";
 
 const STAGING_REF = "uyfddpmbszjkhdkqvncz";
 function connection(role) {
   if (process.env.APP_ENV !== "staging")
     throw new Error("APP_ENV must be staging for the DB acceptance harness.");
-  const raw = process.env.NOX_RUNTIME_DATABASE_URL;
-  if (!raw) throw new Error("Missing protected staging value: NOX_RUNTIME_DATABASE_URL");
-  let url;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("Invalid protected database URL.");
-  }
-  const checks = {
-    PROTOCOL: ["postgres:", "postgresql:"].includes(url.protocol),
-    SYDNEY_POOL_HOST: /^aws-[0-9]+-ap-southeast-2\.pooler\.supabase\.com$/.test(url.hostname),
-    TRANSACTION_POOL_PORT: url.port === "6543",
-    STAGING_RUNTIME_USER: decodeURIComponent(url.username) === `nox_app_runtime.${STAGING_REF}`,
-    DATABASE_NAME: url.pathname === "/postgres",
-    PASSWORD_PRESENT: Boolean(url.password),
-    QUERY_OPTIONS_ABSENT: url.search === ""
-  };
-  const failed = Object.entries(checks)
-    .filter(([, pass]) => !pass)
-    .map(([name]) => name);
-  if (failed.length) throw new Error(`STAGING_CONNECTION_CONFIG_FAILED:${failed.join(",")}`);
+  const url = parseStagingRuntimeUrl(process.env.NOX_RUNTIME_DATABASE_URL);
   if (role === "postgres") {
     if (!process.env.SUPABASE_DB_PASSWORD)
       throw new Error("Missing protected staging value: SUPABASE_DB_PASSWORD");
