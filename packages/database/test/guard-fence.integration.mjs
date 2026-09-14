@@ -6,7 +6,7 @@ import { acquireGuardFences } from "../dist/guard-fence.js";
 import { createTenantSessionRepository } from "../dist/tenant-session-repository.js";
 import { authenticateTenantSession } from "../../auth/dist/tenant-session.js";
 import { issueSessionSecret } from "../../auth/dist/session-crypto.js";
-import { parseStagingRuntimeUrl } from "./staging-connection.mjs";
+import { parseStagingRuntimeUrl, safeDatabaseFailureCode } from "./staging-connection.mjs";
 
 const STAGING_REF = "uyfddpmbszjkhdkqvncz";
 function connection(role) {
@@ -133,11 +133,7 @@ test("Staging real runtime RLS, same-transaction fences, concurrent modes and cl
     );
   } catch (error) {
     // Do not allow provider error objects to dump connection details into cloud artifacts.
-    throw new Error(
-      error?.code === "55P03"
-        ? "Unexpected lock timeout in DB acceptance."
-        : "Staging guard acceptance failed; inspect protected diagnostics."
-    );
+    throw new Error(`STAGING_GUARD_FAILED:${safeDatabaseFailureCode(error)}`);
   } finally {
     try {
       if (created) {
@@ -230,8 +226,8 @@ test("Staging fixed-tenant session repository reads current authority through ru
     );
     await admin`update platform.tenant_users set authorization_epoch=authorization_epoch+1,entity_version=entity_version+1 where id=${actor}`;
     assert.equal(await authenticateTenantSession(request, dependencies), null);
-  } catch {
-    throw Error("Staging session repository acceptance failed; no provider details emitted.");
+  } catch (error) {
+    throw Error(`STAGING_SESSION_FAILED:${safeDatabaseFailureCode(error)}`);
   } finally {
     try {
       await admin.begin(async (tx) => {
@@ -241,8 +237,8 @@ test("Staging fixed-tenant session repository reads current authority through ru
         await tx`delete from platform.tenant_users where id=${actor} and tenant_id=${tenantA}`;
         await tx`delete from platform.tenants where id in (${tenantA},${tenantB})`;
       });
-    } catch {
-      throw Error("Staging synthetic session fixture cleanup failed.");
+    } catch (error) {
+      throw Error(`STAGING_SESSION_CLEANUP_FAILED:${safeDatabaseFailureCode(error)}`);
     } finally {
       await Promise.all([admin.end(), runtime.end()]);
     }

@@ -1,3 +1,30 @@
+export function safeDatabaseFailureCode(error) {
+  const allowed = new Set([
+    "28P01",
+    "28000",
+    "42501",
+    "42P01",
+    "42703",
+    "23503",
+    "23505",
+    "23514",
+    "55P03",
+    "40001",
+    "40P01",
+    "ERR_ASSERTION",
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "CONNECT_TIMEOUT",
+    "ENOTFOUND",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    "CERT_HAS_EXPIRED",
+    "ERR_TLS_CERT_ALTNAME_INVALID"
+  ]);
+  return allowed.has(error?.code) ? error.code : "UNCLASSIFIED";
+}
+
 export function parseStagingRuntimeUrl(raw) {
   if (!raw) throw Error("Missing protected staging value: NOX_RUNTIME_DATABASE_URL");
   let url;
