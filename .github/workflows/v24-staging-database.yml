@@ -38,6 +38,11 @@ jobs:
           NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: node --test packages/database/test/guard-fence.integration.mjs
+      - name: Real provider password verification and temporary fixture cleanup
+        env:
+          APP_ENV: staging
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node --test packages/auth/test/staging-password.integration.mjs
       - name: Record bounded acceptance
         env:
           ACCEPTED_SHA: ${{ github.sha }}
