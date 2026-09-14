@@ -19,19 +19,19 @@ function connection(role) {
   } catch {
     throw new Error("Invalid protected database URL.");
   }
-  const pool =
-    /^aws-[0-9]+-ap-southeast-2\.pooler\.supabase\.com$/.test(url.hostname) &&
-    url.port === "6543" &&
-    decodeURIComponent(url.username) === `nox_app_runtime.${STAGING_REF}`;
-  if (
-    !["postgres:", "postgresql:"].includes(url.protocol) ||
-    !pool ||
-    url.pathname !== "/postgres" ||
-    !url.password ||
-    url.search !== ""
-  ) {
-    throw new Error("Database URL is not the approved staging role/project connection.");
-  }
+  const checks = {
+    PROTOCOL: ["postgres:", "postgresql:"].includes(url.protocol),
+    SYDNEY_POOL_HOST: /^aws-[0-9]+-ap-southeast-2\.pooler\.supabase\.com$/.test(url.hostname),
+    TRANSACTION_POOL_PORT: url.port === "6543",
+    STAGING_RUNTIME_USER: decodeURIComponent(url.username) === `nox_app_runtime.${STAGING_REF}`,
+    DATABASE_NAME: url.pathname === "/postgres",
+    PASSWORD_PRESENT: Boolean(url.password),
+    QUERY_OPTIONS_ABSENT: url.search === ""
+  };
+  const failed = Object.entries(checks)
+    .filter(([, pass]) => !pass)
+    .map(([name]) => name);
+  if (failed.length) throw new Error(`STAGING_CONNECTION_CONFIG_FAILED:${failed.join(",")}`);
   if (role === "postgres") {
     if (!process.env.SUPABASE_DB_PASSWORD)
       throw new Error("Missing protected staging value: SUPABASE_DB_PASSWORD");
