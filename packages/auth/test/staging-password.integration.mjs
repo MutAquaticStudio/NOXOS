@@ -118,24 +118,28 @@ test("real Staging provider verifies a temporary password identity without appli
       { environment: "production" }
     ])
       assert.equal(await credential(patch), "UNKNOWN");
-    assert.equal(
-      (
-        await runtime`select has_table_privilege(current_user,'auth.users','SELECT') as users,
-      has_table_privilege(current_user,'auth.sessions','SELECT') as sessions`
-      )[0].users,
-      false
-    );
-    assert.equal(
-      (
-        await runtime`select has_table_privilege(current_user,'auth.sessions','SELECT') as sessions`
-      )[0].sessions,
-      false
-    );
+    phase = "PRIVILEGE_METADATA";
+    assert.equal((await runtime`select current_user as role`)[0].role, "nox_app_runtime");
+    // Resolving a qualified Auth relation itself requires schema USAGE. Inspect
+    // denied runtime grants as admin instead of granting USAGE to make a test pass.
     const grants =
       await admin`select has_function_privilege('anon','platform.read_auth_flow_credential_state(uuid)','EXECUTE') as anon,
       has_function_privilege('authenticated','platform.read_auth_flow_credential_state(uuid)','EXECUTE') as authenticated,
-      has_function_privilege('nox_workflow_runtime','platform.read_auth_flow_credential_state(uuid)','EXECUTE') as workflow`;
-    assert.deepEqual({ ...grants[0] }, { anon: false, authenticated: false, workflow: false });
+      has_function_privilege('nox_workflow_runtime','platform.read_auth_flow_credential_state(uuid)','EXECUTE') as workflow,
+      has_table_privilege('nox_app_runtime','auth.users','SELECT') as users,
+      has_table_privilege('nox_app_runtime','auth.sessions','SELECT') as sessions,
+      has_schema_privilege('nox_app_runtime','auth','USAGE') as schema_usage`;
+    assert.deepEqual(
+      { ...grants[0] },
+      {
+        anon: false,
+        authenticated: false,
+        workflow: false,
+        users: false,
+        sessions: false,
+        schema_usage: false
+      }
+    );
     phase = "NATIVE_REVOCATION";
     // Provider-controlled ban of this disposable identity; never mutate auth tables directly.
     const banned = await fetch(`${url}/auth/v1/admin/users/${userId}`, {

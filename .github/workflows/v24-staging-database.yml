@@ -3,6 +3,15 @@ name: v24-staging-database
 # Protected diagnostic only. No migration, deployment, or provider reconciliation.
 on:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Verification scope (provider excludes unchanged database suite)
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - provider
 
 permissions:
   contents: read
@@ -33,6 +42,7 @@ jobs:
       - name: Verify exact checked-out source
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Real runtime role, RLS and concurrent guard verification
+        if: inputs.suite != 'provider'
         env:
           APP_ENV: staging
           NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
@@ -48,5 +58,8 @@ jobs:
       - name: Record bounded acceptance
         env:
           ACCEPTED_SHA: ${{ github.sha }}
+          VERIFICATION_SUITE: ${{ inputs.suite }}
         run: |
-          printf 'SOURCE_SHA=%s\nAPP_ENV=staging\nGUARD_RUNTIME_ACCEPTANCE=PASS\nAPPLICATION_ACCEPTANCE=NOT_VERIFIED\n' "$ACCEPTED_SHA" >> "$GITHUB_STEP_SUMMARY"
+          database_status=PASS
+          if [ "$VERIFICATION_SUITE" = provider ]; then database_status=NOT_RUN; fi
+          printf 'SOURCE_SHA=%s\nAPP_ENV=staging\nGUARD_RUNTIME_ACCEPTANCE=%s\nPROVIDER_CREDENTIAL_ACCEPTANCE=PASS\nAPPLICATION_ACCEPTANCE=NOT_VERIFIED\n' "$ACCEPTED_SHA" "$database_status" >> "$GITHUB_STEP_SUMMARY"
