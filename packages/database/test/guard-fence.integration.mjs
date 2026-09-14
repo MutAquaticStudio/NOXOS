@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID, randomBytes } from "node:crypto";
+import { createHash, randomUUID, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { acquireGuardFences } from "../dist/guard-fence.js";
@@ -188,8 +188,32 @@ test("Staging session issue is runtime-authorized, atomic, replay-safe and rollb
             1
           );
         const events =
-          await outer`select event_digest,previous_digest from platform.security_event where tenant_id=${tenantId}`;
-        assert.match(events[0].event_digest, /^[a-f0-9]{64}$/);
+          await outer`select *,sequence::text as sequence_text from platform.security_event where tenant_id=${tenantId}`;
+        const event = events[0];
+        const canonicalEvent = Buffer.from(
+          JSON.stringify({
+            actorId: event.actor_id,
+            environment: event.environment,
+            eventId: event.id,
+            flowId: event.flow_id,
+            host: event.issued_host,
+            occurredAt: event.occurred_at.toISOString(),
+            policyVersion: event.policy_version,
+            previousDigest: event.previous_digest,
+            sequence: event.sequence_text,
+            sessionId: event.session_id,
+            tenantId: event.tenant_id,
+            type: event.event_type
+          })
+        );
+        const length = Buffer.alloc(8);
+        length.writeBigUInt64BE(BigInt(canonicalEvent.length));
+        assert.equal(
+          event.event_digest,
+          createHash("sha3-256")
+            .update(Buffer.concat([Buffer.from("noxos:v1:audit-event\0"), length, canonicalEvent]))
+            .digest("hex")
+        );
         assert.equal(events[0].previous_digest, "0".repeat(64));
         assert.equal(
           (

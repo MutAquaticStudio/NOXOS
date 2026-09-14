@@ -154,7 +154,7 @@ export function createAuthSessionIssuer(sql: Sql, key: SessionDigestKey) {
           type: "SESSION_ISSUED"
         });
         const eventDigest = createHash("sha3-256")
-          .update(frameDigestPayload("security-event", Buffer.from(canonicalEvent)))
+          .update(frameDigestPayload("audit-event", Buffer.from(canonicalEvent)))
           .digest("hex");
         await tx`insert into platform.security_event(id,tenant_id,actor_id,flow_id,session_id,event_type,environment,
           issued_host,policy_version,sequence,previous_digest,event_digest,occurred_at)
