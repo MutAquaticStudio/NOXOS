@@ -42,6 +42,8 @@ jobs:
         env:
           APP_ENV: staging
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: node --test packages/auth/test/staging-password.integration.mjs
       - name: Record bounded acceptance
         env:

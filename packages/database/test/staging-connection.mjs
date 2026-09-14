@@ -1,3 +1,27 @@
+import { readFileSync } from "node:fs";
+import postgres from "postgres";
+
+export function openStagingTestConnection(role = "nox_app_runtime") {
+  if (process.env.APP_ENV !== "staging" || !["postgres", "nox_app_runtime"].includes(role))
+    throw Error("STAGING_ONLY");
+  const url = parseStagingRuntimeUrl(process.env.NOX_RUNTIME_DATABASE_URL);
+  if (role === "postgres") {
+    if (!process.env.SUPABASE_DB_PASSWORD) throw Error("MISSING_PROTECTED_STAGING_DB_PASSWORD");
+    url.username = "postgres.uyfddpmbszjkhdkqvncz";
+    url.password = process.env.SUPABASE_DB_PASSWORD;
+  }
+  return postgres(url.toString(), {
+    prepare: false,
+    max: 1,
+    ssl: {
+      rejectUnauthorized: true,
+      ca: readFileSync(new URL("./supabase-ca-2021.crt", import.meta.url), "utf8")
+    },
+    connect_timeout: 5,
+    idle_timeout: 5
+  });
+}
+
 export function safeDatabaseFailureCode(error) {
   // Protocol SQLSTATE and our bounded constant auth errors are safe diagnostics;
   // never emit database/provider messages, queries, parameters or connection data.
