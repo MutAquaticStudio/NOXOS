@@ -1,4 +1,12 @@
 export function safeDatabaseFailureCode(error) {
+  // Protocol SQLSTATE and our bounded constant auth errors are safe diagnostics;
+  // never emit database/provider messages, queries, parameters or connection data.
+  if (typeof error?.code === "string" && /^[0-9A-Z]{5}$/.test(error.code)) return error.code;
+  if (
+    typeof error?.message === "string" &&
+    /^(AUTH_[A-Z_]{1,80}|UNKNOWN_REQUIRED_GUARD)$/.test(error.message)
+  )
+    return error.message;
   const allowed = new Set([
     "28P01",
     "28000",

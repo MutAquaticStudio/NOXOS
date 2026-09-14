@@ -39,6 +39,7 @@ function connection(role) {
 
 test("Staging session issue is runtime-authorized, atomic, replay-safe and rollback-clean", async () => {
   const admin = connection("postgres");
+  const runtime = connection("nox_app_runtime");
   const tenantId = randomUUID(),
     actorId = randomUUID(),
     policyId = randomUUID();
@@ -47,194 +48,214 @@ test("Staging session issue is runtime-authorized, atomic, replay-safe and rollb
   const key = { environment: "staging", version: "integration-only", bytes: randomBytes(32) };
   const rollback = Error("ROLLBACK_SYNTHETIC_SESSION_FIXTURE");
   let phase = "FIXTURE";
+  let created = false;
   try {
-    await assert.rejects(
-      () =>
-        admin.begin(async (outer) => {
-          // Fixture creation is privileged; every tested application query below runs
-          // as nox_app_runtime. Outer rollback preserves append-only audit constraints.
-          assert.equal(
-            (
-              await outer`select count(*)::int n from platform.security_policy_version where scope='PLATFORM_FLOOR' and status='ACTIVE_VERSION'`
-            )[0].n,
-            0
-          );
-          await outer`insert into platform.security_policy_version(id,scope,version,status,
+    await admin.begin(async (outer) => {
+      // Only synthetic fixture lifecycle uses the existing migration credential.
+      assert.equal(
+        (
+          await outer`select count(*)::int n from platform.security_policy_version where scope='PLATFORM_FLOOR' and status='ACTIVE_VERSION'`
+        )[0].n,
+        0
+      );
+      await outer`insert into platform.security_policy_version(id,scope,version,status,
         required_assurance_by_action,idle_seconds,absolute_seconds,step_up_seconds,recovery_token_seconds,
         privileged_max_seconds,allowed_authenticator_classes,rate_policy_ref,detection_policy_ref,policy_hash,effective_at,created_by)
         values (${policyId},'PLATFORM_FLOOR',1,'ACTIVE_VERSION',${outer.json({ TENANT_LOGIN: "A1" })},
         1800,43200,300,900,1800,${outer.json(["PASSWORD"])},'test-rate','test-detection',${"a".repeat(64)},
         clock_timestamp()-interval '1 second','synthetic-rollback-only')`;
-          await outer`insert into platform.tenants(id,name,slug,status) values (${tenantId},'v24 rollback session fixture',${`v24-${tenantId}`},'ACTIVE')`;
-          await outer`insert into platform.tenant_users(id,tenant_id,state) values (${actorId},${tenantId},'ACTIVE')`;
-          await outer`insert into platform.auth_principal_binding(id,tenant_id,actor_id,realm,provider_key,issuer,provider_subject,state)
+      await outer`insert into platform.tenants(id,name,slug,status) values (${tenantId},'v24 rollback session fixture',${`v24-${tenantId}`},'ACTIVE')`;
+      await outer`insert into platform.tenant_users(id,tenant_id,state) values (${actorId},${tenantId},'ACTIVE')`;
+      await outer`insert into platform.auth_principal_binding(id,tenant_id,actor_id,realm,provider_key,issuer,provider_subject,state)
         values (${randomUUID()},${tenantId},${actorId},'TENANT','supabase',${`https://${STAGING_REF}.supabase.co/auth/v1`},${actorId},'ACTIVE')`;
-          await outer`insert into platform.tenant_host_registry(host_ascii,tenant_id,route_kind,state,routing_version,policy_version)
+      await outer`insert into platform.tenant_host_registry(host_ascii,tenant_id,route_kind,state,routing_version,policy_version)
         values (${host},${tenantId},'TENANT_CANONICAL','ACTIVE',1,${policyVersion})`;
-          await outer`set local role nox_app_runtime`;
-          assert.equal((await outer`select current_user as name`)[0].name, "nox_app_runtime");
-          const transaction = { begin: (fn) => outer.savepoint(fn) };
-          const flows = createAuthFlowRepository(transaction);
-          const scope = {
-            tenantId,
-            host,
-            environment: "staging",
-            flowSecretDigest: randomBytes(32).toString("hex"),
-            routingVersion: 1,
-            clientNonceDigest: randomBytes(32).toString("hex"),
-            identifierDigest: randomBytes(32).toString("hex"),
-            requestDigest: randomBytes(32).toString("hex"),
-            keyVersion: key.version,
-            requiredAssurance: "A1",
-            policyVersion,
-            safeReturnPath: "/materials"
-          };
-          phase = "VERIFIED_FLOW";
-          const flow = await flows.start(scope),
-            request = { ...scope, flowId: flow.id };
-          const operation = await flows.claimProvider(request);
-          assert.ok(operation);
-          assert.equal(
-            await flows.recordProvider({
-              ...request,
-              operationId: operation.operationId,
-              result: {
-                kind: "VERIFIED",
-                providerKey: "supabase",
-                issuer: `https://${STAGING_REF}.supabase.co/auth/v1`,
-                subject: actorId,
-                providerSessionId: randomUUID(),
-                assurance: "A1",
-                environment: "staging",
-                verifiedAt: new Date().toISOString()
-              }
-            }),
-            true
-          );
-          phase = "OUTBOX_FAILURE_ROLLBACK";
-          // Inject a real SQL failure at the outbox boundary; do not fake the database,
-          // alter production code, or disable immutable triggers for the test.
-          const failing = {
-            begin: (fn) =>
-              outer.savepoint((tx) =>
-                fn(
-                  new Proxy(tx, {
-                    apply(target, receiver, args) {
-                      if (
-                        Array.isArray(args[0]) &&
-                        args[0].join("").includes("insert into nox_foundation.outbox")
-                      )
-                        return target`select 1/0`;
-                      return Reflect.apply(target, receiver, args);
-                    }
-                  })
-                )
+    });
+    created = true;
+    try {
+      await runtime.begin(async (outer) => {
+        // An independent limited-role connection executes the application code.
+        // Rollback all session/audit writes without weakening append-only triggers.
+        assert.equal((await outer`select current_user as name`)[0].name, "nox_app_runtime");
+        const transaction = { begin: (fn) => outer.savepoint(fn) };
+        const flows = createAuthFlowRepository(transaction);
+        const scope = {
+          tenantId,
+          host,
+          environment: "staging",
+          flowSecretDigest: randomBytes(32).toString("hex"),
+          routingVersion: 1,
+          clientNonceDigest: randomBytes(32).toString("hex"),
+          identifierDigest: randomBytes(32).toString("hex"),
+          requestDigest: randomBytes(32).toString("hex"),
+          keyVersion: key.version,
+          requiredAssurance: "A1",
+          policyVersion,
+          safeReturnPath: "/materials"
+        };
+        phase = "VERIFIED_FLOW";
+        const flow = await flows.start(scope),
+          request = { ...scope, flowId: flow.id };
+        const operation = await flows.claimProvider(request);
+        assert.ok(operation);
+        assert.equal(
+          await flows.recordProvider({
+            ...request,
+            operationId: operation.operationId,
+            result: {
+              kind: "VERIFIED",
+              providerKey: "supabase",
+              issuer: `https://${STAGING_REF}.supabase.co/auth/v1`,
+              subject: actorId,
+              providerSessionId: randomUUID(),
+              assurance: "A1",
+              environment: "staging",
+              verifiedAt: new Date().toISOString()
+            }
+          }),
+          true
+        );
+        phase = "OUTBOX_FAILURE_ROLLBACK";
+        // Inject a real SQL failure at the outbox boundary; do not fake the database,
+        // alter production code, or disable immutable triggers for the test.
+        const failing = {
+          begin: (fn) =>
+            outer.savepoint((tx) =>
+              fn(
+                new Proxy(tx, {
+                  apply(target, receiver, args) {
+                    if (
+                      Array.isArray(args[0]) &&
+                      args[0].join("").includes("insert into nox_foundation.outbox")
+                    )
+                      return target`select 1/0`;
+                    return Reflect.apply(target, receiver, args);
+                  }
+                })
               )
-          };
-          await assert.rejects(() => createAuthSessionIssuer(failing, key).issue(request), {
-            code: "22012"
-          });
-          // Inspect as fixture administrator so missing runtime read context cannot
-          // manufacture a false zero-row rollback result.
-          await outer`set local role postgres`;
-          assert.equal(
-            (await outer`select state from platform.auth_flow where id=${flow.id}`)[0].state,
-            "PRIMARY_VERIFIED"
-          );
-          for (const table of [
-            "platform.application_session",
-            "platform.security_event",
-            "nox_foundation.outbox"
-          ])
-            assert.equal(
-              (
-                await outer`select count(*)::int n from ${outer(table)} where tenant_id=${tenantId}`
-              )[0].n,
-              0
-            );
-          await outer`set local role nox_app_runtime`;
-          phase = "ISSUE_AND_REPLAY";
-          const issuer = createAuthSessionIssuer(transaction, key);
-          await assert.rejects(
-            () => issuer.issue({ ...request, flowSecretDigest: "b".repeat(64) }),
-            /AUTH_FLOW_UNAVAILABLE/
-          );
-          const issued = await issuer.issue(request);
-          assert.equal(issued.kind, "ISSUED");
-          assert.equal(Buffer.from(issued.secret, "base64url").length, 32);
-          assert.deepEqual(await issuer.issue(request), {
-            kind: "ORIGINAL_RESULT",
-            sessionId: issued.sessionId
-          });
-          const digest = sessionSecretDigest(issued.secret, key).digest;
-          await outer`select set_config('nox.session_digest',${digest},true)`;
-          const rows =
-            await outer`select secret_digest,actor_id,tenant_id,credential_epoch::text,authorization_epoch::text
-        from platform.application_session where id=${issued.sessionId}`;
-          assert.equal(rows.length, 1);
-          assert.equal(rows[0].secret_digest, digest);
-          assert.equal(rows[0].actor_id, actorId);
-          assert.equal(rows[0].tenant_id, tenantId);
-          assert.equal(rows[0].credential_epoch, "1");
-          assert.equal(rows[0].authorization_epoch, "1");
-          for (const table of ["platform.security_event", "nox_foundation.outbox"])
-            assert.equal(
-              (
-                await outer`select count(*)::int n from ${outer(table)} where tenant_id=${tenantId}`
-              )[0].n,
-              1
-            );
-          const events =
-            await outer`select event_digest,previous_digest from platform.security_event where tenant_id=${tenantId}`;
-          assert.match(events[0].event_digest, /^[a-f0-9]{64}$/);
-          assert.equal(events[0].previous_digest, "0".repeat(64));
+            )
+        };
+        let outboxRejected = false;
+        try {
+          await createAuthSessionIssuer(failing, key).issue(request);
+        } catch (error) {
+          if (error.code !== "22012") throw error;
+          outboxRejected = true;
+        }
+        assert.equal(outboxRejected, true);
+        assert.equal(
+          (await outer`select state from platform.auth_flow where id=${flow.id}`)[0].state,
+          "PRIMARY_VERIFIED"
+        );
+        for (const table of ["platform.security_event", "nox_foundation.outbox"])
           assert.equal(
             (
-              await outer`select state,issued_session_id from platform.auth_flow where id=${flow.id}`
-            )[0].issued_session_id,
-            issued.sessionId
+              await outer`select count(*)::int n from ${outer(table)} where tenant_id=${tenantId}`
+            )[0].n,
+            0
           );
-          phase = "IMMUTABILITY";
-          await assert.rejects(
-            () =>
-              outer.savepoint(
-                (tx) =>
-                  tx`update platform.security_policy_version set version=version+1 where id=${policyId}`
-              ),
-            { code: "23514" }
+        phase = "ISSUE_AND_REPLAY";
+        const issuer = createAuthSessionIssuer(transaction, key);
+        await assert.rejects(
+          () => issuer.issue({ ...request, flowSecretDigest: "b".repeat(64) }),
+          /AUTH_FLOW_UNAVAILABLE/
+        );
+        const issued = await issuer.issue(request);
+        // Success with the same unique auth_operation_id also proves that the
+        // failed transaction left no hidden session behind the digest-only RLS.
+        assert.equal(issued.kind, "ISSUED");
+        assert.equal(Buffer.from(issued.secret, "base64url").length, 32);
+        assert.deepEqual(await issuer.issue(request), {
+          kind: "ORIGINAL_RESULT",
+          sessionId: issued.sessionId
+        });
+        const digest = sessionSecretDigest(issued.secret, key).digest;
+        await outer`select set_config('nox.session_digest',${digest},true)`;
+        const rows =
+          await outer`select secret_digest,actor_id,tenant_id,credential_epoch::text,authorization_epoch::text
+        from platform.application_session where id=${issued.sessionId}`;
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].secret_digest, digest);
+        assert.equal(rows[0].actor_id, actorId);
+        assert.equal(rows[0].tenant_id, tenantId);
+        assert.equal(rows[0].credential_epoch, "1");
+        assert.equal(rows[0].authorization_epoch, "1");
+        for (const table of ["platform.security_event", "nox_foundation.outbox"])
+          assert.equal(
+            (
+              await outer`select count(*)::int n from ${outer(table)} where tenant_id=${tenantId}`
+            )[0].n,
+            1
           );
-          await assert.rejects(
-            () =>
-              outer.savepoint(
-                (tx) => tx`delete from platform.security_event where tenant_id=${tenantId}`
-              ),
-            { code: "42501" }
-          );
-          throw rollback;
-        }),
-      (error) => error === rollback
-    );
+        const events =
+          await outer`select event_digest,previous_digest from platform.security_event where tenant_id=${tenantId}`;
+        assert.match(events[0].event_digest, /^[a-f0-9]{64}$/);
+        assert.equal(events[0].previous_digest, "0".repeat(64));
+        assert.equal(
+          (
+            await outer`select state,issued_session_id from platform.auth_flow where id=${flow.id}`
+          )[0].issued_session_id,
+          issued.sessionId
+        );
+        phase = "IMMUTABILITY";
+        await assert.rejects(
+          () =>
+            outer.savepoint(
+              (tx) =>
+                tx`update platform.security_policy_version set version=version+1 where id=${policyId}`
+            ),
+          { code: "23514" }
+        );
+        await assert.rejects(
+          () =>
+            outer.savepoint(
+              (tx) => tx`delete from platform.security_event where tenant_id=${tenantId}`
+            ),
+          { code: "42501" }
+        );
+        throw rollback;
+      });
+      assert.fail("Synthetic fixture must rollback");
+    } catch (error) {
+      if (error !== rollback) throw error;
+    }
     phase = "CLEANUP_VERIFIED";
-    assert.equal(
-      (await admin`select count(*)::int n from platform.tenants where id=${tenantId}`)[0].n,
-      0
-    );
-    assert.equal(
-      (
-        await admin`select count(*)::int n from platform.security_policy_version where id=${policyId}`
-      )[0].n,
-      0
-    );
-    assert.equal(
-      (
-        await admin`select count(*)::int n from platform.security_event where tenant_id=${tenantId}`
-      )[0].n,
-      0
-    );
+    for (const table of [
+      "platform.auth_flow",
+      "platform.application_session",
+      "platform.security_event",
+      "nox_foundation.outbox"
+    ])
+      assert.equal(
+        (await admin`select count(*)::int n from ${admin(table)} where tenant_id=${tenantId}`)[0].n,
+        0
+      );
   } catch (error) {
     throw Error(`STAGING_SESSION_COMMIT_FAILED:${phase}:${safeDatabaseFailureCode(error)}`);
   } finally {
-    await admin.end();
+    try {
+      if (created) {
+        await admin.begin(async (tx) => {
+          await tx`delete from platform.auth_principal_binding where tenant_id=${tenantId}`;
+          await tx`delete from platform.tenant_host_registry where tenant_id=${tenantId}`;
+          await tx`delete from platform.tenant_users where tenant_id=${tenantId}`;
+          await tx`delete from platform.tenants where id=${tenantId}`;
+          await tx`delete from platform.security_policy_version where id=${policyId} and created_by='synthetic-rollback-only'`;
+        });
+        assert.equal(
+          (await admin`select count(*)::int n from platform.tenants where id=${tenantId}`)[0].n,
+          0
+        );
+        assert.equal(
+          (
+            await admin`select count(*)::int n from platform.security_policy_version where id=${policyId}`
+          )[0].n,
+          0
+        );
+      }
+    } finally {
+      await Promise.all([admin.end(), runtime.end()]);
+    }
   }
 });
 
