@@ -6,7 +6,12 @@ import {
 } from "@nox-os/auth/server-session";
 
 type LoginFields = Readonly<Record<string, string | null>>;
-type StartResult = { flowId: string; secret: string; expiresAt: number };
+type StartResult = {
+  flowId: string;
+  secret?: string;
+  expiresAt: number;
+  next: "PASSWORD" | "ORIGINAL_RESULT" | "RESTART_REQUIRED";
+};
 type CompleteResult =
   | { kind: "ISSUED"; secret: string; absoluteExpiresAt: number }
   | { kind: "DENIED" | "PENDING_RECONCILIATION" | "STEP_UP_REQUIRED" | "ORIGINAL_RESULT" };
@@ -257,15 +262,34 @@ export function createTenantLoginHttp(options: {
           timestamp = now();
         if (
           !uuid.test(result.flowId) ||
-          !opaque.test(result.secret) ||
+          (result.secret !== undefined && !opaque.test(result.secret)) ||
           !Number.isSafeInteger(result.expiresAt) ||
-          result.expiresAt <= timestamp ||
+          (result.expiresAt <= timestamp && result.next !== "RESTART_REQUIRED") ||
           result.expiresAt > timestamp + 900000
         )
           throw Error("INVALID_LOGIN_RESULT");
-        return reply(202, { flowId: result.flowId, next: "PASSWORD" }, [
-          `__Host-noxos-auth=${result.secret}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${Math.floor((result.expiresAt - timestamp) / 1000)}`
-        ]);
+        const next = result.next;
+        const previousCookies = (cookieHeader ?? "")
+          .split(";")
+          .map((p) => p.trim())
+          .filter((p) => p.startsWith("__Host-noxos-auth="));
+        if (
+          !["PASSWORD", "ORIGINAL_RESULT", "RESTART_REQUIRED"].includes(next) ||
+          (result.secret !== undefined && next !== "PASSWORD") ||
+          (result.secret === undefined &&
+            next !== "RESTART_REQUIRED" &&
+            (previousCookies.length !== 1 || !opaque.test(previousCookies[0]!.slice(18))))
+        )
+          throw Error("INVALID_LOGIN_RESULT");
+        return reply(
+          202,
+          { flowId: result.flowId, next },
+          result.secret === undefined
+            ? []
+            : [
+                `__Host-noxos-auth=${result.secret}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${Math.floor((result.expiresAt - timestamp) / 1000)}`
+              ]
+        );
       }
       const result = await options.service.complete(input);
       if (result.kind === "ISSUED")

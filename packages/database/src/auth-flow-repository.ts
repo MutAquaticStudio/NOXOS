@@ -9,6 +9,7 @@ type FlowScope = {
   flowSecretDigest: string;
 };
 type StartFlow = FlowScope & {
+  existingFlowSecretDigest?: string;
   routingVersion: number;
   clientNonceDigest: string;
   identifierDigest: string;
@@ -28,7 +29,8 @@ async function scope(tx: TransactionSql, input: FlowScope) {
   await tx`select set_config('nox.request_host',${input.host},true),
     set_config('nox.tenant_id',${input.tenantId},true),
     set_config('nox.environment',${input.environment},true),
-    set_config('nox.auth_flow_digest',${input.flowSecretDigest},true)`;
+    set_config('nox.auth_flow_digest',${input.flowSecretDigest},true),
+    set_config('nox.auth_start_nonce_digest','',true),set_config('nox.auth_start_request_digest','',true)`;
 }
 /** G2-owned persistence. Inputs are server-resolved facts, never HTTP DTOs.
  * Claim commits before any provider request; unknown outcomes are never re-claimed.
@@ -79,6 +81,8 @@ export function createAuthFlowRepository(sql: Sql) {
     },
     async start(input: StartFlow) {
       if (
+        (input.existingFlowSecretDigest !== undefined &&
+          !digest.test(input.existingFlowSecretDigest)) ||
         ![input.clientNonceDigest, input.identifierDigest, input.requestDigest].every((x) =>
           digest.test(x)
         )
@@ -86,26 +90,31 @@ export function createAuthFlowRepository(sql: Sql) {
         throw Error("INVALID_AUTH_FLOW_DIGEST");
       return sql.begin(async (tx) => {
         await scope(tx, input);
+        await tx`select set_config('nox.auth_start_nonce_digest',${input.clientNonceDigest},true),
+          set_config('nox.auth_start_request_digest',${input.requestDigest},true)`;
         const host = await tx`select h.routing_version from platform.tenant_host_registry h
           join platform.tenants t on t.id=h.tenant_id
           where h.host_ascii=${input.host} and h.tenant_id=${input.tenantId} and h.state='ACTIVE'
           and h.route_kind='TENANT_CANONICAL' and t.status='ACTIVE'`;
         if (host.length !== 1 || host[0]!.routing_version !== input.routingVersion)
           throw Error("AUTH_FLOW_UNAVAILABLE");
-        await tx`insert into platform.auth_flow(id,tenant_id,realm,environment,issued_host,routing_version,purpose,
+        const inserted =
+          await tx`insert into platform.auth_flow(id,tenant_id,realm,environment,issued_host,routing_version,purpose,
           client_flow_nonce_digest,flow_secret_digest,identifier_correlation_digest,request_digest,digest_policy,
           token_digest_key_version,state,required_assurance,policy_version,safe_return_path,created_at,expires_at)
           values (${randomUUID()},${input.tenantId},'TENANT',${input.environment},${input.host},${input.routingVersion},'TENANT_LOGIN',
           ${input.clientNonceDigest},${input.flowSecretDigest},${input.identifierDigest},${input.requestDigest},
           'FIPS202-SHA3-256-DOMAIN-SEPARATED-V1',${input.keyVersion},'INITIATED',${input.requiredAssurance},
           ${input.policyVersion},${input.safeReturnPath},statement_timestamp(),statement_timestamp()+interval '900 seconds')
-          on conflict (realm,issued_host,client_flow_nonce_digest,purpose) do nothing`;
+          on conflict (realm,issued_host,client_flow_nonce_digest,purpose) do nothing returning id`;
         const rows =
           await tx`select id,state,request_digest,routing_version,expires_at,policy_version,
-          identifier_correlation_digest,required_assurance,safe_return_path,token_digest_key_version
+          identifier_correlation_digest,required_assurance,safe_return_path,token_digest_key_version,
+          (flow_secret_digest=${input.flowSecretDigest} or flow_secret_digest=${input.existingFlowSecretDigest ?? ""}) as proof_matches
           from platform.auth_flow where realm='TENANT' and issued_host=${input.host}
           and client_flow_nonce_digest=${input.clientNonceDigest} and purpose='TENANT_LOGIN'`;
-        if (rows.length !== 1) throw Error("AUTH_FLOW_UNAVAILABLE");
+        if (rows.length !== 1)
+          throw Error(inserted.length ? "AUTH_FLOW_UNAVAILABLE" : "AUTH_FLOW_REPLAY_CONFLICT");
         const row = rows[0]!;
         if (
           row.request_digest !== input.requestDigest ||
@@ -117,7 +126,13 @@ export function createAuthFlowRepository(sql: Sql) {
           row.token_digest_key_version !== input.keyVersion
         )
           throw Error("AUTH_FLOW_REPLAY_CONFLICT");
-        return { id: String(row.id), state: String(row.state), expiresAt: row.expires_at as Date };
+        return {
+          id: String(row.id),
+          state: String(row.state),
+          expiresAt: row.expires_at as Date,
+          created: inserted.length === 1,
+          proofMatches: row.proof_matches === true
+        };
       });
     },
     async readCurrent(input: FlowScope & { flowId: string }) {

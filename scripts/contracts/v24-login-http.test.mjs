@@ -46,7 +46,7 @@ function fixture() {
     },
     async start(input) {
       calls.push(["start", input]);
-      return { flowId, secret, expiresAt: now + 900000 };
+      return { flowId, secret, expiresAt: now + 900000, next: "PASSWORD" };
     },
     async complete(input) {
       calls.push(["complete", input]);
@@ -76,6 +76,28 @@ test("start resolves host first, emits opaque flow cookie only and disables cach
   );
   assert.equal(response.headers.get("set-cookie").includes("Domain="), false);
   assert.equal(response.headers.get("cache-control"), "no-store, private");
+});
+
+test("start replay returns safe next step without replacing cookie or exposing provider state", async () => {
+  const f = fixture();
+  f.service.start = async () => ({ flowId, expiresAt: now - 1, next: "RESTART_REQUIRED" });
+  const response = await f.handler(request());
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), { flowId, next: "RESTART_REQUIRED" });
+  assert.equal(response.headers.has("set-cookie"), false);
+  f.service.start = async () => ({ flowId, expiresAt: now + 10000, next: "PASSWORD" });
+  assert.equal((await f.handler(request())).status, 400);
+  const replay = await f.handler(
+    request(undefined, {
+      headers: {
+        origin: `https://${host}`,
+        "content-type": "application/json",
+        cookie: `__Host-noxos-auth=${secret}`
+      }
+    })
+  );
+  assert.equal(replay.status, 202);
+  assert.equal(replay.headers.has("set-cookie"), false);
 });
 
 test("complete keeps password transient and rotates cookies, never returns any secret in JSON", async () => {

@@ -773,7 +773,58 @@ test("Staging auth flow replay, exclusive provider claim and terminal integrity"
     created = true;
     phase = "START";
     const initial = await repository.start(input);
-    assert.deepEqual(await repository.start(input), initial);
+    assert.deepEqual(await repository.start(input), { ...initial, created: false });
+    const lostCookie = await repository.start({
+      ...input,
+      flowSecretDigest: randomBytes(32).toString("hex")
+    });
+    assert.deepEqual(lostCookie, { ...initial, created: false, proofMatches: false });
+    assert.deepEqual(
+      await repository.start({
+        ...input,
+        flowSecretDigest: randomBytes(32).toString("hex"),
+        existingFlowSecretDigest: input.flowSecretDigest
+      }),
+      { ...initial, created: false }
+    );
+    assert.equal(
+      (await admin`select count(*)::int n from platform.auth_flow where tenant_id=${tenantId}`)[0]
+        .n,
+      1
+    );
+    const raceNonce = randomBytes(32).toString("hex");
+    const starts = await Promise.all([
+      repository.start({
+        ...input,
+        clientNonceDigest: raceNonce,
+        flowSecretDigest: randomBytes(32).toString("hex")
+      }),
+      competitor.start({
+        ...input,
+        clientNonceDigest: raceNonce,
+        flowSecretDigest: randomBytes(32).toString("hex")
+      })
+    ]);
+    assert.equal(starts[0].id, starts[1].id);
+    assert.equal(starts.filter((s) => s.created).length, 1);
+    assert.equal(starts.filter((s) => s.proofMatches).length, 1);
+    // A start nonce/request permits reconciliation only, never provider claim.
+    await runtime.begin(async (tx) => {
+      await tx`select set_config('nox.request_host',${host},true),set_config('nox.environment','staging',true),
+        set_config('nox.tenant_id',${tenantId},true),set_config('nox.auth_flow_digest','',true),
+        set_config('nox.auth_start_nonce_digest',${input.clientNonceDigest},true),
+        set_config('nox.auth_start_request_digest',${input.requestDigest},true)`;
+      assert.equal((await tx`select id from platform.auth_flow`)[0].id, initial.id);
+      assert.equal(
+        (
+          await tx`update platform.auth_flow set state='PENDING_RECONCILIATION',
+        provider_operation_id=${randomUUID()},entity_version=entity_version+1 where id=${initial.id} returning id`
+        ).length,
+        0
+      );
+      await tx`select set_config('nox.auth_start_request_digest',${"f".repeat(64)},true)`;
+      assert.equal((await tx`select id from platform.auth_flow`).length, 0);
+    });
     await assert.rejects(
       () => repository.start({ ...input, requestDigest: "a".repeat(64) }),
       /AUTH_FLOW_REPLAY_CONFLICT/
