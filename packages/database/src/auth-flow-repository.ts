@@ -78,12 +78,52 @@ export function createAuthFlowRepository(sql: Sql) {
         return { id: String(row.id), state: String(row.state), expiresAt: row.expires_at as Date };
       });
     },
-    async claimProvider(input: FlowScope & { flowId: string }) {
+    async readCurrent(input: FlowScope & { flowId: string }) {
       return sql.begin(async (tx) => {
         await scope(tx, input);
+        const rows = await tx`select id,state,routing_version,identifier_correlation_digest,
+          policy_version,token_digest_key_version,expires_at,provider_operation_id,
+          complete_operation_digest,complete_request_digest from platform.auth_flow
+          where id=${input.flowId} and expires_at>clock_timestamp()`;
+        return rows.length === 1 ? rows[0]! : null;
+      });
+    },
+    async claimProvider(
+      input: FlowScope & {
+        flowId: string;
+        identifierDigest: string;
+        operationDigest: string;
+        completionDigest: string;
+      }
+    ) {
+      if (
+        ![input.identifierDigest, input.operationDigest, input.completionDigest].every((x) =>
+          digest.test(x)
+        )
+      )
+        throw Error("INVALID_AUTH_COMPLETION_DIGEST");
+      return sql.begin(async (tx) => {
+        await scope(tx, input);
+        const current = await tx`select state,identifier_correlation_digest,provider_operation_id,
+          complete_operation_digest,complete_request_digest from platform.auth_flow
+          where id=${input.flowId} and expires_at>clock_timestamp() for update`;
+        if (current.length !== 1) return null;
+        const flow = current[0]!;
+        if (flow.identifier_correlation_digest !== input.identifierDigest)
+          throw Error("AUTH_COMPLETION_IDENTITY_MISMATCH");
+        if (flow.provider_operation_id !== null) {
+          if (
+            flow.complete_operation_digest !== input.operationDigest ||
+            flow.complete_request_digest !== input.completionDigest
+          )
+            throw Error("AUTH_COMPLETION_REPLAY_CONFLICT");
+          return null;
+        }
+        if (flow.state !== "INITIATED") return null;
         const operationId = randomUUID();
         const rows = await tx`update platform.auth_flow set state='PENDING_RECONCILIATION',
-          provider_operation_id=${operationId},entity_version=entity_version+1
+          provider_operation_id=${operationId},complete_operation_digest=${input.operationDigest},
+          complete_request_digest=${input.completionDigest},entity_version=entity_version+1
           where id=${input.flowId} and state='INITIATED' and expires_at>clock_timestamp()
           returning id`;
         return rows.length === 1 ? { operationId } : null;

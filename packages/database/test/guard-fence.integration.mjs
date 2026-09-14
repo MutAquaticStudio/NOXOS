@@ -203,7 +203,12 @@ test("Staging session issue is runtime-authorized, atomic, replay-safe and rollb
         };
         phase = "VERIFIED_FLOW";
         const flow = await flows.start(scope),
-          request = { ...scope, flowId: flow.id };
+          request = {
+            ...scope,
+            flowId: flow.id,
+            operationDigest: randomBytes(32).toString("hex"),
+            completionDigest: randomBytes(32).toString("hex")
+          };
         const operation = await flows.claimProvider(request);
         assert.ok(operation);
         assert.equal(
@@ -553,7 +558,21 @@ test("Staging auth flow replay, exclusive provider claim and terminal integrity"
       /AUTH_FLOW_REPLAY_CONFLICT/
     );
     phase = "CLAIM";
-    const request = { ...input, flowId: initial.id };
+    const request = {
+      ...input,
+      flowId: initial.id,
+      operationDigest: randomBytes(32).toString("hex"),
+      completionDigest: randomBytes(32).toString("hex")
+    };
+    assert.equal(
+      await repository.readCurrent({ ...request, flowSecretDigest: "b".repeat(64) }),
+      null
+    );
+    assert.equal((await repository.readCurrent(request)).state, "INITIATED");
+    await assert.rejects(
+      repository.claimProvider({ ...request, identifierDigest: "c".repeat(64) }),
+      /AUTH_COMPLETION_IDENTITY_MISMATCH/
+    );
     assert.equal(
       await repository.claimProvider({ ...request, flowSecretDigest: "b".repeat(64) }),
       null
@@ -565,6 +584,14 @@ test("Staging auth flow replay, exclusive provider claim and terminal integrity"
     assert.equal(results.filter(Boolean).length, 1);
     const winner = results.find(Boolean);
     assert.equal(await repository.claimProvider(request), null);
+    await assert.rejects(
+      repository.claimProvider({ ...request, operationDigest: "c".repeat(64) }),
+      /AUTH_COMPLETION_REPLAY_CONFLICT/
+    );
+    await assert.rejects(
+      repository.claimProvider({ ...request, completionDigest: "d".repeat(64) }),
+      /AUTH_COMPLETION_REPLAY_CONFLICT/
+    );
     phase = "RESULT";
     assert.equal(
       await repository.recordProvider({
