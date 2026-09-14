@@ -7,6 +7,7 @@ import { acquireGuardFences } from "../dist/guard-fence.js";
 import { createTenantSessionRepository } from "../dist/tenant-session-repository.js";
 import { createAuthFlowRepository } from "../dist/auth-flow-repository.js";
 import { createAuthSessionIssuer } from "../dist/auth-session-issuer.js";
+import { createAuthRateStore } from "../dist/auth-rate-store.js";
 import { authenticateTenantSession } from "../../auth/dist/tenant-session.js";
 import { issueSessionSecret, sessionSecretDigest } from "../../auth/dist/session-crypto.js";
 import { parseStagingRuntimeUrl, safeDatabaseFailureCode } from "./staging-connection.mjs";
@@ -36,6 +37,113 @@ function connection(role) {
     idle_timeout: 5
   });
 }
+
+test("Staging rate budgets serialize independent connections without account mutation", async () => {
+  const admin = connection("postgres"),
+    runtime = connection("nox_app_runtime"),
+    other = connection("nox_app_runtime");
+  const policyRef = `test-${randomUUID()}`,
+    keyVersion = "synthetic-rate-test";
+  const stores = [createAuthRateStore(runtime), createAuthRateStore(other)];
+  const base = {
+    environment: "staging",
+    realm: "TENANT",
+    policyRef,
+    keyVersion,
+    phase: "BEFORE_PROVIDER"
+  };
+  const dimensions = ["FLOW", "IDENTIFIER", "NETWORK"];
+  const blind = () => randomBytes(32).toString("hex");
+  let last;
+  try {
+    for (const limited of dimensions) {
+      const shared = blind();
+      const requests = Array.from({ length: 4 }, () => ({
+        ...base,
+        budgets: dimensions.map((dimension) => ({
+          dimension,
+          digest: dimension === limited ? shared : blind(),
+          limit: 2,
+          windowSeconds: 60
+        }))
+      }));
+      const outcomes = await Promise.all(
+        requests.map((input, index) => stores[index % 2].consume(input))
+      );
+      assert.equal(outcomes.filter((value) => value === "ALLOW").length, 2);
+      assert.equal(outcomes.filter((value) => value === "THROTTLED").length, 2);
+      assert.equal(
+        (
+          await admin`select attempts from nox_foundation.auth_rate_bucket
+        where policy_ref=${policyRef} and dimension=${limited} and subject_digest=${shared}`
+        )[0].attempts,
+        3
+      );
+      last = requests[0];
+    }
+    // Verified-subject budget is independent of rotating network/flow/identifier.
+    const subject = {
+      ...base,
+      phase: "VERIFIED_SUBJECT",
+      budgets: [{ dimension: "SUBJECT", digest: blind(), limit: 1, windowSeconds: 60 }]
+    };
+    assert.equal(await stores[0].consume(subject), "ALLOW");
+    assert.equal(await stores[1].consume(subject), "THROTTLED");
+    const before = (
+      await admin`select sum(attempts)::int n from nox_foundation.auth_rate_bucket where policy_ref=${policyRef}`
+    )[0].n;
+    await assert.rejects(
+      stores[0].consume({ ...last, budgets: last.budgets.map((b) => ({ ...b, limit: 3 })) }),
+      /AUTH_RATE_POLICY_CONFLICT/
+    );
+    assert.equal(
+      (
+        await admin`select sum(attempts)::int n from nox_foundation.auth_rate_bucket where policy_ref=${policyRef}`
+      )[0].n,
+      before
+    );
+    // Only our synthetic rows are aged; no sleeps or global clock changes.
+    await admin`update nox_foundation.auth_rate_bucket set window_started_at=statement_timestamp()-interval '2 days',
+      expires_at=statement_timestamp()-interval '2 days'+window_seconds*interval '1 second'
+      where policy_ref=${policyRef}`;
+    assert.equal(await stores[0].consume(last), "ALLOW");
+    // Current three budgets survive reset; expired unrelated blind indexes are pruned.
+    assert.equal(
+      (
+        await admin`select count(*)::int n from nox_foundation.auth_rate_bucket where policy_ref=${policyRef}`
+      )[0].n,
+      3
+    );
+    assert.equal(
+      (await runtime`select count(*)::int n from nox_foundation.auth_rate_bucket`)[0].n,
+      0
+    );
+    const grants = (
+      await admin`select has_table_privilege('anon','nox_foundation.auth_rate_bucket','SELECT') anon_read,
+      has_table_privilege('authenticated','nox_foundation.auth_rate_bucket','INSERT') browser_write,
+      has_table_privilege('nox_workflow_runtime','nox_foundation.auth_rate_bucket','UPDATE') workflow_write`
+    )[0];
+    assert.deepEqual(
+      { ...grants },
+      { anon_read: false, browser_write: false, workflow_write: false }
+    );
+  } catch (error) {
+    throw new Error(`Auth rate DB acceptance failed (${safeDatabaseFailureCode(error)})`);
+  } finally {
+    await admin`delete from nox_foundation.auth_rate_bucket where policy_ref=${policyRef}`;
+    assert.equal(
+      (
+        await admin`select count(*)::int n from nox_foundation.auth_rate_bucket where policy_ref=${policyRef}`
+      )[0].n,
+      0
+    );
+    await Promise.all([
+      admin.end({ timeout: 2 }),
+      runtime.end({ timeout: 2 }),
+      other.end({ timeout: 2 })
+    ]);
+  }
+});
 
 test("Staging session issue is runtime-authorized, atomic, replay-safe and rollback-clean", async () => {
   const admin = connection("postgres");

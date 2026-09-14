@@ -236,12 +236,22 @@ export function createTenantLoginHttp(options: {
       );
       // This lookup precedes parsing/identifier access. No header can choose a tenant.
       if (!(await options.service.isActiveTenantHost(host))) return denied();
+      const cookieHeader = request.headers.get("cookie") ?? undefined;
+      if (!start) {
+        const capabilities = (cookieHeader ?? "")
+          .split(";")
+          .map((part) => part.trim())
+          .filter((part) => part.startsWith("__Host-noxos-auth="));
+        if (capabilities.length !== 1 || !opaque.test(capabilities[0]!.slice(18))) return denied();
+      }
       const fields = schema(
         decodeFields(await boundedBody(request), start ? startFields : completeFields),
         start,
         options.returnPaths
       );
-      const input = { host, fields, cookieHeader: request.headers.get("cookie") ?? undefined };
+      // Format is not authentication: the coordinator must still verify the
+      // keyed digest against this exact unexpired host-bound persisted flow.
+      const input = { host, fields, cookieHeader };
       if (start) {
         const result = await options.service.start(input),
           timestamp = now();

@@ -186,3 +186,44 @@ test("provider failure uses a generic envelope without exception, password or SQ
   assert.equal(/SQL|password=|never-log/.test(text), false);
   assert.equal(response.headers.has("set-cookie"), false);
 });
+
+test("complete requires one canonical pre-auth cookie before invoking credential work", async () => {
+  const input = {
+    identifier: fields.identifier,
+    password: "synthetic-test-only-password",
+    flowId,
+    operationKey: secret,
+    digestPolicyVersion: fields.digestPolicyVersion
+  };
+  input.requestDigest = digest("tenant-login-complete", {
+    digestPolicyVersion: input.digestPolicyVersion,
+    flowId: input.flowId,
+    identifier: input.identifier,
+    operationKey: input.operationKey
+  });
+  for (const cookie of [
+    "",
+    `__Host-noxos-session=${secret}`,
+    "__Host-noxos-auth=invalid",
+    `__Host-noxos-auth=${secret}; __Host-noxos-auth=${secret}`,
+    `__Host-noxos-auth=${secret}; __Host-noxos-auth=`,
+    `__Host-noxos-auth=\"${secret}\"`,
+    `__Host-noxos-auth=${secret}=`,
+    `__Host-noxos-auth=${secret.slice(0, -1)}B`
+  ]) {
+    const f = fixture();
+    const response = await f.handler(
+      new Request(`https://${host}/api/auth/tenant/login/complete`, {
+        method: "POST",
+        headers: { origin: `https://${host}`, "content-type": "application/json", cookie },
+        body: JSON.stringify(input)
+      })
+    );
+    assert.equal(response.status, 400);
+    assert.equal(
+      f.calls.some(([call]) => call === "complete"),
+      false
+    );
+    assert.equal(response.headers.has("set-cookie"), false);
+  }
+});
