@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { acquireGuardFences } from "../dist/guard-fence.js";
 import { createTenantSessionRepository } from "../dist/tenant-session-repository.js";
@@ -23,7 +24,12 @@ function connection(role) {
   return postgres(url.toString(), {
     prepare: false,
     max: 1,
-    ssl: { rejectUnauthorized: true },
+    // Public CA from Supabase Studio's official hosted certificate URL.
+    // The vendor's 'prod' CA names its hosted service, not our application environment.
+    ssl: {
+      rejectUnauthorized: true,
+      ca: readFileSync(new URL("./supabase-ca-2021.crt", import.meta.url), "utf8")
+    },
     connect_timeout: 5,
     idle_timeout: 5
   });
