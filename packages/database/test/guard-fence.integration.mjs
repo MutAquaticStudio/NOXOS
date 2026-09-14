@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { acquireGuardFences } from "../dist/guard-fence.js";
 import { createTenantSessionRepository } from "../dist/tenant-session-repository.js";
+import { createAuthFlowRepository } from "../dist/auth-flow-repository.js";
 import { authenticateTenantSession } from "../../auth/dist/tenant-session.js";
 import { issueSessionSecret } from "../../auth/dist/session-crypto.js";
 import { parseStagingRuntimeUrl, safeDatabaseFailureCode } from "./staging-connection.mjs";
@@ -154,6 +155,113 @@ test("Staging real runtime RLS, same-transaction fences, concurrent modes and cl
       }
     } finally {
       await Promise.all([admin.end(), reader.end(), contender.end()]);
+    }
+  }
+});
+
+test("Staging auth flow replay, exclusive provider claim and terminal integrity", async () => {
+  const admin = connection("postgres"),
+    runtime = connection("nox_app_runtime"),
+    other = connection("nox_app_runtime");
+  const repository = createAuthFlowRepository(runtime),
+    competitor = createAuthFlowRepository(other);
+  const tenantId = randomUUID(),
+    host = `v24-${tenantId}.example.test`;
+  const input = {
+    tenantId,
+    host,
+    environment: "staging",
+    flowSecretDigest: randomBytes(32).toString("hex"),
+    routingVersion: 1,
+    clientNonceDigest: randomBytes(32).toString("hex"),
+    identifierDigest: randomBytes(32).toString("hex"),
+    requestDigest: randomBytes(32).toString("hex"),
+    keyVersion: "integration-only",
+    requiredAssurance: "A1",
+    policyVersion: "integration-only",
+    safeReturnPath: "/materials"
+  };
+  let created = false;
+  let phase = "FIXTURE";
+  try {
+    await admin.begin(async (tx) => {
+      await tx`insert into platform.tenants(id,name,slug,status) values (${tenantId},'v24 flow fixture',${`v24-${tenantId}`},'ACTIVE')`;
+      await tx`insert into platform.tenant_host_registry(host_ascii,tenant_id,route_kind,state,routing_version,policy_version)
+        values (${host},${tenantId},'TENANT_CANONICAL','ACTIVE',1,'integration-only')`;
+    });
+    created = true;
+    phase = "START";
+    const initial = await repository.start(input);
+    assert.deepEqual(await repository.start(input), initial);
+    await assert.rejects(
+      () => repository.start({ ...input, requestDigest: "a".repeat(64) }),
+      /AUTH_FLOW_REPLAY_CONFLICT/
+    );
+    phase = "CLAIM";
+    const request = { ...input, flowId: initial.id };
+    assert.equal(
+      await repository.claimProvider({ ...request, flowSecretDigest: "b".repeat(64) }),
+      null
+    );
+    const results = await Promise.all([
+      repository.claimProvider(request),
+      competitor.claimProvider(request)
+    ]);
+    assert.equal(results.filter(Boolean).length, 1);
+    const winner = results.find(Boolean);
+    assert.equal(await repository.claimProvider(request), null);
+    phase = "RESULT";
+    assert.equal(
+      await repository.recordProvider({
+        ...request,
+        operationId: randomUUID(),
+        result: { kind: "DENIED" }
+      }),
+      false
+    );
+    assert.equal(
+      await repository.recordProvider({
+        ...request,
+        operationId: winner.operationId,
+        result: { kind: "PENDING_RECONCILIATION" }
+      }),
+      false
+    );
+    assert.equal(
+      await repository.recordProvider({
+        ...request,
+        operationId: winner.operationId,
+        result: { kind: "DENIED" }
+      }),
+      true
+    );
+    assert.equal(
+      await repository.recordProvider({
+        ...request,
+        operationId: winner.operationId,
+        result: { kind: "DENIED" }
+      }),
+      false
+    );
+    phase = "TERMINAL";
+    await assert.rejects(
+      () =>
+        admin`update platform.auth_flow set state='INITIATED',terminal_at=null,entity_version=entity_version+1 where id=${initial.id}`,
+      { code: "23514" }
+    );
+    assert.equal((await runtime`select count(*)::int n from platform.auth_flow`)[0].n, 0);
+  } catch (error) {
+    throw Error(`STAGING_AUTH_FLOW_FAILED:${phase}:${safeDatabaseFailureCode(error)}`);
+  } finally {
+    try {
+      if (created)
+        await admin.begin(async (tx) => {
+          await tx`delete from platform.auth_flow where tenant_id=${tenantId}`;
+          await tx`delete from platform.tenant_host_registry where tenant_id=${tenantId}`;
+          await tx`delete from platform.tenants where id=${tenantId}`;
+        });
+    } finally {
+      await Promise.all([admin.end(), runtime.end(), other.end()]);
     }
   }
 });

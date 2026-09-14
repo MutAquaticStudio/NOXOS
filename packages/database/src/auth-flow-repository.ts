@@ -1,0 +1,124 @@
+import { randomUUID } from "node:crypto";
+import type { Sql, TransactionSql } from "postgres";
+import type { PasswordVerification } from "@nox-os/auth/server-session";
+
+type FlowScope = {
+  tenantId: string;
+  host: string;
+  environment: "staging" | "production";
+  flowSecretDigest: string;
+};
+type StartFlow = FlowScope & {
+  routingVersion: number;
+  clientNonceDigest: string;
+  identifierDigest: string;
+  requestDigest: string;
+  keyVersion: string;
+  requiredAssurance: "A1" | "A2" | "PHISHING_RESISTANT";
+  policyVersion: string;
+  safeReturnPath: string;
+};
+const digest = /^[a-f0-9]{64}$/;
+async function scope(tx: TransactionSql, input: FlowScope) {
+  if (
+    !digest.test(input.flowSecretDigest) ||
+    !["staging", "production"].includes(input.environment)
+  )
+    throw Error("INVALID_AUTH_FLOW_CONTEXT");
+  await tx`select set_config('nox.request_host',${input.host},true),
+    set_config('nox.tenant_id',${input.tenantId},true),
+    set_config('nox.environment',${input.environment},true),
+    set_config('nox.auth_flow_digest',${input.flowSecretDigest},true)`;
+}
+/** G2-owned persistence. Inputs are server-resolved facts, never HTTP DTOs.
+ * Claim commits before any provider request; unknown outcomes are never re-claimed.
+ */
+export function createAuthFlowRepository(sql: Sql) {
+  return {
+    async start(input: StartFlow) {
+      if (
+        ![input.clientNonceDigest, input.identifierDigest, input.requestDigest].every((x) =>
+          digest.test(x)
+        )
+      )
+        throw Error("INVALID_AUTH_FLOW_DIGEST");
+      return sql.begin(async (tx) => {
+        await scope(tx, input);
+        const host = await tx`select h.routing_version from platform.tenant_host_registry h
+          join platform.tenants t on t.id=h.tenant_id
+          where h.host_ascii=${input.host} and h.tenant_id=${input.tenantId} and h.state='ACTIVE'
+          and h.route_kind='TENANT_CANONICAL' and t.status='ACTIVE'`;
+        if (host.length !== 1 || host[0]!.routing_version !== input.routingVersion)
+          throw Error("AUTH_FLOW_UNAVAILABLE");
+        await tx`insert into platform.auth_flow(id,tenant_id,realm,environment,issued_host,routing_version,purpose,
+          client_flow_nonce_digest,flow_secret_digest,identifier_correlation_digest,request_digest,digest_policy,
+          token_digest_key_version,state,required_assurance,policy_version,safe_return_path,created_at,expires_at)
+          values (${randomUUID()},${input.tenantId},'TENANT',${input.environment},${input.host},${input.routingVersion},'TENANT_LOGIN',
+          ${input.clientNonceDigest},${input.flowSecretDigest},${input.identifierDigest},${input.requestDigest},
+          'FIPS202-SHA3-256-DOMAIN-SEPARATED-V1',${input.keyVersion},'INITIATED',${input.requiredAssurance},
+          ${input.policyVersion},${input.safeReturnPath},statement_timestamp(),statement_timestamp()+interval '900 seconds')
+          on conflict (realm,issued_host,client_flow_nonce_digest,purpose) do nothing`;
+        const rows =
+          await tx`select id,state,request_digest,routing_version,expires_at,policy_version,
+          identifier_correlation_digest,required_assurance,safe_return_path,token_digest_key_version
+          from platform.auth_flow where realm='TENANT' and issued_host=${input.host}
+          and client_flow_nonce_digest=${input.clientNonceDigest} and purpose='TENANT_LOGIN'`;
+        if (rows.length !== 1) throw Error("AUTH_FLOW_UNAVAILABLE");
+        const row = rows[0]!;
+        if (
+          row.request_digest !== input.requestDigest ||
+          row.routing_version !== input.routingVersion ||
+          row.policy_version !== input.policyVersion ||
+          row.identifier_correlation_digest !== input.identifierDigest ||
+          row.required_assurance !== input.requiredAssurance ||
+          row.safe_return_path !== input.safeReturnPath ||
+          row.token_digest_key_version !== input.keyVersion
+        )
+          throw Error("AUTH_FLOW_REPLAY_CONFLICT");
+        return { id: String(row.id), state: String(row.state), expiresAt: row.expires_at as Date };
+      });
+    },
+    async claimProvider(input: FlowScope & { flowId: string }) {
+      return sql.begin(async (tx) => {
+        await scope(tx, input);
+        const operationId = randomUUID();
+        const rows = await tx`update platform.auth_flow set state='PENDING_RECONCILIATION',
+          provider_operation_id=${operationId},entity_version=entity_version+1
+          where id=${input.flowId} and state='INITIATED' and expires_at>clock_timestamp()
+          returning id`;
+        return rows.length === 1 ? { operationId } : null;
+      });
+    },
+    async recordProvider(
+      input: FlowScope & { flowId: string; operationId: string; result: PasswordVerification }
+    ) {
+      if (input.result.kind === "PENDING_RECONCILIATION") return false;
+      return sql.begin(async (tx) => {
+        await scope(tx, input);
+        const result = input.result;
+        if (result.kind === "VERIFIED") {
+          const project =
+            input.environment === "staging" ? "uyfddpmbszjkhdkqvncz" : "soioshmcdwxhlgrjzkoc";
+          if (
+            result.environment !== input.environment ||
+            result.providerKey !== "supabase" ||
+            result.issuer !== `https://${project}.supabase.co/auth/v1`
+          )
+            throw Error("AUTH_PROVIDER_ENVIRONMENT_MISMATCH");
+          const rows =
+            await tx`update platform.auth_flow set state='PRIMARY_VERIFIED',verified_issuer=${result.issuer},
+            verified_subject_ref=${result.subject},provider_session_ref=${result.providerSessionId},
+            achieved_assurance=${result.assurance},entity_version=entity_version+1
+            where id=${input.flowId} and provider_operation_id=${input.operationId}
+            and state='PENDING_RECONCILIATION' and expires_at>clock_timestamp() returning id`;
+          return rows.length === 1;
+        }
+        const rows =
+          await tx`update platform.auth_flow set state='FAILED_GENERIC',terminal_at=clock_timestamp(),
+          entity_version=entity_version+1 where id=${input.flowId} and provider_operation_id=${input.operationId}
+          and state='PENDING_RECONCILIATION' returning id`;
+        return rows.length === 1;
+      });
+    }
+  };
+}

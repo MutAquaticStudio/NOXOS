@@ -266,3 +266,4 @@ export async function readWorkflowProbeRecord(
   };
 }
 export { createTenantSessionRepository } from "./tenant-session-repository.js";
+export { createAuthFlowRepository } from "./auth-flow-repository.js";
