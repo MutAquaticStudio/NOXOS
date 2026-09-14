@@ -1,5 +1,6 @@
 // Server-only entry point. Keep Node crypto out of the browser-facing auth root.
-export { resolveLoginPolicy } from "./security-policy.js";
+export { resolveLoginPolicy, resolveCurrentLoginAssurance } from "./security-policy.js";
+export type { CurrentLoginAssurance } from "./security-policy.js";
 export { createSupabasePasswordAdapter } from "./supabase-password.js";
 export type { PasswordVerification } from "./supabase-password.js";
 export { authenticateTenantSession, authenticateTenantMutation } from "./tenant-session.js";

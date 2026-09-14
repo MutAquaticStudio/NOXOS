@@ -3,6 +3,48 @@ const assuranceRanks = new Map<string, number>([
   ["A2", 2],
   ["PHISHING_RESISTANT", 3]
 ]);
+
+/** Current G2 facts, resolved by the server under the issuance transaction.
+ * null explicitly means no protected tenant role; absence means UNKNOWN.
+ * These fields must never be populated from an HTTP payload or JWT metadata.
+ */
+export type CurrentLoginAssurance = Readonly<{
+  protectedRole: "TENANT_OWNER" | null;
+  risk: "ALLOW_BASELINE" | "STEP_UP" | "THROTTLE" | "BLOCK_GENERIC" | "MANUAL_REVIEW" | "UNKNOWN";
+  credentialState: "CURRENT" | "REVOKED" | "UNKNOWN";
+  destinationAssurance: "A1" | "A2" | "PHISHING_RESISTANT";
+  detectionPolicyRef: string;
+}>;
+
+export function resolveCurrentLoginAssurance(
+  floorRank: number,
+  flowAssurance: string,
+  current: CurrentLoginAssurance,
+  detectionPolicyRef: string
+): number {
+  const flowRank = assuranceRanks.get(flowAssurance);
+  const destinationRank = current && assuranceRanks.get(current.destinationAssurance);
+  if (
+    !current ||
+    !Number.isSafeInteger(floorRank) ||
+    floorRank < 1 ||
+    floorRank > 3 ||
+    !flowRank ||
+    !destinationRank ||
+    !detectionPolicyRef ||
+    current.detectionPolicyRef !== detectionPolicyRef ||
+    (current.protectedRole !== null && current.protectedRole !== "TENANT_OWNER") ||
+    current.credentialState !== "CURRENT" ||
+    !["ALLOW_BASELINE", "STEP_UP"].includes(current.risk)
+  )
+    throw Error("AUTH_CURRENT_AUTHORITY_UNAVAILABLE");
+  return Math.max(
+    floorRank,
+    flowRank,
+    destinationRank,
+    current.protectedRole === "TENANT_OWNER" || current.risk === "STEP_UP" ? 2 : 1
+  );
+}
 const timeLimits = {
   idle_seconds: 1800,
   absolute_seconds: 43200,

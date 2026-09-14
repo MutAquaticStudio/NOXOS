@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveLoginPolicy } from "../../packages/auth/src/security-policy.ts";
+import {
+  resolveLoginPolicy,
+  resolveCurrentLoginAssurance
+} from "../../packages/auth/src/security-policy.ts";
 
 const floor = {
   required_assurance_by_action: { TENANT_LOGIN: "A1", OWNER_TRANSFER: "A2" },
@@ -78,4 +81,63 @@ test("malformed floor does not become a permissive default", () => {
     { rate_policy_ref: "" }
   ])
     assert.throws(() => resolveLoginPolicy({ ...floor, ...patch }), /AUTH_POLICY_INVALID/);
+});
+
+const current = {
+  protectedRole: null,
+  risk: "ALLOW_BASELINE",
+  credentialState: "CURRENT",
+  destinationAssurance: "A1",
+  detectionPolicyRef: "detection-v1"
+};
+test("Owner, destination and risk can tighten but never weaken login assurance", () => {
+  assert.equal(resolveCurrentLoginAssurance(1, "A1", current, "detection-v1"), 1);
+  assert.equal(
+    resolveCurrentLoginAssurance(
+      1,
+      "A1",
+      { ...current, protectedRole: "TENANT_OWNER" },
+      "detection-v1"
+    ),
+    2
+  );
+  assert.equal(
+    resolveCurrentLoginAssurance(1, "A1", { ...current, risk: "STEP_UP" }, "detection-v1"),
+    2
+  );
+  assert.equal(
+    resolveCurrentLoginAssurance(
+      1,
+      "A1",
+      { ...current, destinationAssurance: "PHISHING_RESISTANT" },
+      "detection-v1"
+    ),
+    3
+  );
+  assert.equal(resolveCurrentLoginAssurance(3, "A1", current, "detection-v1"), 3);
+  assert.equal(resolveCurrentLoginAssurance(1, "A2", current, "detection-v1"), 2);
+});
+
+test("missing, stale, cross-realm and unknown current authority never means A1", () => {
+  for (const patch of [
+    { protectedRole: undefined },
+    { protectedRole: "PLATFORM_OWNER" },
+    { credentialState: "UNKNOWN" },
+    { credentialState: "REVOKED" },
+    { risk: "THROTTLE" },
+    { risk: "BLOCK_GENERIC" },
+    { risk: "MANUAL_REVIEW" },
+    { risk: "UNKNOWN" },
+    { risk: "toString" },
+    { risk: undefined },
+    { destinationAssurance: "UNKNOWN" },
+    { detectionPolicyRef: "old-version" }
+  ])
+    assert.throws(() =>
+      resolveCurrentLoginAssurance(1, "A1", { ...current, ...patch }, "detection-v1")
+    );
+  for (const rank of [0, 4, NaN, 1.5])
+    assert.throws(() => resolveCurrentLoginAssurance(rank, "A1", current, "detection-v1"));
+  assert.throws(() => resolveCurrentLoginAssurance(1, "UNKNOWN", current, "detection-v1"));
+  assert.throws(() => resolveCurrentLoginAssurance(1, "A1", null, "detection-v1"));
 });

@@ -187,7 +187,47 @@ test("Staging session issue is runtime-authorized, atomic, replay-safe and rollb
         // Rollback all session/audit writes without weakening append-only triggers.
         assert.equal((await outer`select current_user as name`)[0].name, "nox_app_runtime");
         const transaction = { begin: (fn) => outer.savepoint(fn) };
+        // This bounded storage test supplies explicit synthetic authority facts.
+        // It proves in-transaction invocation and assurance/rollback enforcement,
+        // not deployment of the still-uninstalled versioned G2 role/risk adapter.
+        const syntheticAuthority = {
+          protectedRole: null,
+          risk: "ALLOW_BASELINE",
+          credentialState: "CURRENT",
+          destinationAssurance: "A1",
+          detectionPolicyRef: "test-detection"
+        };
+        const readSyntheticAuthority = async (tx, current) => {
+          const rows =
+            await tx`select id,tenant_id,credential_epoch::text,authorization_epoch::text,
+            current_user as runtime_role from platform.tenant_users
+            where id=${current.actorId} and tenant_id=${current.tenantId}`;
+          assert.equal(rows.length, 1);
+          assert.equal(rows[0].runtime_role, "nox_app_runtime");
+          assert.equal(rows[0].credential_epoch, current.credentialEpoch);
+          assert.equal(rows[0].authorization_epoch, current.authorizationEpoch);
+          assert.equal(current.detectionPolicyRef, "test-detection");
+          return { ...syntheticAuthority };
+        };
+        assert.throws(
+          () => createAuthSessionIssuer(transaction, key),
+          /AUTH_CURRENT_AUTHORITY_NOT_INSTALLED/
+        );
         const flows = createAuthFlowRepository(transaction);
+        phase = "EXACT_HOST_ENTRY";
+        assert.equal(await flows.readEntry(`missing-${tenantId}.example.test`, "staging"), null);
+        assert.deepEqual(await flows.readEntry(host, "staging"), {
+          tenantId,
+          routingVersion: 1,
+          policyVersion,
+          requiredAssurance: "A1",
+          ratePolicyRef: "test-rate",
+          detectionPolicyRef: "test-detection"
+        });
+        await assert.rejects(
+          flows.readEntry(host.toUpperCase(), "staging"),
+          /AUTH_ENTRY_UNAVAILABLE/
+        );
         const scope = {
           tenantId,
           host,
@@ -382,7 +422,7 @@ test("Staging session issue is runtime-authorized, atomic, replay-safe and rollb
         };
         let outboxRejected = false;
         try {
-          await createAuthSessionIssuer(failing, key).issue(request);
+          await createAuthSessionIssuer(failing, key, readSyntheticAuthority).issue(request);
         } catch (error) {
           if (error.code !== "22012") throw error;
           outboxRejected = true;
@@ -400,7 +440,56 @@ test("Staging session issue is runtime-authorized, atomic, replay-safe and rollb
             0
           );
         phase = "ISSUE_AND_REPLAY";
-        const issuer = createAuthSessionIssuer(transaction, key);
+        const issuer = createAuthSessionIssuer(transaction, key, readSyntheticAuthority);
+        phase = "CURRENT_AUTHORITY_REQUIRED";
+        for (const patch of [
+          { risk: "UNKNOWN" },
+          { risk: "BLOCK_GENERIC" },
+          { credentialState: "REVOKED" },
+          { protectedRole: "PLATFORM_OWNER" },
+          { detectionPolicyRef: "stale-policy" }
+        ]) {
+          const refusing = createAuthSessionIssuer(transaction, key, async (tx, facts) => ({
+            ...(await readSyntheticAuthority(tx, facts)),
+            ...patch
+          }));
+          await assert.rejects(refusing.issue(request), /AUTH_CURRENT_AUTHORITY_UNAVAILABLE/);
+          assert.equal(
+            (await outer`select state from platform.auth_flow where id=${flow.id}`)[0].state,
+            "PRIMARY_VERIFIED"
+          );
+        }
+        for (const patch of [
+          { protectedRole: "TENANT_OWNER" },
+          { risk: "STEP_UP" },
+          { destinationAssurance: "PHISHING_RESISTANT" }
+        ]) {
+          const rollbackStepUp = Error("ROLLBACK_SYNTHETIC_STEP_UP");
+          try {
+            await outer.savepoint(async (tx) => {
+              const nested = { begin: (fn) => tx.savepoint(fn) };
+              const stepUp = createAuthSessionIssuer(nested, key, async (inner, facts) => ({
+                ...(await readSyntheticAuthority(inner, facts)),
+                ...patch
+              }));
+              assert.deepEqual(await stepUp.issue(request), { kind: "STEP_UP_REQUIRED" });
+              assert.equal(
+                (await tx`select state from platform.auth_flow where id=${flow.id}`)[0].state,
+                "STEP_UP_REQUIRED"
+              );
+              assert.equal(
+                (
+                  await tx`select count(*)::int n from platform.security_event where tenant_id=${tenantId}`
+                )[0].n,
+                0
+              );
+              throw rollbackStepUp;
+            });
+          } catch (error) {
+            if (error !== rollbackStepUp) throw error;
+          }
+        }
+        phase = "ISSUE_AND_REPLAY";
         await assert.rejects(
           () => issuer.issue({ ...request, flowSecretDigest: "b".repeat(64) }),
           /AUTH_FLOW_UNAVAILABLE/

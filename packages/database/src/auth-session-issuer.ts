@@ -1,16 +1,44 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 import { acquireGuardFences } from "./guard-fence.js";
 import {
   issueSessionSecret,
   frameDigestPayload,
   resolveLoginPolicy,
+  resolveCurrentLoginAssurance,
+  type CurrentLoginAssurance,
   type SessionDigestKey
 } from "@nox-os/auth/server-session";
 
 const assuranceRank: Record<string, number> = { A1: 1, A2: 2, PHISHING_RESISTANT: 3 };
+export type ReadCurrentLoginAuthority = (
+  tx: TransactionSql,
+  current: Readonly<{
+    tenantId: string;
+    actorId: string;
+    flowId: string;
+    host: string;
+    credentialEpoch: string;
+    authorizationEpoch: string;
+    providerIssuer: string;
+    providerSubject: string;
+    providerSessionId: string;
+    policyVersion: string;
+    detectionPolicyRef: string;
+    returnPath: string;
+  }>
+) => Promise<CurrentLoginAssurance>;
 /** Server-only commit seam. Does not call providers, grant roles, or serialize cookies into JSON. */
-export function createAuthSessionIssuer(sql: Sql, key: SessionDigestKey) {
+export function createAuthSessionIssuer(
+  sql: Sql,
+  key: SessionDigestKey,
+  readCurrentAuthority: ReadCurrentLoginAuthority
+) {
+  // No implicit A1 lane when G2 protected-role/risk/credential storage is absent.
+  // The installed adapter must use this transaction/fence, not a cached role or
+  // a pre-provider snapshot. Network work belongs outside this commit seam.
+  if (typeof readCurrentAuthority !== "function")
+    throw Error("AUTH_CURRENT_AUTHORITY_NOT_INSTALLED");
   return {
     async issue(input: {
       flowId: string;
@@ -111,7 +139,29 @@ export function createAuthSessionIssuer(sql: Sql, key: SessionDigestKey) {
         if (flow.expires_at <= now || !["PRIMARY_VERIFIED", "AUTHENTICATED"].includes(flow.state))
           throw Error("AUTH_FLOW_UNAVAILABLE");
         const achieved = assuranceRank[flow.achieved_assurance];
-        const required = Math.max(requiredRank, assuranceRank[flow.required_assurance] ?? Infinity);
+        const currentAuthority = await readCurrentAuthority(
+          tx,
+          Object.freeze({
+            tenantId: input.tenantId,
+            actorId: String(actor.id),
+            flowId: String(flow.id),
+            host: input.host,
+            credentialEpoch: String(actor.credential_epoch),
+            authorizationEpoch: String(actor.authorization_epoch),
+            providerIssuer: String(flow.verified_issuer),
+            providerSubject: String(flow.verified_subject_ref),
+            providerSessionId: String(flow.provider_session_ref),
+            policyVersion,
+            detectionPolicyRef: String((tightening ?? floor).detection_policy_ref),
+            returnPath: String(flow.safe_return_path)
+          })
+        );
+        const required = resolveCurrentLoginAssurance(
+          requiredRank,
+          String(flow.required_assurance),
+          currentAuthority,
+          String((tightening ?? floor).detection_policy_ref)
+        );
         if (!achieved || achieved < required) {
           if (flow.state === "PRIMARY_VERIFIED")
             await tx`update platform.auth_flow

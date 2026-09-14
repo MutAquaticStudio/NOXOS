@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Sql, TransactionSql } from "postgres";
-import type { PasswordVerification } from "@nox-os/auth/server-session";
+import { resolveLoginPolicy, type PasswordVerification } from "@nox-os/auth/server-session";
 
 type FlowScope = {
   tenantId: string;
@@ -35,6 +35,48 @@ async function scope(tx: TransactionSql, input: FlowScope) {
  */
 export function createAuthFlowRepository(sql: Sql) {
   return {
+    /** Exact host entry precedes credential parsing. This snapshot is only for
+     * starting a flow; the issuer independently rechecks policy/routing at commit.
+     * No default tenant, account lookup or legacy membership inference.
+     */
+    async readEntry(host: string, environment: "staging" | "production") {
+      if (
+        !["staging", "production"].includes(environment) ||
+        host.length > 253 ||
+        !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)
+      )
+        throw Error("AUTH_ENTRY_UNAVAILABLE");
+      return sql.begin(async (tx) => {
+        await tx`select set_config('nox.request_host',${host},true),set_config('nox.environment',${environment},true),
+          set_config('nox.tenant_id','',true),set_config('nox.actor_id','',true),set_config('nox.auth_flow_digest','',true)`;
+        const hosts =
+          await tx`select h.tenant_id,h.routing_version from platform.tenant_host_registry h
+          join platform.tenants t on t.id=h.tenant_id where h.host_ascii=${host}
+          and h.state='ACTIVE' and h.route_kind='TENANT_CANONICAL' and t.status='ACTIVE'`;
+        if (!hosts.length) return null;
+        if (hosts.length !== 1) throw Error("AUTH_ENTRY_UNAVAILABLE");
+        const tenantId = String(hosts[0]!.tenant_id);
+        await tx`select set_config('nox.tenant_id',${tenantId},true)`;
+        const policies =
+          await tx`select *,clock_timestamp() as current_time from platform.security_policy_version
+          where status='ACTIVE_VERSION' and (scope='PLATFORM_FLOOR' or tenant_id=${tenantId}) order by scope,id`;
+        const floor = policies.find((p) => p.scope === "PLATFORM_FLOOR");
+        const tightening = policies.find((p) => p.scope === "TENANT_TIGHTENING");
+        if (!floor || policies.length > 2 || policies.some((p) => p.effective_at > p.current_time))
+          throw Error("AUTH_POLICY_UNAVAILABLE");
+        const resolved = resolveLoginPolicy(floor, tightening);
+        return Object.freeze({
+          tenantId,
+          routingVersion: Number(hosts[0]!.routing_version),
+          policyVersion: `${floor.id}:${floor.version}${tightening ? `|${tightening.id}:${tightening.version}` : ""}`,
+          requiredAssurance: (["A1", "A2", "PHISHING_RESISTANT"] as const)[
+            resolved.requiredRank - 1
+          ]!,
+          ratePolicyRef: String((tightening ?? floor).rate_policy_ref),
+          detectionPolicyRef: String((tightening ?? floor).detection_policy_ref)
+        });
+      });
+    },
     async start(input: StartFlow) {
       if (
         ![input.clientNonceDigest, input.identifierDigest, input.requestDigest].every((x) =>
