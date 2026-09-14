@@ -8,6 +8,7 @@ import { createTenantSessionRepository } from "../dist/tenant-session-repository
 import { createAuthFlowRepository } from "../dist/auth-flow-repository.js";
 import { createAuthSessionIssuer } from "../dist/auth-session-issuer.js";
 import { createAuthRateStore } from "../dist/auth-rate-store.js";
+import { createAuthSecurityEvents } from "../dist/auth-security-events.js";
 import { authenticateTenantSession } from "../../auth/dist/tenant-session.js";
 import { issueSessionSecret, sessionSecretDigest } from "../../auth/dist/session-crypto.js";
 import { parseStagingRuntimeUrl, safeDatabaseFailureCode } from "./staging-connection.mjs";
@@ -201,6 +202,137 @@ test("Staging session issue is runtime-authorized, atomic, replay-safe and rollb
           policyVersion,
           safeReturnPath: "/materials"
         };
+        phase = "PRE_SESSION_EVENT_ATOMICITY";
+        const eventRollback = Error("ROLLBACK_PRE_SESSION_EVENTS");
+        try {
+          await outer.savepoint(async (eventTx) => {
+            const nested = { begin: (fn) => eventTx.savepoint(fn) };
+            const eventFlows = createAuthFlowRepository(nested);
+            const eventFlow = await eventFlows.start(scope);
+            const eventInput = { ...scope, flowId: eventFlow.id, result: "THROTTLED" };
+            const events = createAuthSecurityEvents(nested);
+            const broken = {
+              begin: (fn) =>
+                eventTx.savepoint((tx) =>
+                  fn(
+                    new Proxy(tx, {
+                      apply(target, receiver, args) {
+                        if (
+                          Array.isArray(args[0]) &&
+                          args[0].join("").includes("insert into nox_foundation.outbox")
+                        )
+                          return target`select 1/0`;
+                        return Reflect.apply(target, receiver, args);
+                      }
+                    })
+                  )
+                )
+            };
+            await assert.rejects(createAuthSecurityEvents(broken).record(eventInput), {
+              code: "22012"
+            });
+            assert.equal(
+              (
+                await eventTx`select count(*)::int n from platform.security_event where tenant_id=${tenantId}`
+              )[0].n,
+              0
+            );
+            await assert.rejects(
+              events.record({ ...eventInput, flowSecretDigest: "b".repeat(64) }),
+              /AUTH_EVENT_FLOW_UNAVAILABLE/
+            );
+            await events.record(eventInput);
+            await events.record(eventInput);
+            const request = {
+              ...scope,
+              flowId: eventFlow.id,
+              operationDigest: "a".repeat(64),
+              completionDigest: "c".repeat(64)
+            };
+            const claim = await eventFlows.claimProvider(request);
+            await events.record({ ...eventInput, result: "PENDING_RECONCILIATION" });
+            await eventFlows.recordProvider({
+              ...request,
+              operationId: claim.operationId,
+              result: {
+                kind: "VERIFIED",
+                providerKey: "supabase",
+                issuer: `https://${STAGING_REF}.supabase.co/auth/v1`,
+                subject: actorId,
+                providerSessionId: randomUUID(),
+                assurance: "A1",
+                environment: "staging",
+                verifiedAt: Date.now()
+              }
+            });
+            await events.record({ ...eventInput, result: "PRIMARY_VERIFIED" });
+            const rows =
+              await eventTx`select *,sequence::text as seq from platform.security_event where tenant_id=${tenantId} order by sequence`;
+            assert.equal(rows.length, 3);
+            assert.deepEqual(
+              rows.map((r) => r.event_type),
+              ["AUTH_THROTTLED", "AUTH_PENDING_RECONCILIATION", "AUTH_PRIMARY_VERIFIED"]
+            );
+            assert.equal(
+              (
+                await eventTx`select count(*)::int n from nox_foundation.outbox where tenant_id=${tenantId}`
+              )[0].n,
+              3
+            );
+            for (const [index, row] of rows.entries()) {
+              assert.equal(row.actor_id, null);
+              assert.equal(row.session_id, null);
+              assert.equal(
+                row.previous_digest,
+                index ? rows[index - 1].event_digest : "0".repeat(64)
+              );
+              assert.equal(row.digest_policy, "FIPS202-SHA3-256-DOMAIN-SEPARATED-V1");
+              assert.equal(row.canonicalization_policy, "NOXOS.AUTH-CANONICAL-JSON.1");
+              const bytes = Buffer.from(
+                JSON.stringify({
+                  actorId: null,
+                  environment: "staging",
+                  eventId: row.id,
+                  flowId: eventFlow.id,
+                  host,
+                  occurredAt: row.occurred_at.toISOString(),
+                  policyVersion,
+                  previousDigest: row.previous_digest,
+                  sequence: row.seq,
+                  sessionId: null,
+                  tenantId,
+                  type: row.event_type
+                })
+              );
+              const size = Buffer.alloc(8);
+              size.writeBigUInt64BE(BigInt(bytes.length));
+              assert.equal(
+                row.event_digest,
+                createHash("sha3-256")
+                  .update(Buffer.concat([Buffer.from("noxos:v1:audit-event\0"), size, bytes]))
+                  .digest("hex")
+              );
+            }
+            // A secret-shaped payload cannot ride along with an otherwise valid event.
+            await assert.rejects(
+              eventTx.savepoint(
+                (tx) => tx`insert into nox_foundation.outbox
+              (event_id,tenant_id,source,source_ref,source_version,payload_version,payload,occurred_at)
+              values (${randomUUID()},${tenantId},'G2_SECURITY',${eventFlow.id},1,1,
+                ${tx.json({ type: "AUTH_THROTTLED", password: "synthetic-must-not-persist" })},clock_timestamp())`
+              )
+            );
+            throw eventRollback;
+          });
+        } catch (error) {
+          if (error !== eventRollback) throw error;
+        }
+        assert.equal(
+          (
+            await outer`select count(*)::int n from platform.security_event where tenant_id=${tenantId}`
+          )[0].n,
+          0
+        );
         phase = "VERIFIED_FLOW";
         const flow = await flows.start(scope),
           request = {
