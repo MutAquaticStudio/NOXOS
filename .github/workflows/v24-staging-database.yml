@@ -1,0 +1,45 @@
+name: v24-staging-database
+
+# Protected diagnostic only. No migration, deployment, or provider reconciliation.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nox-os-staging
+  cancel-in-progress: false
+
+jobs:
+  guard-acceptance:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: staging
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm build:packages
+      - name: Verify exact checked-out source
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Real runtime role, RLS and concurrent guard verification
+        env:
+          APP_ENV: staging
+          NOX_RUNTIME_DATABASE_URL: ${{ secrets.NOX_RUNTIME_DATABASE_URL }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: node --test packages/database/test/guard-fence.integration.mjs
+      - name: Record bounded acceptance
+        env:
+          ACCEPTED_SHA: ${{ github.sha }}
+        run: |
+          printf 'SOURCE_SHA=%s\nAPP_ENV=staging\nGUARD_RUNTIME_ACCEPTANCE=PASS\nAPPLICATION_ACCEPTANCE=NOT_VERIFIED\n' "$ACCEPTED_SHA" >> "$GITHUB_STEP_SUMMARY"

@@ -182,6 +182,9 @@ importers:
 
   packages/database:
     dependencies:
+      "@nox-os/auth":
+        specifier: workspace:*
+        version: link:../auth
       "@nox-os/commercial-orders":
         specifier: workspace:*
         version: link:../commercial-orders

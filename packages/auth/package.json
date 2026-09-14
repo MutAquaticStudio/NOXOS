@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./server-session": {
+      "types": "./src/server-session.ts",
+      "development": "./src/server-session.ts",
+      "default": "./dist/server-session.js"
+    },
     ".": {
       "types": "./src/index.ts",
       "development": "./src/index.ts",

@@ -37,7 +37,8 @@ jobs:
     # This migration-only bootstrap is manual. Authenticated PR acceptance already
     # replays migrations itself; running both paths for one PR races the Supabase
     # migration ledger and can attempt the same schema transaction concurrently.
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    # Retired by v2.4 STAGING_PRODUCTION_ONLY; never expose Preview secrets.
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     environment: Preview
     timeout-minutes: 20
@@ -84,7 +85,7 @@ jobs:
     # This trusted job must never run from pull_request source. In particular, its
     # legacy baseline probes are not a substitute for the authenticated G3 Preview
     # acceptance below and must not be aimed at a PR Preview.
-    if: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     environment: Preview
     timeout-minutes: 30
@@ -137,7 +138,7 @@ jobs:
   authenticated-g3-material-intelligence:
     outputs:
       preview_url: ${{ steps.preview.outputs.preview_url }}
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     environment: Preview
     timeout-minutes: 30
@@ -449,7 +450,7 @@ jobs:
   # A new source SHA still runs both jobs and creates fresh evidence.
   authenticated-g13-commercial-orders:
     needs: authenticated-g3-material-intelligence
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     environment: Preview
     timeout-minutes: 15

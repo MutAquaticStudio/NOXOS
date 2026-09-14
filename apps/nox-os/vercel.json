@@ -5,9 +5,7 @@
   "buildCommand": "pnpm run build",
   "outputDirectory": "dist",
   "git": {
-    "deploymentEnabled": {
-      "main": false
-    }
+    "deploymentEnabled": false
   },
   "regions": ["syd1"],
   "functions": {

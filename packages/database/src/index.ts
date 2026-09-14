@@ -1,5 +1,8 @@
 import postgres, { type Sql } from "postgres";
 
+export { acquireGuardFences, orderedGuardRequirements } from "./guard-fence.js";
+export type { GuardRequirement } from "./guard-fence.js";
+
 export * from "./platform-store.js";
 export * from "./material-store.js";
 export * from "./design-studio-store.js";
@@ -262,3 +265,4 @@ export async function readWorkflowProbeRecord(
     completedAt: row.completed_at
   };
 }
+export { createTenantSessionRepository } from "./tenant-session-repository.js";

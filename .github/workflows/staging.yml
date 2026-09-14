@@ -13,6 +13,9 @@ concurrency:
 
 jobs:
   deploy-and-verify:
+    # v2.4 rebuild: legacy acceptance is not v2.4 acceptance. Replace with the
+    # validated staging-only release path before enabling application deployment.
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     environment: staging
     timeout-minutes: 30
