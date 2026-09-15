@@ -13,6 +13,8 @@ export type ReleaseCommandContext = {
   actorUserId: string;
   requestId: string;
   correlationId: string;
+  /** Supplied by new command clients; absent only for legacy callers during rollout. */
+  idempotencyKey?: string;
 };
 
 export interface ReleaseFormulaSource {

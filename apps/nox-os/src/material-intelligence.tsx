@@ -8,7 +8,8 @@ import {
   useParams,
   useSearchParams
 } from "react-router-dom";
-import { NoxApiError, type ApiClient } from "./platform-control";
+import { NoxApiError, type ApiClient } from "./api-client";
+import { useWorkspaceObject } from "@nox-os/ui";
 
 const MATERIAL_PERMISSION = {
   read: "module.material-intelligence.material.read",
@@ -936,6 +937,35 @@ function MaterialDetailPage({ api, tenantId, modulePermissions }: MaterialExperi
       });
   };
   useEffect(reload, [api, materialId, tenantId]);
+  const workspaceObject = useMemo(
+    () =>
+      state === "ready" &&
+      material &&
+      material.id === materialId &&
+      tenantId &&
+      hasPermission(modulePermissions, MATERIAL_PERMISSION.read)
+        ? {
+            id: material.id,
+            objectType: "Material",
+            title: material.displayName,
+            route: `/materials/${material.id}`,
+            properties: [
+              { label: "Type", value: displayType(material.materialType) },
+              { label: "Approval", value: material.approvalStatus.replaceAll("_", " ") },
+              { label: "Scope", value: material.scope },
+              { label: "Visibility", value: material.visibility },
+              {
+                label: "CAS",
+                value:
+                  material.identifiers.find((item) => item.identifierType === "CAS")?.value ??
+                  "Not recorded"
+              }
+            ]
+          }
+        : undefined,
+    [state, material, materialId, tenantId, modulePermissions]
+  );
+  useWorkspaceObject(workspaceObject);
   if (!tenantId) return <TenantRequired />;
   if (!hasPermission(modulePermissions, MATERIAL_PERMISSION.read)) return <PermissionDenied />;
   if (state === "loading") return <p className="nox-ai-context">Loading Material workspace…</p>;

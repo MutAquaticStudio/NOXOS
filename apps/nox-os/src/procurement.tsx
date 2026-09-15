@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { NoxDialog, NoxReadFeedback, useUnsavedChanges, type NoxReadState } from "@nox-os/ui";
 import type { InventoryLocation } from "@nox-os/inventory/browser";
 import type {
   GoodsReceipt,
@@ -8,6 +9,7 @@ import type {
 } from "@nox-os/procurement/browser";
 import { formatMassMg } from "@nox-os/trial-sensory/browser";
 import type { ApiClient } from "./platform-control";
+import { NoxApiError } from "./api-client";
 
 const permissions = {
   read: "module.procurement.read",
@@ -29,7 +31,11 @@ function has(values: readonly string[], permission: string): boolean {
 }
 
 function message(reason: unknown): string {
-  return reason instanceof Error ? reason.message : "Procurement operation failed.";
+  if (reason instanceof NoxApiError && reason.code === "UI_CANCELLED")
+    return "Action cancelled. No request was sent.";
+  if (reason instanceof NoxApiError && reason.status >= 400 && reason.status < 500)
+    return "The server rejected this operation. Review permissions, current state and entered values before retrying.";
+  return "The operation could not be confirmed. Review current records before taking further action.";
 }
 
 function totalMass(
@@ -63,6 +69,17 @@ function PurchaseOrdersTab({
   const [materialName, setMaterialName] = useState("");
   const [quantityMg, setQuantityMg] = useState("");
   const [unitPricePerKg, setUnitPricePerKg] = useState("0");
+  useUnsavedChanges(
+    Boolean(
+      poNumber ||
+      supplierId ||
+      materialId ||
+      materialName ||
+      quantityMg ||
+      currencyCode !== "USD" ||
+      unitPricePerKg !== "0"
+    )
+  );
 
   const create = async (event: FormEvent) => {
     event.preventDefault();
@@ -96,6 +113,9 @@ function PurchaseOrdersTab({
         }
       });
       setPoNumber("");
+      setSupplierId("");
+      setCurrencyCode("USD");
+      setUnitPricePerKg("0");
       setMaterialId("");
       setMaterialName("");
       setQuantityMg("");
@@ -118,7 +138,7 @@ function PurchaseOrdersTab({
   return (
     <section aria-labelledby="procurement-po-title">
       <h2 id="procurement-po-title">Purchase Orders</h2>
-      <div className="nox-table-wrap">
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -179,7 +199,7 @@ function PurchaseOrdersTab({
       ) : null}
 
       {has(modulePermissions, permissions.poCreate) ? (
-        <form className="nox-design-form" onSubmit={create} aria-label="Create Purchase Order">
+        <form className="nox-design-panel" onSubmit={create} aria-label="Create Purchase Order">
           <h3>Create Purchase Order</h3>
           <label>
             PO Number
@@ -263,6 +283,8 @@ function GoodsReceiptsTab({
   purchaseOrders,
   goodsReceipts,
   locations,
+  locationState,
+  retryLocations,
   reload,
   setError
 }: {
@@ -272,6 +294,8 @@ function GoodsReceiptsTab({
   purchaseOrders: readonly PurchaseOrder[];
   goodsReceipts: readonly GoodsReceipt[];
   locations: readonly InventoryLocation[];
+  locationState: NoxReadState;
+  retryLocations: () => Promise<void>;
   reload: () => Promise<void>;
   setError: (value?: string) => void;
 }) {
@@ -282,12 +306,23 @@ function GoodsReceiptsTab({
   const [lotCode, setLotCode] = useState("");
   const [supplierLotCode, setSupplierLotCode] = useState("");
   const [locationId, setLocationId] = useState("");
+  useUnsavedChanges(
+    Boolean(
+      receiptNumber ||
+      purchaseOrderId ||
+      purchaseOrderLineId ||
+      quantityMg ||
+      lotCode ||
+      supplierLotCode ||
+      locationId
+    )
+  );
   const order = purchaseOrders.find((item) => item.id === purchaseOrderId);
   const line = order?.lines.find((item) => item.id === purchaseOrderLineId);
 
   const create = async (event: FormEvent) => {
     event.preventDefault();
-    if (!line) return;
+    if (!line || locationState !== "READY") return;
     setError(undefined);
     try {
       await api("/procurement/goods-receipts", {
@@ -314,6 +349,9 @@ function GoodsReceiptsTab({
         }
       });
       setReceiptNumber("");
+      setPurchaseOrderId("");
+      setPurchaseOrderLineId("");
+      setLocationId("");
       setQuantityMg("");
       setLotCode("");
       setSupplierLotCode("");
@@ -336,7 +374,7 @@ function GoodsReceiptsTab({
   return (
     <section aria-labelledby="procurement-receipt-title">
       <h2 id="procurement-receipt-title">Goods Receipts</h2>
-      <div className="nox-table-wrap">
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -391,90 +429,106 @@ function GoodsReceiptsTab({
         <p className="nox-design-empty">No Goods Receipts recorded.</p>
       ) : null}
       {has(modulePermissions, permissions.receiptCreate) ? (
-        <form className="nox-design-form" onSubmit={create} aria-label="Create Goods Receipt">
-          <h3>Create Goods Receipt</h3>
-          <label>
-            Receipt Number
-            <input
-              required
-              value={receiptNumber}
-              onChange={(event) => setReceiptNumber(event.target.value)}
+        <fieldset className="nox-procurement-commands">
+          {locationState !== "READY" ? (
+            <NoxReadFeedback
+              state={locationState}
+              subject="Receipt locations"
+              retry={retryLocations}
             />
-          </label>
-          <label>
-            Purchase Order
-            <select
-              required
-              value={purchaseOrderId}
-              onChange={(event) => {
-                setPurchaseOrderId(event.target.value);
-                setPurchaseOrderLineId("");
-              }}
-            >
-              <option value="">Select approved PO</option>
-              {purchaseOrders
-                .filter((item) => ["APPROVED", "PARTIALLY_RECEIVED"].includes(item.status))
-                .map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.poNumber} · {item.supplierDisplayName}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label>
-            PO Line
-            <select
-              required
-              value={purchaseOrderLineId}
-              onChange={(event) => setPurchaseOrderLineId(event.target.value)}
-            >
-              <option value="">Select line</option>
-              {order?.lines.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.materialDisplayName} · remaining {formatMassMg(item.remainingQuantityMg)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Received Quantity (mg)
-            <input
-              required
-              inputMode="numeric"
-              value={quantityMg}
-              onChange={(event) => setQuantityMg(event.target.value)}
-            />
-          </label>
-          <label>
-            Internal Lot Code
-            <input required value={lotCode} onChange={(event) => setLotCode(event.target.value)} />
-          </label>
-          <label>
-            Supplier Lot Code
-            <input
-              value={supplierLotCode}
-              onChange={(event) => setSupplierLotCode(event.target.value)}
-            />
-          </label>
-          <label>
-            Destination Location
-            <select
-              required
-              value={locationId}
-              onChange={(event) => setLocationId(event.target.value)}
-            >
-              <option value="">Select active location</option>
-              {locations
-                .filter((item) => item.status === "ACTIVE")
-                .map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.locationCode} · {item.name}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <button type="submit">Save Draft</button>
-        </form>
+          ) : null}
+          <fieldset className="nox-procurement-commands" disabled={locationState !== "READY"}>
+            <form className="nox-design-panel" onSubmit={create} aria-label="Create Goods Receipt">
+              <h3>Create Goods Receipt</h3>
+              <label>
+                Receipt Number
+                <input
+                  required
+                  value={receiptNumber}
+                  onChange={(event) => setReceiptNumber(event.target.value)}
+                />
+              </label>
+              <label>
+                Purchase Order
+                <select
+                  required
+                  value={purchaseOrderId}
+                  onChange={(event) => {
+                    setPurchaseOrderId(event.target.value);
+                    setPurchaseOrderLineId("");
+                  }}
+                >
+                  <option value="">Select approved PO</option>
+                  {purchaseOrders
+                    .filter((item) => ["APPROVED", "PARTIALLY_RECEIVED"].includes(item.status))
+                    .map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.poNumber} · {item.supplierDisplayName}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label>
+                PO Line
+                <select
+                  required
+                  value={purchaseOrderLineId}
+                  onChange={(event) => setPurchaseOrderLineId(event.target.value)}
+                >
+                  <option value="">Select line</option>
+                  {order?.lines.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.materialDisplayName} · remaining{" "}
+                      {formatMassMg(item.remainingQuantityMg)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Received Quantity (mg)
+                <input
+                  required
+                  inputMode="numeric"
+                  value={quantityMg}
+                  onChange={(event) => setQuantityMg(event.target.value)}
+                />
+              </label>
+              <label>
+                Internal Lot Code
+                <input
+                  required
+                  value={lotCode}
+                  onChange={(event) => setLotCode(event.target.value)}
+                />
+              </label>
+              <label>
+                Supplier Lot Code
+                <input
+                  value={supplierLotCode}
+                  onChange={(event) => setSupplierLotCode(event.target.value)}
+                />
+              </label>
+              <label>
+                Destination Location
+                <select
+                  required
+                  value={locationId}
+                  onChange={(event) => setLocationId(event.target.value)}
+                >
+                  <option value="">Select active location</option>
+                  {locations
+                    .filter((item) => item.status === "ACTIVE")
+                    .map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.locationCode} · {item.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <button type="submit">Save Draft</button>
+            </form>
+          </fieldset>
+        </fieldset>
       ) : null}
     </section>
   );
@@ -498,6 +552,7 @@ function SuppliersTab({
   const [supplierCode, setSupplierCode] = useState("");
   const [legalName, setLegalName] = useState("");
   const [displayName, setDisplayName] = useState("");
+  useUnsavedChanges(Boolean(supplierCode || legalName || displayName));
   const create = async (event: FormEvent) => {
     event.preventDefault();
     setError(undefined);
@@ -543,7 +598,7 @@ function SuppliersTab({
   return (
     <section aria-labelledby="procurement-supplier-title">
       <h2 id="procurement-supplier-title">Suppliers</h2>
-      <div className="nox-table-wrap">
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -589,7 +644,7 @@ function SuppliersTab({
       </div>
       {suppliers.length === 0 ? <p className="nox-design-empty">No Suppliers recorded.</p> : null}
       {has(modulePermissions, permissions.supplier) ? (
-        <form className="nox-design-form" onSubmit={create} aria-label="Create Supplier">
+        <form className="nox-design-panel" onSubmit={create} aria-label="Create Supplier">
           <h3>Create Supplier</h3>
           <label>
             Supplier Code
@@ -645,6 +700,9 @@ function OffersTab({
   const [sku, setSku] = useState("");
   const [price, setPrice] = useState("0");
   const [currency, setCurrency] = useState("USD");
+  useUnsavedChanges(
+    Boolean(supplierId || materialId || name || sku || price !== "0" || currency !== "USD")
+  );
   const create = async (event: FormEvent) => {
     event.preventDefault();
     setError(undefined);
@@ -669,6 +727,9 @@ function OffersTab({
       setMaterialId("");
       setName("");
       setSku("");
+      setSupplierId("");
+      setPrice("0");
+      setCurrency("USD");
       await reload();
     } catch (reason) {
       setError(message(reason));
@@ -677,7 +738,7 @@ function OffersTab({
   return (
     <section aria-labelledby="procurement-offer-title">
       <h2 id="procurement-offer-title">Supplier Offers</h2>
-      <div className="nox-table-wrap">
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -714,7 +775,7 @@ function OffersTab({
         <p className="nox-design-empty">No Supplier Offers recorded.</p>
       ) : null}
       {has(modulePermissions, permissions.offer) ? (
-        <form className="nox-design-form" onSubmit={create} aria-label="Create Supplier Offer">
+        <form className="nox-design-panel" onSubmit={create} aria-label="Create Supplier Offer">
           <h3>Create Supplier Offer</h3>
           <label>
             Supplier
@@ -774,7 +835,13 @@ function OffersTab({
   );
 }
 
-export function ProcurementExperience({
+type ProcurementProps = { api: ApiClient; tenantId?: string; modulePermissions: readonly string[] };
+
+export function ProcurementExperience(props: ProcurementProps) {
+  return <ProcurementWorkspace key={props.tenantId ?? "no-tenant"} {...props} />;
+}
+
+function ProcurementWorkspace({
   api,
   tenantId,
   modulePermissions
@@ -789,32 +856,203 @@ export function ProcurementExperience({
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [goodsReceipts, setGoodsReceipts] = useState<GoodsReceipt[]>([]);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
+  const [locationState, setLocationState] = useState<NoxReadState>("LOADING");
+  const locationRequest = useRef(0);
   const [error, setError] = useState<string>();
-  const [loading, setLoading] = useState(true);
-  const load = useCallback(async () => {
-    if (!tenantId) return;
-    const [supplierPayload, offerPayload, poPayload, receiptPayload, locationPayload] =
-      await Promise.all([
-        api<{ suppliers: Supplier[] }>("/procurement/suppliers", { tenantId }),
-        api<{ offers: SupplierMaterialOffer[] }>("/procurement/supplier-offers", { tenantId }),
-        api<{ purchaseOrders: PurchaseOrder[] }>("/procurement/purchase-orders", { tenantId }),
-        api<{ goodsReceipts: GoodsReceipt[] }>("/procurement/goods-receipts", { tenantId }),
-        api<{ locations: InventoryLocation[] }>("/inventory/locations", { tenantId })
-      ]);
-    setSuppliers(supplierPayload.suppliers);
-    setOffers(offerPayload.offers);
-    setPurchaseOrders(poPayload.purchaseOrders);
-    setGoodsReceipts(receiptPayload.goodsReceipts);
-    setLocations(locationPayload.locations);
-  }, [api, tenantId]);
+  const [readState, setReadState] = useState<NoxReadState>("LOADING");
+  const [commandState, setCommandState] = useState<"IDLE" | "PENDING" | "UNKNOWN">("IDLE");
+  const commandLock = useRef(false);
+  const refreshLock = useRef(false);
+  const [savedReadState, setSavedReadState] = useState<"IDLE" | "LOADING" | "ERROR">("IDLE");
+  const [confirmation, setConfirmation] = useState<{
+    target: string;
+    action: string;
+    effect: string;
+    evidence: string[];
+    resolve: (confirmed: boolean) => void;
+  }>();
+  const cancelConfirmation = useRef<(() => void) | undefined>(undefined);
+  const currentPermissions = useRef(modulePermissions);
+  currentPermissions.current = modulePermissions;
+  useEffect(() => () => cancelConfirmation.current?.(), []);
+  useUnsavedChanges(commandState !== "IDLE");
+  const commandApi: ApiClient = async <T,>(path: string, options?: Parameters<ApiClient>[1]) => {
+    if (!options?.method || options.method === "GET") return api<T>(path, options);
+    if (commandLock.current || refreshLock.current) throw new Error("Command outcome unresolved");
+    commandLock.current = true;
+    setCommandState("PENDING");
+    try {
+      const supplierMatch =
+        options.method === "PUT" ? /^\/procurement\/suppliers\/([^/]+)$/.exec(path) : null;
+      const supplierStatus =
+        options.body && typeof options.body === "object" && "status" in options.body
+          ? options.body.status
+          : undefined;
+      const match =
+        /^\/procurement\/(purchase-orders|goods-receipts)\/([^/]+)\/(approve|close|cancel|post)$/.exec(
+          path
+        ) ??
+        (supplierMatch && (supplierStatus === "HOLD" || supplierStatus === "ARCHIVED")
+          ? [path, "suppliers", supplierMatch[1], supplierStatus === "HOLD" ? "hold" : "archive"]
+          : null);
+      if (match) {
+        const [, kind, id, action] = match;
+        const target =
+          kind === "suppliers"
+            ? suppliers.find((item) => item.id === id)?.displayName
+            : kind === "purchase-orders"
+              ? purchaseOrders.find((item) => item.id === id)?.poNumber
+              : goodsReceipts.find((item) => item.id === id)?.receiptNumber;
+        const permission =
+          kind === "suppliers"
+            ? permissions.supplier
+            : kind === "purchase-orders"
+              ? (
+                  {
+                    approve: permissions.poApprove,
+                    close: permissions.poClose,
+                    cancel: permissions.poCancel
+                  } as Record<string, string>
+                )[action]
+              : (
+                  { post: permissions.receiptPost, cancel: permissions.receiptCancel } as Record<
+                    string,
+                    string
+                  >
+                )[action];
+        if (!target || !permission) throw new NoxApiError("Unavailable target", 409);
+        const accepted = await new Promise<boolean>((resolve) => {
+          cancelConfirmation.current = () => resolve(false);
+          setConfirmation({
+            target,
+            action,
+            evidence:
+              kind === "purchase-orders"
+                ? purchaseOrders
+                    .find((item) => item.id === id)!
+                    .lines.map(
+                      (line) =>
+                        `${line.supplierMaterialNameSnapshot} · ${line.orderedQuantityMg} mg ordered · ${line.receivedQuantityMg} mg received · ${line.remainingQuantityMg} mg remaining · ${line.unitPricePerKg} ${purchaseOrders.find((item) => item.id === id)!.currencyCode} / kg`
+                    )
+                : kind === "goods-receipts"
+                  ? goodsReceipts
+                      .find((item) => item.id === id)!
+                      .lines.map(
+                        (line) =>
+                          `Material ${line.materialId} · ${line.receivedQuantityMg} mg · Lot ${line.lotCode} · Location ${line.destinationLocationId}`
+                      )
+                  : [],
+            effect:
+              action === "hold"
+                ? "Place this supplier on hold. Existing purchase and inventory records remain unchanged."
+                : action === "archive"
+                  ? "Archive this supplier. This does not delete historical orders or reverse inventory."
+                  : action === "post"
+                    ? "Post this receipt and create its inventory receipt movements atomically. This changes stock."
+                    : action === "approve"
+                      ? "Approve this purchase commitment. This does not receive inventory."
+                      : action === "close"
+                        ? "Close this purchase order. Existing receipt history remains unchanged."
+                        : "Cancel this record through its current server state rules. This does not reverse posted inventory.",
+            resolve
+          });
+        });
+        cancelConfirmation.current = undefined;
+        setConfirmation(undefined);
+        if (!accepted) throw new NoxApiError("Cancelled", 400, "UI_CANCELLED");
+        if (!currentPermissions.current.includes(permission))
+          throw new NoxApiError("Permission changed", 403, "PERMISSION_DENIED");
+      }
+      const result = await api<T>(path, options);
+      refreshLock.current = true;
+      setSavedReadState("LOADING");
+      commandLock.current = false;
+      setCommandState("IDLE");
+      return result;
+    } catch (reason) {
+      const rejected = reason instanceof NoxApiError && reason.status >= 400 && reason.status < 500;
+      commandLock.current = !rejected;
+      setCommandState(rejected ? "IDLE" : "UNKNOWN");
+      throw reason;
+    }
+  };
+  const loading = readState !== "READY";
+  const request = useRef(0);
+  const canRead = has(modulePermissions, permissions.read);
+  const canCreateReceipt = has(modulePermissions, permissions.receiptCreate);
+  const loadLocations = useCallback(async () => {
+    const generation = ++locationRequest.current;
+    if (!tenantId || !canRead || !canCreateReceipt) return;
+    setLocationState("LOADING");
+    try {
+      const payload = await api<{ locations: InventoryLocation[] }>("/inventory/locations", {
+        tenantId
+      });
+      if (!Array.isArray(payload.locations)) throw new Error("Invalid location response");
+      if (generation !== locationRequest.current) return;
+      setLocations(payload.locations);
+      setLocationState("READY");
+    } catch {
+      if (generation !== locationRequest.current) return;
+      setLocations([]);
+      setLocationState("ERROR");
+    }
+  }, [api, tenantId, canRead, canCreateReceipt]);
   useEffect(() => {
-    let current = true;
-    setLoading(true);
-    load()
-      .catch((reason) => current && setError(message(reason)))
-      .finally(() => current && setLoading(false));
+    if (tab === "goods-receipts") void loadLocations();
     return () => {
-      current = false;
+      locationRequest.current += 1;
+    };
+  }, [tab, loadLocations]);
+  const load = useCallback(
+    async (initialRead = false) => {
+      const generation = ++request.current;
+      if (!tenantId || !canRead) return;
+      if (initialRead) setReadState("LOADING");
+      try {
+        const [supplierPayload, offerPayload, poPayload, receiptPayload] = await Promise.all([
+          api<{ suppliers: Supplier[] }>("/procurement/suppliers", { tenantId }),
+          api<{ offers: SupplierMaterialOffer[] }>("/procurement/supplier-offers", { tenantId }),
+          api<{ purchaseOrders: PurchaseOrder[] }>("/procurement/purchase-orders", { tenantId }),
+          api<{ goodsReceipts: GoodsReceipt[] }>("/procurement/goods-receipts", { tenantId })
+        ]);
+        if (
+          ![
+            supplierPayload.suppliers,
+            offerPayload.offers,
+            poPayload.purchaseOrders,
+            receiptPayload.goodsReceipts
+          ].every(Array.isArray)
+        )
+          throw new Error("Invalid registry response");
+        if (request.current !== generation) return;
+        setSuppliers(supplierPayload.suppliers);
+        setOffers(offerPayload.offers);
+        setPurchaseOrders(poPayload.purchaseOrders);
+        setGoodsReceipts(receiptPayload.goodsReceipts);
+        setReadState("READY");
+      } catch (reason) {
+        if (initialRead && request.current === generation) setReadState("ERROR");
+        throw reason;
+      }
+    },
+    [api, tenantId, canRead]
+  );
+  const reloadAfterCommand = async () => {
+    setSavedReadState("LOADING");
+    try {
+      await load();
+      refreshLock.current = false;
+      setSavedReadState("IDLE");
+    } catch {
+      // A failed GET must never recast an acknowledged mutation as an unknown write.
+      setSavedReadState("ERROR");
+    }
+  };
+  useEffect(() => {
+    void load(true).catch(() => {});
+    return () => {
+      request.current += 1;
     };
   }, [load]);
   const tabs = useMemo(
@@ -843,12 +1081,37 @@ export function ProcurementExperience({
           <p>Commercial commitments linked atomically to physical Inventory receipts.</p>
         </div>
       </header>
-      <div role="tablist" aria-label="Procurement views" className="nox-workspace-tabs">
+      <div
+        role="tablist"
+        aria-label="Procurement views"
+        className="nox-workspace-tabs nox-procurement-tabs"
+        onKeyDown={(event) => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          const index = tabs.findIndex(
+            (item) => `procurement-tab-${item.id}` === (event.target as HTMLElement).id
+          );
+          if (index < 0) return;
+          event.preventDefault();
+          const next =
+            event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? tabs.length - 1
+                : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+          setTab(tabs[next].id);
+          event.currentTarget
+            .querySelector<HTMLButtonElement>(`#procurement-tab-${tabs[next].id}`)
+            ?.focus();
+        }}
+      >
         {tabs.map((item) => (
           <button
             key={item.id}
             type="button"
             role="tab"
+            id={`procurement-tab-${item.id}`}
+            aria-controls={`procurement-panel-${item.id}`}
+            tabIndex={tab === item.id ? 0 : -1}
             aria-selected={tab === item.id}
             onClick={() => setTab(item.id)}
           >
@@ -861,50 +1124,154 @@ export function ProcurementExperience({
           {error}
         </p>
       ) : null}
-      {loading ? <p className="nox-ai-context">Loading procurement registry…</p> : null}
-      {!loading && tab === "purchase-orders" ? (
-        <PurchaseOrdersTab
-          api={api}
-          tenantId={tenantId}
-          modulePermissions={modulePermissions}
-          suppliers={suppliers}
-          purchaseOrders={purchaseOrders}
-          reload={load}
-          setError={setError}
-        />
+      {loading ? (
+        <NoxReadFeedback state={readState} subject="Procurement" retry={() => load(true)} />
       ) : null}
-      {!loading && tab === "goods-receipts" ? (
-        <GoodsReceiptsTab
-          api={api}
-          tenantId={tenantId}
-          modulePermissions={modulePermissions}
-          purchaseOrders={purchaseOrders}
-          goodsReceipts={goodsReceipts}
-          locations={locations}
-          reload={load}
-          setError={setError}
-        />
+      {savedReadState !== "IDLE" ? (
+        <p role="status">
+          {savedReadState === "LOADING"
+            ? "The operation was saved. Refreshing records."
+            : "The operation was saved, but current records could not be loaded. Displayed records may be stale. Do not submit the saved operation again."}
+        </p>
       ) : null}
-      {!loading && tab === "suppliers" ? (
-        <SuppliersTab
-          api={api}
-          tenantId={tenantId}
-          modulePermissions={modulePermissions}
-          suppliers={suppliers}
-          reload={load}
-          setError={setError}
-        />
+      {savedReadState === "ERROR" ? (
+        <button type="button" onClick={() => void reloadAfterCommand()}>
+          Retry loading saved records
+        </button>
       ) : null}
-      {!loading && tab === "supplier-offers" ? (
-        <OffersTab
-          api={api}
-          tenantId={tenantId}
-          modulePermissions={modulePermissions}
-          suppliers={suppliers}
-          offers={offers}
-          reload={load}
-          setError={setError}
-        />
+      {commandState !== "IDLE" ? (
+        <p role="status">
+          {commandState === "PENDING"
+            ? confirmation
+              ? "Awaiting confirmation. No request sent yet."
+              : "Submitting operation. Please wait."
+            : "The outcome is unknown. Further writes are locked in this workspace; do not resubmit blindly. Refreshing records does not cancel or repeat the command."}
+        </p>
+      ) : null}
+      {commandState === "UNKNOWN" ? (
+        <button
+          type="button"
+          onClick={() =>
+            void load().catch(() => setError("Current records could not be refreshed."))
+          }
+        >
+          Refresh records without resubmitting
+        </button>
+      ) : null}
+      <fieldset
+        className="nox-procurement-commands"
+        disabled={commandState !== "IDLE" || savedReadState !== "IDLE"}
+        aria-label="Procurement commands"
+      >
+        {!loading ? (
+          <div
+            key={`po:${tenantId}`}
+            id="procurement-panel-purchase-orders"
+            role="tabpanel"
+            aria-labelledby="procurement-tab-purchase-orders"
+            hidden={tab !== "purchase-orders"}
+          >
+            <PurchaseOrdersTab
+              api={commandApi}
+              tenantId={tenantId}
+              modulePermissions={modulePermissions}
+              suppliers={suppliers}
+              purchaseOrders={purchaseOrders}
+              reload={reloadAfterCommand}
+              setError={setError}
+            />
+          </div>
+        ) : null}
+        {!loading ? (
+          <div
+            key={`receipt:${tenantId}`}
+            id="procurement-panel-goods-receipts"
+            role="tabpanel"
+            aria-labelledby="procurement-tab-goods-receipts"
+            hidden={tab !== "goods-receipts"}
+          >
+            <GoodsReceiptsTab
+              api={commandApi}
+              tenantId={tenantId}
+              modulePermissions={modulePermissions}
+              purchaseOrders={purchaseOrders}
+              goodsReceipts={goodsReceipts}
+              locations={locations}
+              locationState={locationState}
+              retryLocations={loadLocations}
+              reload={reloadAfterCommand}
+              setError={setError}
+            />
+          </div>
+        ) : null}
+        {!loading ? (
+          <div
+            key={`supplier:${tenantId}`}
+            id="procurement-panel-suppliers"
+            role="tabpanel"
+            aria-labelledby="procurement-tab-suppliers"
+            hidden={tab !== "suppliers"}
+          >
+            <SuppliersTab
+              api={commandApi}
+              tenantId={tenantId}
+              modulePermissions={modulePermissions}
+              suppliers={suppliers}
+              reload={reloadAfterCommand}
+              setError={setError}
+            />
+          </div>
+        ) : null}
+        {!loading ? (
+          <div
+            key={`offer:${tenantId}`}
+            id="procurement-panel-supplier-offers"
+            role="tabpanel"
+            aria-labelledby="procurement-tab-supplier-offers"
+            hidden={tab !== "supplier-offers"}
+          >
+            <OffersTab
+              api={commandApi}
+              tenantId={tenantId}
+              modulePermissions={modulePermissions}
+              suppliers={suppliers}
+              offers={offers}
+              reload={reloadAfterCommand}
+              setError={setError}
+            />
+          </div>
+        ) : null}
+      </fieldset>
+      {confirmation ? (
+        <NoxDialog title="Confirm Procurement action" onClose={() => confirmation.resolve(false)}>
+          <p>
+            <strong>
+              {confirmation.action.toUpperCase()} · {confirmation.target}
+            </strong>
+          </p>
+          <p>{confirmation.effect}</p>
+          {confirmation.evidence.length ? (
+            <section aria-label="Affected lines">
+              <h3>Affected lines</h3>
+              <ul>
+                {confirmation.evidence.map((line, index) => (
+                  <li key={index}>{line}</li>
+                ))}
+              </ul>
+              <p>Recorded quantities and unit prices; this is not a recalculated invoice total.</p>
+            </section>
+          ) : null}
+          <p>
+            The server rechecks permissions and current record state. No optimistic update will be
+            shown.
+          </p>
+          <button type="button" onClick={() => confirmation.resolve(false)}>
+            Cancel action
+          </button>
+          <button type="button" onClick={() => confirmation.resolve(true)}>
+            Confirm {confirmation.action}
+          </button>
+        </NoxDialog>
       ) : null}
     </section>
   );

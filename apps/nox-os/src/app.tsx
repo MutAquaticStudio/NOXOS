@@ -1,16 +1,21 @@
 import {
+  Component,
   lazy,
   Suspense,
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode
 } from "react";
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import {
-  BrowserRouter,
+  createBrowserRouter,
+  RouterProvider,
+  useBlocker,
+  useBeforeUnload,
   matchPath,
   Navigate,
   Route,
@@ -18,25 +23,39 @@ import {
   useLocation,
   useNavigate
 } from "react-router-dom";
-import type {
-  ModuleAvailability,
-  ModuleDefinition,
-  ModuleUxDensity,
-  TenantRoleKey
-} from "@nox-os/contracts";
-import { publicEnvironment } from "@nox-os/config";
+import type { ModuleDefinition, ModuleUxDensity } from "@nox-os/contracts";
 import { projectAppRail, validateModuleDefinitions } from "@nox-os/module-registry";
-import { NoxShell, type NoxDensity, type NoxTheme } from "@nox-os/ui";
+import type { NoxDensity, NoxTheme } from "@nox-os/ui";
 import { browserAuthConfiguration, createBrowserAuthClient } from "./auth-client";
 import { moduleDefinitions } from "./modules/definitions";
+import { isTrialViewOnlyNavigation, resolveWorkspaceObjectRoute } from "./workspace-navigation";
+import { NoxApiError, type ApiClient } from "./api-client";
 import {
-  PlatformAuditScreen,
-  PlatformTenantsScreen,
-  PlatformUsersScreen,
-  TenantSettingsScreen,
-  NoxApiError,
-  type ApiClient
-} from "./platform-control";
+  readPlatformIdentity,
+  readTenantChoices,
+  readTenantContext,
+  type PlatformIdentity,
+  type TenantChoice,
+  type TenantContextPayload
+} from "./context-response";
+
+// The unauthenticated entry needs the existing Auth surface, not workspace UI.
+// Both exports share the same deferred module; no second Shell is introduced.
+const NoxShell = lazy(async () => ({ default: (await import("@nox-os/ui")).NoxShell }));
+const NoxDialog = lazy(async () => ({ default: (await import("@nox-os/ui")).NoxDialog }));
+
+const LazyPlatformAuditScreen = lazy(async () => ({
+  default: (await import("./platform-control")).PlatformAuditScreen
+}));
+const LazyPlatformTenantsScreen = lazy(async () => ({
+  default: (await import("./platform-control")).PlatformTenantsScreen
+}));
+const LazyPlatformUsersScreen = lazy(async () => ({
+  default: (await import("./platform-control")).PlatformUsersScreen
+}));
+const LazyTenantSettingsScreen = lazy(async () => ({
+  default: (await import("./platform-control")).TenantSettingsScreen
+}));
 
 const LazyFoundationModule = lazy(async () => {
   const module = await import("./modules/foundation-module");
@@ -98,33 +117,19 @@ const LazyCommercialOrdersExperience = lazy(async () => {
   return { default: module.CommercialOrdersExperience };
 });
 
-const publicIdentity = publicEnvironment({
-  VITE_NOX_ENV: import.meta.env.VITE_NOX_ENV,
-  VITE_NOX_SOURCE_SHA: import.meta.env.VITE_NOX_SOURCE_SHA,
-  VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
-  VITE_SUPABASE_PUBLISHABLE_KEY: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
-});
+// Vite's publicBuildEnvironment validates these exact compile-time values,
+// including local defaults. Do not ship the build/server validators to render
+// two public identity labels; Auth still consumes its existing exact public keys.
+const publicIdentity = {
+  environment: import.meta.env.VITE_NOX_ENV,
+  sourceSha: import.meta.env.VITE_NOX_SOURCE_SHA
+};
 
 type SessionState =
   | { kind: "loading" }
   | { kind: "unauthenticated" }
   | { kind: "authenticated"; session: Session }
   | { kind: "unconfigured" };
-
-type TenantChoice = { tenantId: string; name: string; slug: string; roleKey: TenantRoleKey };
-type TenantContextPayload = {
-  tenant: { tenantId: string; roleKey: TenantRoleKey };
-  authorization: { tenantPermissions: string[]; modulePermissions: string[] };
-  entitlements: string[];
-  moduleAvailability: ModuleAvailability[];
-};
-type PlatformIdentity = {
-  id: string;
-  displayName: string | null;
-  status: "ACTIVE" | "DISABLED";
-  platformRoleKey: "PLATFORM_OWNER" | null;
-  platformPermissions: string[];
-};
 
 function FoundationRoute({ definition }: { definition: ModuleDefinition }) {
   return (
@@ -181,24 +186,18 @@ function useTenantChoices(session: Session) {
   const [choices, setChoices] = useState<TenantChoice[]>([]);
   const [activeTenantId, setActiveTenantId] = useState<string | undefined>();
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [reload, setReload] = useState(0);
   useEffect(() => {
     let current = true;
     setState("loading");
+    setChoices([]);
     setActiveTenantId(undefined);
     void fetch("/api/v1/me/tenants", {
       headers: { authorization: `Bearer ${session.access_token}` }
     })
       .then(async (response) => {
         if (!response.ok) throw new Error("Tenant lookup failed.");
-        const payload = (await response.json()) as {
-          tenants?: Array<{ roleKey: string; tenant: { id: string; name: string; slug: string } }>;
-        };
-        return (payload.tenants ?? []).map((item) => ({
-          tenantId: item.tenant.id,
-          name: item.tenant.name,
-          slug: item.tenant.slug,
-          roleKey: item.roleKey as TenantRoleKey
-        }));
+        return readTenantChoices(await response.json());
       })
       .then((next) => {
         if (!current) return;
@@ -215,24 +214,32 @@ function useTenantChoices(session: Session) {
     return () => {
       current = false;
     };
-  }, [session.access_token]);
-  return { choices, activeTenantId, setActiveTenantId, state };
+  }, [session.access_token, session.user.id, reload]);
+  return {
+    choices,
+    activeTenantId,
+    setActiveTenantId,
+    state,
+    retry: () => setReload((value) => value + 1)
+  };
 }
 
 function usePlatformIdentity(session: Session) {
   const [identity, setIdentity] = useState<PlatformIdentity>();
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [reload, setReload] = useState(0);
   useEffect(() => {
     let current = true;
     setState("loading");
+    setIdentity(undefined);
     void fetch("/api/v1/me", { headers: { authorization: `Bearer ${session.access_token}` } })
       .then(async (response) => {
         if (!response.ok) throw new Error("Identity lookup failed.");
-        return (await response.json()) as { user: PlatformIdentity };
+        return readPlatformIdentity(await response.json(), session.user.id);
       })
-      .then((payload) => {
+      .then((identity) => {
         if (!current) return;
-        setIdentity(payload.user);
+        setIdentity(identity);
         setState("ready");
       })
       .catch(() => {
@@ -243,8 +250,8 @@ function usePlatformIdentity(session: Session) {
     return () => {
       current = false;
     };
-  }, [session.access_token]);
-  return { identity, state };
+  }, [session.access_token, session.user.id, reload]);
+  return { identity, state, retry: () => setReload((value) => value + 1) };
 }
 
 function SignIn({ client }: { client: SupabaseClient | undefined }) {
@@ -314,6 +321,57 @@ function AuthenticationFoundation({ children }: { children: ReactNode }) {
   );
 }
 
+function ApplicationLoadError({
+  authentication = false,
+  embedded = false
+}: {
+  authentication?: boolean;
+  embedded?: boolean;
+}) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    heading.current?.focus();
+  }, []);
+  const content = (
+    <section className="nox-auth-card" aria-labelledby="application-load-error-title">
+      <p className="nox-ai-context">NØX-OS</p>
+      <h1 id="application-load-error-title" ref={heading} tabIndex={-1}>
+        {authentication ? "Authentication unavailable" : "Workspace unavailable"}
+      </h1>
+      <p role="alert">
+        {authentication
+          ? "Authentication could not be loaded. Check your connection and reload to try again."
+          : "This workspace could not be loaded. Check your connection and reload to try again."}
+      </p>
+      <p>Reloading may discard unsaved local edits. Saved server data is not changed.</p>
+      <button type="button" onClick={() => window.location.reload()}>
+        {authentication ? "Reload sign-in" : "Reload workspace"}
+      </button>
+    </section>
+  );
+  if (embedded) return content;
+  return (
+    <AuthenticationFoundation>
+      <main className="nox-auth-page" aria-labelledby="application-load-error-title">
+        {content}
+      </main>
+    </AuthenticationFoundation>
+  );
+}
+
+// Isolate module render/import failures inside the existing workspace. A rejected
+// dynamic import needs explicit reload; navigation to a different path resets only
+// this boundary, without replacing Auth or the OS Shell.
+class WorkspaceRenderBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed ? <ApplicationLoadError embedded /> : this.props.children;
+  }
+}
+
 function PlatformConsoleDenied() {
   return (
     <section aria-labelledby="platform-console-denied-title">
@@ -333,7 +391,33 @@ function AuthenticatedApplication({
 }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const [theme] = useState<NoxTheme>("SYSTEM");
+  const [theme, setTheme] = useState<NoxTheme>("DARK");
+  const [unsaved, setUnsavedState] = useState(false);
+  const unsavedRef = useRef(false);
+  const setUnsaved = useCallback((value: boolean) => {
+    unsavedRef.current = value;
+    setUnsavedState(value);
+  }, []);
+  const [pendingChange, setPendingChange] = useState<() => void>();
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      unsavedRef.current && !isTrialViewOnlyNavigation(currentLocation, nextLocation)
+  );
+  useBeforeUnload(
+    useCallback(
+      (event) => {
+        if (unsaved) {
+          event.preventDefault();
+          event.returnValue = "";
+        }
+      },
+      [unsaved]
+    )
+  );
+  const changeWorkspace = (action: () => void) => {
+    if (unsaved) setPendingChange(() => action);
+    else action();
+  };
   const tenantSelection = useTenantChoices(session);
   const platformIdentity = usePlatformIdentity(session);
   const activeTenant = tenantSelection.choices.find(
@@ -343,6 +427,7 @@ function AuthenticatedApplication({
     "idle" | "loading" | "ready" | "error"
   >("idle");
   const [tenantContext, setTenantContext] = useState<TenantContextPayload>();
+  const [contextReload, setContextReload] = useState(0);
   const api = useCallback<ApiClient>(
     async (path, options = {}) => {
       const headers: Record<string, string> = {
@@ -377,10 +462,10 @@ function AuthenticatedApplication({
     let current = true;
     setTenantContextState("loading");
     setTenantContext(undefined);
-    void api<TenantContextPayload>("/context", { tenantId: activeTenant.tenantId })
+    void api<unknown>("/context", { tenantId: activeTenant.tenantId })
       .then((payload) => {
         if (!current) return;
-        setTenantContext(payload);
+        setTenantContext(readTenantContext(payload, activeTenant.tenantId));
         setTenantContextState("ready");
       })
       .catch(() => {
@@ -391,11 +476,15 @@ function AuthenticatedApplication({
     return () => {
       current = false;
     };
-  }, [activeTenant?.tenantId, api]);
+  }, [activeTenant?.tenantId, api, contextReload]);
   const appRail = useMemo(() => {
     validateModuleDefinitions(moduleDefinitions);
     return projectAppRail(moduleDefinitions, tenantContext?.moduleAvailability ?? []);
   }, [tenantContext]);
+  const resolveObjectRoute = useCallback(
+    (type: string, id: string) => resolveWorkspaceObjectRoute(appRail, type, id),
+    [appRail]
+  );
   const enabledDefinitions = useMemo(() => {
     const visibleModuleIds = new Set(appRail.map((item) => item.moduleId));
     return moduleDefinitions.filter((definition) => visibleModuleIds.has(definition.descriptor.id));
@@ -450,7 +539,9 @@ function AuthenticatedApplication({
                       )
                     : undefined);
   const density = activeDefinition ? toShellDensity(activeDefinition.uxProfile.density) : "DEFAULT";
-  const isPlatformOwner = platformIdentity.identity?.platformRoleKey === "PLATFORM_OWNER";
+  const isPlatformOwner =
+    platformIdentity.state === "ready" &&
+    platformIdentity.identity?.platformRoleKey === "PLATFORM_OWNER";
   const hasNoWorkspace = tenantSelection.state === "ready" && tenantSelection.choices.length === 0;
   const registeredModules = moduleDefinitions.map((definition) => ({
     id: definition.descriptor.id,
@@ -458,9 +549,14 @@ function AuthenticatedApplication({
   }));
   const tenantControl =
     tenantSelection.state === "loading" ? (
-      <span>Loading tenants…</span>
+      <span role="status">Loading workspaces…</span>
     ) : tenantSelection.state === "error" ? (
-      <span>Tenant context unavailable</span>
+      <>
+        <span role="alert">Workspace lookup failed</span>
+        <button type="button" onClick={tenantSelection.retry}>
+          Retry workspaces
+        </button>
+      </>
     ) : tenantSelection.choices.length === 0 ? (
       <span>No active workspace</span>
     ) : (
@@ -468,7 +564,10 @@ function AuthenticatedApplication({
         <span className="sr-only">Current tenant</span>
         <select
           value={tenantSelection.activeTenantId ?? ""}
-          onChange={(event) => tenantSelection.setActiveTenantId(event.target.value || undefined)}
+          onChange={(event) => {
+            const id = event.target.value || undefined;
+            changeWorkspace(() => tenantSelection.setActiveTenantId(id));
+          }}
         >
           <option value="" disabled>
             Select tenant
@@ -483,14 +582,27 @@ function AuthenticatedApplication({
     );
   return (
     <NoxShell
+      key={`${session.user.id}:${activeTenant?.tenantId ?? "no-workspace"}`}
       theme={theme}
+      onThemeChange={setTheme}
+      onUnsavedChange={setUnsaved}
+      hasUnsavedChanges={unsaved}
+      requestWorkspaceChange={changeWorkspace}
+      workspaceScope={
+        tenantContextState === "ready" && activeTenant
+          ? { userId: session.user.id, tenantId: activeTenant.tenantId }
+          : undefined
+      }
+      resolveObjectRoute={resolveObjectRoute}
       density={density}
       railItems={appRail}
       activeRoute={location.pathname}
       onNavigate={navigate}
       identityLabel={session.user.email ?? "Signed-in user"}
       onSignOut={() => {
-        void client.auth.signOut();
+        changeWorkspace(() => {
+          void client.auth.signOut();
+        });
       }}
       systemNavigation={
         isPlatformOwner ? (
@@ -513,6 +625,62 @@ function AuthenticatedApplication({
       }
       tenantControl={tenantControl}
     >
+      {pendingChange || blocker.state === "blocked" ? (
+        <NoxDialog
+          title="Unsaved changes"
+          onClose={() => {
+            setPendingChange(undefined);
+            if (blocker.state === "blocked") blocker.reset();
+          }}
+        >
+          <p>
+            Leave this workspace and discard unsaved local edits? Saved server drafts are not
+            deleted.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setPendingChange(undefined);
+              if (blocker.state === "blocked") blocker.reset();
+            }}
+          >
+            Keep editing
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setUnsaved(false);
+              if (pendingChange) pendingChange();
+              else if (blocker.state === "blocked") blocker.proceed();
+              setPendingChange(undefined);
+            }}
+          >
+            Discard local edits and continue
+          </button>
+        </NoxDialog>
+      ) : null}
+      {tenantContextState === "loading" ? (
+        <p className="nox-ai-context" role="status">
+          Refreshing tenant context…
+        </p>
+      ) : null}
+      {tenantContextState === "error" ? (
+        <div>
+          <p role="alert">Tenant context is unavailable.</p>
+          <button type="button" onClick={() => setContextReload((value) => value + 1)}>
+            Retry tenant context
+          </button>
+        </div>
+      ) : null}
+      {platformIdentity.state === "loading" ? <p role="status">Loading identity…</p> : null}
+      {platformIdentity.state === "error" ? (
+        <div>
+          <p role="alert">Platform identity is unavailable.</p>
+          <button type="button" onClick={platformIdentity.retry}>
+            Retry identity
+          </button>
+        </div>
+      ) : null}
       {hasNoWorkspace && !isPlatformOwner ? (
         <section aria-labelledby="no-workspace-title">
           <p className="nox-ai-context">NO_WORKSPACE</p>
@@ -520,122 +688,83 @@ function AuthenticatedApplication({
           <p>This identity is authenticated but has no active tenant membership.</p>
         </section>
       ) : (
-        <Routes>
-          <Route
-            path="/settings/tenant"
-            element={
-              <TenantSettingsScreen
-                api={api}
-                tenantId={activeTenant?.tenantId}
-                tenantRole={tenantContext?.tenant.roleKey ?? activeTenant?.roleKey}
-              />
-            }
-          />
-          <Route
-            path="/platform/tenants"
-            element={
-              isPlatformOwner ? (
-                <PlatformTenantsScreen api={api} modules={registeredModules} />
-              ) : (
-                <PlatformConsoleDenied />
-              )
-            }
-          />
-          <Route
-            path="/platform/users"
-            element={
-              isPlatformOwner ? <PlatformUsersScreen api={api} /> : <PlatformConsoleDenied />
-            }
-          />
-          <Route
-            path="/platform/audit"
-            element={
-              isPlatformOwner ? <PlatformAuditScreen api={api} /> : <PlatformConsoleDenied />
-            }
-          />
-          <Route
-            path="/platform/material-intelligence/review/*"
-            element={
-              <Suspense fallback={<p className="nox-ai-context">Loading Material review…</p>}>
-                <LazyPlatformMaterialExperience
-                  api={api}
-                  platformPermissions={platformIdentity.identity?.platformPermissions ?? []}
-                />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/materials/*"
-            element={
-              <Suspense fallback={<p className="nox-ai-context">Loading Material Intelligence…</p>}>
-                <LazyMaterialExperience
-                  api={api}
-                  tenantId={activeTenant?.tenantId}
-                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
-                />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/design-studio/*"
-            element={
-              <Suspense fallback={<p className="nox-ai-context">Loading Design Studio…</p>}>
-                <LazyDesignStudioExperience
-                  api={api}
-                  tenantId={activeTenant?.tenantId}
-                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
-                />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/trials/*"
-            element={
-              <Suspense fallback={<p className="nox-ai-context">Loading Trial & Sensory…</p>}>
-                <LazyTrialSensoryExperience
-                  api={api}
-                  tenantId={activeTenant?.tenantId}
-                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
-                />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/inventory/*"
-            element={
-              <Suspense fallback={<p className="nox-ai-context">Loading Inventory…</p>}>
-                <LazyInventoryExperience
-                  api={api}
-                  tenantId={activeTenant?.tenantId}
-                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
-                />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/procurement/*"
-            element={
-              <Suspense fallback={<p className="nox-ai-context">Loading Procurement…</p>}>
-                <LazyProcurementExperience
-                  api={api}
-                  tenantId={activeTenant?.tenantId}
-                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
-                />
-              </Suspense>
-            }
-          />
-          {[
-            "/production",
-            "/production/new",
-            "/production/orders/:orderId",
-            "/production/batches/:batchId"
-          ].map((path) => (
+        <WorkspaceRenderBoundary key={location.pathname}>
+          <Routes>
             <Route
-              key={path}
-              path={path}
+              path="/settings/tenant"
               element={
-                <Suspense fallback={<p className="nox-ai-context">Loading Production…</p>}>
-                  <LazyProductionExperience
+                <Suspense fallback={<p role="status">Loading tenant settings…</p>}>
+                  <LazyTenantSettingsScreen
+                    key={`${session.user.id}:${activeTenant?.tenantId ?? "none"}`}
+                    api={api}
+                    tenantId={activeTenant?.tenantId}
+                    tenantPermissions={
+                      tenantContextState === "ready" &&
+                      tenantContext &&
+                      activeTenant &&
+                      tenantContext.tenant.tenantId === activeTenant.tenantId
+                        ? tenantContext.authorization.tenantPermissions
+                        : []
+                    }
+                  />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/platform/tenants"
+              element={
+                isPlatformOwner ? (
+                  <Suspense fallback={<p role="status">Loading Platform Console…</p>}>
+                    <LazyPlatformTenantsScreen api={api} modules={registeredModules} />
+                  </Suspense>
+                ) : (
+                  <PlatformConsoleDenied />
+                )
+              }
+            />
+            <Route
+              path="/platform/users"
+              element={
+                isPlatformOwner ? (
+                  <Suspense fallback={<p role="status">Loading Platform users…</p>}>
+                    <LazyPlatformUsersScreen api={api} />
+                  </Suspense>
+                ) : (
+                  <PlatformConsoleDenied />
+                )
+              }
+            />
+            <Route
+              path="/platform/audit"
+              element={
+                isPlatformOwner ? (
+                  <Suspense fallback={<p role="status">Loading Platform audit…</p>}>
+                    <LazyPlatformAuditScreen api={api} />
+                  </Suspense>
+                ) : (
+                  <PlatformConsoleDenied />
+                )
+              }
+            />
+            <Route
+              path="/platform/material-intelligence/review/*"
+              element={
+                <Suspense fallback={<p className="nox-ai-context">Loading Material review…</p>}>
+                  <LazyPlatformMaterialExperience
+                    api={api}
+                    platformPermissions={platformIdentity.identity?.platformPermissions ?? []}
+                  />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/materials/*"
+              element={
+                <Suspense
+                  fallback={<p className="nox-ai-context">Loading Material Intelligence…</p>}
+                >
+                  <LazyMaterialExperience
+                    key={`${activeTenant?.tenantId ?? "no-workspace"}:${location.pathname}`}
                     api={api}
                     tenantId={activeTenant?.tenantId}
                     modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
@@ -643,114 +772,181 @@ function AuthenticatedApplication({
                 </Suspense>
               }
             />
-          ))}
-          <Route
-            path="/quality-control/*"
-            element={
-              <Suspense fallback={<p className="nox-ai-context">Loading Quality Control…</p>}>
-                <LazyQualityControlExperience
-                  api={api}
-                  tenantId={activeTenant?.tenantId}
-                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
-                />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/project-operations/*"
-            element={
-              <Suspense fallback={<p className="nox-ai-context">Loading Project Operations…</p>}>
-                <LazyProjectOperationsExperience api={api} tenantId={activeTenant?.tenantId} />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/commercial-orders/*"
-            element={
-              <Suspense fallback={<p className="nox-ai-context">Loading Commercial Orders…</p>}>
-                <LazyCommercialOrdersExperience
-                  key={activeTenant?.tenantId ?? "no-workspace"}
-                  api={api}
-                  tenantId={activeTenant?.tenantId}
-                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
-                />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/lab-services/*"
-            element={
-              <Suspense fallback={<p className="nox-ai-context">Loading NØX Lab Services…</p>}>
-                <LazyLabServicesExperience
-                  api={api}
-                  tenantId={activeTenant?.tenantId}
-                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
-                />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/release-readiness/*"
-            element={
-              <Suspense fallback={<p className="nox-ai-context">Loading Release Readiness…</p>}>
-                <LazyReleaseReadinessExperience
-                  api={api}
-                  tenantId={activeTenant?.tenantId}
-                  modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
-                />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/material-intelligence/*"
-            element={
-              <Navigate
-                to={
-                  location.pathname.replace(/^\/material-intelligence/, "/materials") +
-                  location.search
-                }
-                replace
-              />
-            }
-          />
-          <Route
-            path="/dashboard"
-            element={
-              <Navigate to={isPlatformOwner ? "/platform/tenants" : "/settings/tenant"} replace />
-            }
-          />
-          {routeEntries.map((route) => (
             <Route
-              key={route.definition.descriptor.id + route.path}
-              path={route.path}
-              element={<FoundationRoute definition={route.definition} />}
+              path="/design-studio/*"
+              element={
+                <Suspense fallback={<p className="nox-ai-context">Loading Design Studio…</p>}>
+                  <LazyDesignStudioExperience
+                    key={`${activeTenant?.tenantId ?? "no-workspace"}:${location.pathname}`}
+                    api={api}
+                    tenantId={activeTenant?.tenantId}
+                    modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                  />
+                </Suspense>
+              }
             />
-          ))}
-          <Route
-            path="/"
-            element={
-              <Navigate to={isPlatformOwner ? "/platform/tenants" : "/settings/tenant"} replace />
-            }
-          />
-          <Route
-            path="*"
-            element={
-              <section>
-                <p className="nox-ai-context">404</p>
-                <h1>Route not registered</h1>
-                <p>Runtime routes are projected from the canonical Module Registry.</p>
-              </section>
-            }
-          />
-        </Routes>
+            <Route
+              path="/trials/*"
+              element={
+                <Suspense fallback={<p className="nox-ai-context">Loading Trial & Sensory…</p>}>
+                  <LazyTrialSensoryExperience
+                    key={`${activeTenant?.tenantId ?? "no-workspace"}:${location.pathname}`}
+                    api={api}
+                    tenantId={activeTenant?.tenantId}
+                    modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                  />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/inventory/*"
+              element={
+                <Suspense fallback={<p className="nox-ai-context">Loading Inventory…</p>}>
+                  <LazyInventoryExperience
+                    api={api}
+                    tenantId={activeTenant?.tenantId}
+                    modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                  />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/procurement/*"
+              element={
+                <Suspense fallback={<p className="nox-ai-context">Loading Procurement…</p>}>
+                  <LazyProcurementExperience
+                    api={api}
+                    tenantId={activeTenant?.tenantId}
+                    modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                  />
+                </Suspense>
+              }
+            />
+            {[
+              "/production",
+              "/production/new",
+              "/production/orders/:orderId",
+              "/production/batches/:batchId"
+            ].map((path) => (
+              <Route
+                key={path}
+                path={path}
+                element={
+                  <Suspense fallback={<p className="nox-ai-context">Loading Production…</p>}>
+                    <LazyProductionExperience
+                      api={api}
+                      tenantId={activeTenant?.tenantId}
+                      modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                    />
+                  </Suspense>
+                }
+              />
+            ))}
+            <Route
+              path="/quality-control/*"
+              element={
+                <Suspense fallback={<p className="nox-ai-context">Loading Quality Control…</p>}>
+                  <LazyQualityControlExperience
+                    api={api}
+                    tenantId={activeTenant?.tenantId}
+                    modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                  />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/project-operations/*"
+              element={
+                <Suspense fallback={<p className="nox-ai-context">Loading Project Operations…</p>}>
+                  <LazyProjectOperationsExperience
+                    api={api}
+                    tenantId={activeTenant?.tenantId}
+                    modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                  />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/commercial-orders/*"
+              element={
+                <Suspense fallback={<p className="nox-ai-context">Loading Commercial Orders…</p>}>
+                  <LazyCommercialOrdersExperience
+                    key={activeTenant?.tenantId ?? "no-workspace"}
+                    api={api}
+                    tenantId={activeTenant?.tenantId}
+                    modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                  />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/lab-services/*"
+              element={
+                <Suspense fallback={<p className="nox-ai-context">Loading NØX Lab Services…</p>}>
+                  <LazyLabServicesExperience
+                    api={api}
+                    tenantId={activeTenant?.tenantId}
+                    modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                  />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/release-readiness/*"
+              element={
+                <Suspense fallback={<p className="nox-ai-context">Loading Release Readiness…</p>}>
+                  <LazyReleaseReadinessExperience
+                    api={api}
+                    tenantId={activeTenant?.tenantId}
+                    modulePermissions={tenantContext?.authorization.modulePermissions ?? []}
+                  />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/material-intelligence/*"
+              element={
+                <Navigate
+                  to={
+                    location.pathname.replace(/^\/material-intelligence/, "/materials") +
+                    location.search
+                  }
+                  replace
+                />
+              }
+            />
+            <Route
+              path="/dashboard"
+              element={
+                <Navigate to={isPlatformOwner ? "/platform/tenants" : "/settings/tenant"} replace />
+              }
+            />
+            {routeEntries.map((route) => (
+              <Route
+                key={route.definition.descriptor.id + route.path}
+                path={route.path}
+                element={<FoundationRoute definition={route.definition} />}
+              />
+            ))}
+            <Route
+              path="/"
+              element={
+                <Navigate to={isPlatformOwner ? "/platform/tenants" : "/settings/tenant"} replace />
+              }
+            />
+            <Route
+              path="*"
+              element={
+                <section>
+                  <p className="nox-ai-context">404</p>
+                  <h1>Route not registered</h1>
+                  <p>Runtime routes are projected from the canonical Module Registry.</p>
+                </section>
+              }
+            />
+          </Routes>
+        </WorkspaceRenderBoundary>
       )}
-      {tenantContextState === "loading" ? (
-        <p className="nox-ai-context">Refreshing tenant context…</p>
-      ) : null}
-      {tenantContextState === "error" ? <p role="alert">Tenant context is unavailable.</p> : null}
-      {platformIdentity.state === "error" ? (
-        <p role="alert">Platform identity is unavailable.</p>
-      ) : null}
       <p className="nox-ai-context">
         Environment: {publicIdentity.environment} · Source: {publicIdentity.sourceSha}
       </p>
@@ -762,11 +958,17 @@ function SessionBoundary() {
   const configuration = useMemo(() => browserAuthConfiguration(import.meta.env), []);
   const [client, setClient] = useState<SupabaseClient | undefined>();
   const [authRuntimeReady, setAuthRuntimeReady] = useState(!configuration);
+  const [authRuntimeFailed, setAuthRuntimeFailed] = useState(false);
   useEffect(() => {
     let current = true;
     void createBrowserAuthClient(configuration)
       .then((next) => {
         if (current) setClient(next);
+      })
+      .catch(() => {
+        // Import/network errors are not missing configuration. Never render the
+        // raw exception, provider URL or stack, and never invent an Auth session.
+        if (current) setAuthRuntimeFailed(true);
       })
       .finally(() => {
         if (current) setAuthRuntimeReady(true);
@@ -776,6 +978,7 @@ function SessionBoundary() {
     };
   }, [configuration]);
   const state = useSession(client, Boolean(configuration) && !authRuntimeReady);
+  if (authRuntimeFailed) return <ApplicationLoadError authentication />;
   if (state.kind === "loading")
     return (
       <AuthenticationFoundation>
@@ -802,7 +1005,17 @@ function SessionBoundary() {
         path="*"
         element={
           state.kind === "authenticated" ? (
-            <AuthenticatedApplication client={client!} session={state.session} />
+            <Suspense
+              fallback={
+                <AuthenticationFoundation>
+                  <main className="nox-auth-page" aria-busy="true">
+                    <p role="status">Loading workspace shell…</p>
+                  </main>
+                </AuthenticationFoundation>
+              }
+            >
+              <AuthenticatedApplication client={client!} session={state.session} />
+            </Suspense>
           ) : (
             <Navigate to="/sign-in" replace />
           )
@@ -813,9 +1026,10 @@ function SessionBoundary() {
 }
 
 export function App() {
-  return (
-    <BrowserRouter>
-      <SessionBoundary />
-    </BrowserRouter>
+  const [router] = useState(() =>
+    createBrowserRouter([
+      { path: "*", element: <SessionBoundary />, errorElement: <ApplicationLoadError /> }
+    ])
   );
+  return <RouterProvider router={router} />;
 }

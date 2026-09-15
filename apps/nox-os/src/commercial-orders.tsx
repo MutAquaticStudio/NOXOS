@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useWorkspaceObject, useUnsavedChanges } from "@nox-os/ui";
+import { CommercialAction } from "./commercial-action";
+import { FulfillmentLines } from "./commercial-fulfillment-lines";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import type { ApiClient } from "./platform-control";
 
@@ -51,7 +54,16 @@ export function CommercialOrdersExperience({ api, tenantId, modulePermissions }:
           />
         }
       />
-      <Route path="new" element={<OrderComposer api={scopedApi} />} />
+      <Route
+        path="new"
+        element={
+          permission(modulePermissions, "module.commercial-orders.order.create") ? (
+            <OrderComposer api={scopedApi} />
+          ) : (
+            <p role="alert">Permission denied: creating Commercial Orders is not available.</p>
+          )
+        }
+      />
       <Route
         path="quotes"
         element={
@@ -61,7 +73,16 @@ export function CommercialOrdersExperience({ api, tenantId, modulePermissions }:
           />
         }
       />
-      <Route path="quotes/new" element={<QuoteComposer api={scopedApi} />} />
+      <Route
+        path="quotes/new"
+        element={
+          permission(modulePermissions, "module.commercial-orders.quote.create") ? (
+            <QuoteComposer api={scopedApi} />
+          ) : (
+            <p role="alert">Permission denied: creating Quotes is not available.</p>
+          )
+        }
+      />
       <Route
         path="quotes/:quoteId"
         element={<QuoteDetail api={scopedApi} permissions={modulePermissions} />}
@@ -77,6 +98,163 @@ export function CommercialOrdersExperience({ api, tenantId, modulePermissions }:
 function Problem({ error }: { error?: string }) {
   return error ? <p role="alert">{error}</p> : null;
 }
+// Plain semantic table, using the OS table chrome; no parallel grid/state framework.
+function CommercialTable({
+  name,
+  children,
+  columns
+}: {
+  name: string;
+  children: ReactNode;
+  columns?: readonly string[];
+}) {
+  const id = useId();
+  const [hidden, setHidden] = useState<number[]>([]);
+  const [widths, setWidths] = useState<Record<number, number>>({});
+  return (
+    <>
+      {columns ? (
+        <details className="nox-commercial-columns">
+          <summary>
+            Columns · {columns.length - hidden.length} of {columns.length}
+          </summary>
+          <fieldset>
+            <legend>{name} columns</legend>
+            <p>Identity stays visible. Widths and visibility apply to this view only.</p>
+            {columns.map((column, index) => (
+              <div className="nox-commercial-column-choice" key={column}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={!hidden.includes(index)}
+                    disabled={index === 0}
+                    onChange={(event) =>
+                      setHidden((old) =>
+                        event.target.checked ? old.filter((i) => i !== index) : [...old, index]
+                      )
+                    }
+                  />
+                  Show {column}
+                  {index === 0 ? " (identity)" : ""}
+                </label>
+                <label>
+                  Width for {column}
+                  <select
+                    value={widths[index] ?? 0}
+                    disabled={hidden.includes(index)}
+                    onChange={(event) =>
+                      setWidths((old) => ({ ...old, [index]: Number(event.target.value) }))
+                    }
+                  >
+                    <option value={0}>Fit content</option>
+                    <option value={160}>160 px</option>
+                    <option value={240}>240 px</option>
+                    <option value={320}>320 px</option>
+                  </select>
+                </label>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                setHidden([]);
+                setWidths({});
+              }}
+            >
+              Reset columns
+            </button>
+          </fieldset>
+        </details>
+      ) : null}
+      <style>
+        {columns
+          ?.map(
+            (_, index) =>
+              `[data-commercial-table="${id}"] table tr > :nth-child(${index + 1}) { ${hidden.includes(index) ? "display:none;" : ""} ${widths[index] ? `min-width:${widths[index]}px;max-width:${widths[index]}px;width:${widths[index]}px;white-space:normal;overflow-wrap:anywhere;` : ""} }`
+          )
+          .join("\n")}
+      </style>
+      <p id={`${id}-keys`} className="nox-table-key-help">
+        Arrow keys navigate cells. Tab reaches actions and links.
+      </p>
+      <div
+        className="nox-table-wrap nox-commercial-table"
+        data-commercial-table={id}
+        role="region"
+        aria-label={`${name} scroll area`}
+        aria-describedby={`${id}-keys`}
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+          if (
+            !["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+          )
+            return;
+          const target = event.target as HTMLElement;
+          // Native editors and action controls retain their own keyboard semantics.
+          if (target.closest("input,select,textarea,button")) return;
+          const rows = Array.from(event.currentTarget.querySelectorAll("tbody tr"));
+          const cell = target.closest("td");
+          const rowIndex = rows.indexOf(cell?.parentElement as HTMLTableRowElement);
+          const cells = (row: Element) =>
+            Array.from(row.querySelectorAll<HTMLTableCellElement>("td")).filter(
+              (item) => item.getClientRects().length > 0
+            );
+          let nextRow = rowIndex;
+          let nextCol = cell && rowIndex >= 0 ? cells(rows[rowIndex]!).indexOf(cell) : 0;
+          if (rowIndex < 0) nextRow = 0;
+          else if (event.key === "ArrowDown") nextRow++;
+          else if (event.key === "ArrowUp") nextRow--;
+          else if (event.key === "ArrowRight") nextCol++;
+          else if (event.key === "ArrowLeft") nextCol--;
+          else if (event.key === "Home") nextCol = 0;
+          else if (event.key === "End") nextCol = cells(rows[rowIndex]!).length - 1;
+          const row = rows[Math.max(0, Math.min(nextRow, rows.length - 1))];
+          if (!row) return;
+          const visible = cells(row);
+          const next = visible[Math.max(0, Math.min(nextCol, visible.length - 1))];
+          if (!next) return;
+          event.preventDefault();
+          const link = next.querySelector<HTMLAnchorElement>("a[href]");
+          if (link) link.focus();
+          else {
+            next.tabIndex = -1;
+            next.focus();
+          }
+        }}
+      >
+        <table aria-label={name}>{children}</table>
+      </div>
+    </>
+  );
+}
+function RegistryPage({
+  page,
+  count,
+  onPage
+}: {
+  page: number;
+  count: number;
+  onPage: (page: number) => void;
+}) {
+  return (
+    <nav className="nox-table-actions" aria-label="Registry pagination">
+      <button type="button" disabled={page === 0} onClick={() => onPage(page - 1)}>
+        Previous page
+      </button>
+      <span role="status">
+        {count ? `${page * 25 + 1}–${Math.min((page + 1) * 25, count)} of ${count}` : "0 results"}
+      </span>
+      <button type="button" disabled={(page + 1) * 25 >= count} onClick={() => onPage(page + 1)}>
+        Next page
+      </button>
+    </nav>
+  );
+}
+const amountLabel = (value: string | null | undefined, currency: string) =>
+  value == null ? "—" : `${value} ${currency} minor units`;
+const quantityLabel = (value: string | null | undefined, kind: string) =>
+  value == null ? "—" : `${value} ${kind === "SERVICE_SCOPE" ? "service" : "mg"}`;
 function OrderRegistry({ api, canCreate }: { api: ScopedApi; canCreate: boolean }) {
   const [orders, setOrders] = useState<any[]>([]);
   const [status, setStatus] = useState("");
@@ -84,16 +262,19 @@ function OrderRegistry({ api, canCreate }: { api: ScopedApi; canCreate: boolean 
   const [shipping, setShipping] = useState("");
   const [customer, setCustomer] = useState("");
   const [error, setError] = useState<string>();
-  const refresh = useCallback(
-    () =>
-      void api<any>("/commercial-orders")
-        .then((x) => {
-          setOrders(x.orders ?? []);
-          setError(undefined);
-        })
-        .catch(() => setError("Commercial Orders could not be loaded.")),
-    [api]
-  );
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [descending, setDescending] = useState(false);
+  const refresh = useCallback(() => {
+    setLoading(true);
+    return void api<any>("/commercial-orders")
+      .then((x) => {
+        setOrders(x.orders ?? []);
+        setError(undefined);
+      })
+      .catch(() => setError("Commercial Orders could not be loaded."))
+      .finally(() => setLoading(false));
+  }, [api]);
   useEffect(refresh, [refresh]);
   const filtered = useMemo(
     () =>
@@ -109,8 +290,19 @@ function OrderRegistry({ api, canCreate }: { api: ScopedApi; canCreate: boolean 
       ),
     [customer, fulfillment, orders, shipping, status]
   );
+  const sorted = useMemo(
+    () =>
+      [...filtered].sort(
+        (a, b) =>
+          (descending ? -1 : 1) *
+          String(a.order_number).localeCompare(String(b.order_number), undefined, { numeric: true })
+      ),
+    [filtered, descending]
+  );
+  useEffect(() => setPage(0), [customer, fulfillment, shipping, status, descending]);
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(sorted.length / 25) - 1));
   return (
-    <section>
+    <section className="nox-commercial-workspace">
       <p className="nox-ai-context">COMMERCIAL OPERATIONS</p>
       <header>
         <h1>Commercial Orders</h1>
@@ -128,7 +320,12 @@ function OrderRegistry({ api, canCreate }: { api: ScopedApi; canCreate: boolean 
         </p>
       </header>
       <Problem error={error} />
-      <fieldset>
+      {error ? (
+        <button type="button" onClick={refresh}>
+          Retry Orders
+        </button>
+      ) : null}
+      <fieldset className="nox-commercial-filters">
         <legend>Filter Commercial Orders</legend>
         <label>
           Commercial status
@@ -161,44 +358,89 @@ function OrderRegistry({ api, canCreate }: { api: ScopedApi; canCreate: boolean 
           Customer
           <input value={customer} onChange={(event) => setCustomer(event.target.value)} />
         </label>
+        {customer || status || fulfillment || shipping ? (
+          <button
+            type="button"
+            onClick={() => {
+              setCustomer("");
+              setStatus("");
+              setFulfillment("");
+              setShipping("");
+            }}
+          >
+            Clear filters
+          </button>
+        ) : null}
       </fieldset>
-      <table>
-        <thead>
-          <tr>
-            <th>Order</th>
-            <th>Customer</th>
-            <th>Source Project</th>
-            <th>Commercial amount</th>
-            <th>Currency</th>
-            <th>Commercial status</th>
-            <th>Allocation</th>
-            <th>Fulfillment</th>
-            <th>Shipment</th>
-            <th>Confirmed</th>
-            <th>Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filtered.map((order) => (
-            <tr key={order.id}>
-              <td>
-                <Link to={`/commercial-orders/${order.id}`}>{order.order_number}</Link>
-              </td>
-              <td>{order.customer_display_name_snapshot ?? order.customer_id}</td>
-              <td>{order.source_project_id ?? "—"}</td>
-              <td>{order.commercialAmountMinor}</td>
-              <td>{order.currency_code}</td>
-              <td>{order.status}</td>
-              <td>{order.allocationStatus}</td>
-              <td>{order.fulfillmentStatus}</td>
-              <td>{order.shippingStatus}</td>
-              <td>{order.confirmed_at ? new Date(order.confirmed_at).toLocaleString() : "—"}</td>
-              <td>{new Date(order.updated_at).toLocaleString()}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {filtered.length === 0 ? <p>No Commercial Orders match these filters.</p> : null}
+      {loading ? (
+        <p role="status" aria-busy="true">
+          Loading Commercial Orders…
+        </p>
+      ) : error ? null : (
+        <>
+          <CommercialTable
+            name="Commercial Orders"
+            columns={[
+              "Order",
+              "Customer",
+              "Source Project",
+              "Commercial amount",
+              "Currency",
+              "Commercial status",
+              "Allocation",
+              "Fulfillment",
+              "Shipment",
+              "Confirmed",
+              "Updated"
+            ]}
+          >
+            <thead>
+              <tr>
+                <th scope="col" aria-sort={descending ? "descending" : "ascending"}>
+                  <button type="button" onClick={() => setDescending(!descending)}>
+                    Order {descending ? "↓" : "↑"}
+                  </button>
+                </th>
+                <th>Customer</th>
+                <th>Source Project</th>
+                <th className="nox-numeric">Commercial amount</th>
+                <th>Currency</th>
+                <th>Commercial status</th>
+                <th>Allocation</th>
+                <th>Fulfillment</th>
+                <th>Shipment</th>
+                <th>Confirmed</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.slice(currentPage * 25, (currentPage + 1) * 25).map((order) => (
+                <tr key={order.id}>
+                  <td>
+                    <Link to={`/commercial-orders/${order.id}`}>{order.order_number}</Link>
+                  </td>
+                  <td>{order.customer_display_name_snapshot ?? order.customer_id}</td>
+                  <td>{order.source_project_id ?? "—"}</td>
+                  <td className="nox-numeric">
+                    {amountLabel(order.commercialAmountMinor, order.currency_code)}
+                  </td>
+                  <td>{order.currency_code}</td>
+                  <td>{order.status}</td>
+                  <td>{order.allocationStatus}</td>
+                  <td>{order.fulfillmentStatus}</td>
+                  <td>{order.shippingStatus}</td>
+                  <td>
+                    {order.confirmed_at ? new Date(order.confirmed_at).toLocaleString() : "—"}
+                  </td>
+                  <td>{new Date(order.updated_at).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </CommercialTable>
+          {filtered.length === 0 ? <p>No Commercial Orders match these filters.</p> : null}
+          <RegistryPage page={currentPage} count={sorted.length} onPage={setPage} />
+        </>
+      )}
     </section>
   );
 }
@@ -207,11 +449,20 @@ function QuoteRegistry({ api, canCreate }: { api: ScopedApi; canCreate: boolean 
   const [status, setStatus] = useState("");
   const [customer, setCustomer] = useState("");
   const [error, setError] = useState<string>();
-  useEffect(() => {
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [descending, setDescending] = useState(false);
+  const refresh = useCallback(() => {
+    setLoading(true);
     void api<any>("/commercial-orders/quotes")
-      .then((x) => setQuotes(x.quotes ?? []))
-      .catch(() => setError("Quotes could not be loaded."));
+      .then((x) => {
+        setQuotes(x.quotes ?? []);
+        setError(undefined);
+      })
+      .catch(() => setError("Quotes could not be loaded."))
+      .finally(() => setLoading(false));
   }, [api]);
+  useEffect(refresh, [refresh]);
   const filtered = useMemo(
     () =>
       quotes.filter(
@@ -224,8 +475,19 @@ function QuoteRegistry({ api, canCreate }: { api: ScopedApi; canCreate: boolean 
       ),
     [customer, quotes, status]
   );
+  const sorted = useMemo(
+    () =>
+      [...filtered].sort(
+        (a, b) =>
+          (descending ? -1 : 1) *
+          String(a.quote_number).localeCompare(String(b.quote_number), undefined, { numeric: true })
+      ),
+    [filtered, descending]
+  );
+  useEffect(() => setPage(0), [customer, status, descending]);
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(sorted.length / 25) - 1));
   return (
-    <section>
+    <section className="nox-commercial-workspace">
       <p className="nox-ai-context">COMMERCIAL OFFER</p>
       <h1>Quotes</h1>
       <p>
@@ -238,7 +500,12 @@ function QuoteRegistry({ api, canCreate }: { api: ScopedApi; canCreate: boolean 
         ) : null}
       </p>
       <Problem error={error} />
-      <fieldset>
+      {error ? (
+        <button type="button" onClick={refresh}>
+          Retry Quotes
+        </button>
+      ) : null}
+      <fieldset className="nox-commercial-filters">
         <legend>Filter Quotes</legend>
         <label>
           Effective status
@@ -253,45 +520,113 @@ function QuoteRegistry({ api, canCreate }: { api: ScopedApi; canCreate: boolean 
           Customer
           <input value={customer} onChange={(event) => setCustomer(event.target.value)} />
         </label>
+        {customer || status ? (
+          <button
+            type="button"
+            onClick={() => {
+              setCustomer("");
+              setStatus("");
+            }}
+          >
+            Clear filters
+          </button>
+        ) : null}
       </fieldset>
-      <table>
-        <thead>
-          <tr>
-            <th>Quote</th>
-            <th>Revision</th>
-            <th>Customer</th>
-            <th>Source</th>
-            <th>Amount</th>
-            <th>Status</th>
-            <th>Currency</th>
-            <th>Valid until</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filtered.map((q) => (
-            <tr key={q.id}>
-              <td>
-                <Link to={`/commercial-orders/quotes/${q.id}`}>{q.quote_number}</Link>
-              </td>
-              <td>{q.revision_number}</td>
-              <td>{q.customer_display_name_snapshot ?? q.customer_id}</td>
-              <td>{q.source_project_id ?? q.source_service_order_id ?? "—"}</td>
-              <td>{q.commercialAmountMinor}</td>
-              <td>
-                {q.status}
-                {q.status === "ISSUED" && q.valid_until && new Date(q.valid_until) < new Date()
-                  ? " · Expired"
-                  : ""}
-              </td>
-              <td>{q.currency_code}</td>
-              <td>{q.valid_until ? new Date(q.valid_until).toLocaleString() : "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {filtered.length === 0 ? <p>No Quotes match these filters.</p> : null}
+      {loading ? (
+        <p role="status" aria-busy="true">
+          Loading Quotes…
+        </p>
+      ) : error ? null : (
+        <>
+          <CommercialTable
+            name="Quotes"
+            columns={[
+              "Quote",
+              "Revision",
+              "Customer",
+              "Source",
+              "Amount",
+              "Status",
+              "Currency",
+              "Valid until"
+            ]}
+          >
+            <thead>
+              <tr>
+                <th scope="col" aria-sort={descending ? "descending" : "ascending"}>
+                  <button type="button" onClick={() => setDescending(!descending)}>
+                    Quote {descending ? "↓" : "↑"}
+                  </button>
+                </th>
+                <th>Revision</th>
+                <th>Customer</th>
+                <th>Source</th>
+                <th className="nox-numeric">Amount</th>
+                <th>Status</th>
+                <th>Currency</th>
+                <th>Valid until</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.slice(currentPage * 25, (currentPage + 1) * 25).map((q) => (
+                <tr key={q.id}>
+                  <td>
+                    <Link to={`/commercial-orders/quotes/${q.id}`}>{q.quote_number}</Link>
+                  </td>
+                  <td>{q.revision_number}</td>
+                  <td>{q.customer_display_name_snapshot ?? q.customer_id}</td>
+                  <td>{q.source_project_id ?? q.source_service_order_id ?? "—"}</td>
+                  <td className="nox-numeric">
+                    {amountLabel(q.commercialAmountMinor, q.currency_code)}
+                  </td>
+                  <td>
+                    {q.status}
+                    {q.status === "ISSUED" && q.valid_until && new Date(q.valid_until) < new Date()
+                      ? " · Expired"
+                      : ""}
+                  </td>
+                  <td>{q.currency_code}</td>
+                  <td>{q.valid_until ? new Date(q.valid_until).toLocaleString() : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </CommercialTable>
+          {filtered.length === 0 ? <p>No Quotes match these filters.</p> : null}
+          <RegistryPage page={currentPage} count={sorted.length} onPage={setPage} />
+        </>
+      )}
     </section>
   );
+}
+type LookupStatus = "LOADING" | "READY" | "ERROR";
+type LookupName = "Customers" | "Service Orders" | "Materials" | "Projects";
+function LookupFeedback({
+  name,
+  status,
+  empty,
+  retry
+}: {
+  name: string;
+  status: LookupStatus;
+  empty: boolean;
+  retry: () => void;
+}) {
+  if (status === "LOADING")
+    return (
+      <p role="status" aria-busy="true">
+        Loading {name}…
+      </p>
+    );
+  if (status === "ERROR")
+    return (
+      <div>
+        <p role="alert">{name} lookup is unavailable. Your draft is unchanged.</p>
+        <button type="button" onClick={retry}>
+          Retry {name}
+        </button>
+      </div>
+    );
+  return empty ? <p>No accessible {name} found.</p> : null;
 }
 function Composer({ kind, api }: { kind: "quote" | "order"; api: ScopedApi }) {
   const nav = useNavigate();
@@ -314,50 +649,125 @@ function Composer({ kind, api }: { kind: "quote" | "order"; api: ScopedApi }) {
   const [projects, setProjects] = useState<any[]>([]);
   const [error, setError] = useState<string>();
   const [working, setWorking] = useState(false);
+  const [lookupStatus, setLookupStatus] = useState<Record<LookupName, LookupStatus>>({
+    Customers: "LOADING",
+    "Service Orders": "LOADING",
+    Materials: "LOADING",
+    Projects: "LOADING"
+  });
+  const [serviceLineStatus, setServiceLineStatus] = useState<LookupStatus>("READY");
+  const [serviceLineRetry, setServiceLineRetry] = useState(0);
+  const lookupGeneration = useRef(0);
+  const loadSources = useCallback(
+    (only?: LookupName) => {
+      const generation = lookupGeneration.current;
+      const sources: Array<{
+        name: LookupName;
+        path: string;
+        field: string;
+        set: (items: any[]) => void;
+      }> = [
+        {
+          name: "Customers",
+          path: "/lab-services/customers",
+          field: "customers",
+          set: setCustomers
+        },
+        {
+          name: "Service Orders",
+          path: "/lab-services/service-orders",
+          field: "serviceOrders",
+          set: setServiceOrders
+        },
+        { name: "Materials", path: "/materials", field: "materials", set: setMaterials },
+        {
+          name: "Projects",
+          path: "/project-operations/projects",
+          field: "projects",
+          set: setProjects
+        }
+      ];
+      for (const source of sources.filter((item) => !only || item.name === only)) {
+        setLookupStatus((old) => ({ ...old, [source.name]: "LOADING" }));
+        void api<any>(source.path)
+          .then((data) => {
+            if (generation !== lookupGeneration.current) return;
+            if (!Array.isArray(data[source.field])) throw Error("Invalid source response");
+            source.set(data[source.field]);
+            setLookupStatus((old) => ({ ...old, [source.name]: "READY" }));
+          })
+          .catch(() => {
+            if (generation !== lookupGeneration.current) return;
+            source.set([]);
+            setLookupStatus((old) => ({ ...old, [source.name]: "ERROR" }));
+          });
+      }
+    },
+    [api]
+  );
+
+  const sending = useRef(false);
+  const [destination, setDestination] = useState<string>();
+  const pendingLine = JSON.stringify(draftLine) !== JSON.stringify(newDraftLine());
+  useUnsavedChanges(
+    !destination &&
+      Boolean(
+        customerId ||
+        sourceServiceOrderId ||
+        sourceProjectId ||
+        number ||
+        currency !== "USD" ||
+        commercialTerms ||
+        paymentTerms ||
+        shippingTerms ||
+        shipToCountry ||
+        shipToLocality ||
+        lines.length ||
+        pendingLine
+      )
+  );
+  // Publish the clean state before asking the existing app navigation guard to leave.
+  useEffect(() => {
+    if (destination) nav(destination);
+  }, [destination, nav]);
 
   useEffect(() => {
-    let active = true;
-    void Promise.all([
-      api<any>("/lab-services/customers"),
-      api<any>("/lab-services/service-orders"),
-      api<any>("/materials"),
-      api<any>("/project-operations/projects")
-    ])
-      .then(([customerData, serviceData, materialData, projectData]) => {
-        if (!active) return;
-        setCustomers(customerData.customers ?? []);
-        setServiceOrders(serviceData.serviceOrders ?? []);
-        setMaterials(materialData.materials ?? []);
-        setProjects(projectData.projects ?? []);
-      })
-      .catch(() => {
-        if (active)
-          setError(
-            "Commercial source lookup is unavailable. Refresh after the required source Modules are available."
-          );
-      });
+    lookupGeneration.current++;
+    setCustomers([]);
+    setServiceOrders([]);
+    setMaterials([]);
+    setProjects([]);
+    loadSources();
     return () => {
-      active = false;
+      lookupGeneration.current++;
     };
-  }, [api]);
+  }, [loadSources]);
 
   useEffect(() => {
     let active = true;
+    setServiceLines([]);
     if (!sourceServiceOrderId) {
-      setServiceLines([]);
+      setServiceLineStatus("READY");
       return;
     }
+    setServiceLineStatus("LOADING");
     void api<any>(`/lab-services/service-orders/${sourceServiceOrderId}`)
       .then((data) => {
-        if (active) setServiceLines(data.lines ?? []);
+        if (!active) return;
+        if (!Array.isArray(data.lines)) throw Error("Invalid Service Lines response");
+        setServiceLines(data.lines);
+        setServiceLineStatus("READY");
       })
       .catch(() => {
-        if (active) setServiceLines([]);
+        if (active) {
+          setServiceLines([]);
+          setServiceLineStatus("ERROR");
+        }
       });
     return () => {
       active = false;
     };
-  }, [api, sourceServiceOrderId]);
+  }, [api, sourceServiceOrderId, serviceLineRetry]);
 
   const matchingServices = useMemo(
     () => serviceOrders.filter((order) => order.customerId === customerId),
@@ -367,6 +777,18 @@ function Composer({ kind, api }: { kind: "quote" | "order"; api: ScopedApi }) {
   const setLine = <K extends keyof DraftLine>(key: K, value: DraftLine[K]) =>
     setDraftLine((current) => ({ ...current, [key]: value }));
   const addLine = () => {
+    if (sending.current) return;
+    if (
+      (draftLine.lineKind === "MATERIAL" &&
+        (lookupStatus.Materials !== "READY" ||
+          !materials.some((entry) => (entry.material ?? entry).id === draftLine.materialId))) ||
+      (draftLine.lineKind === "SERVICE_SCOPE" &&
+        (serviceLineStatus !== "READY" ||
+          !serviceLines.some((line) => line.id === draftLine.serviceOrderLineId)))
+    ) {
+      setError("Load the current source and select an accessible line before adding it.");
+      return;
+    }
     const quantityValue = draftLine.lineKind === "SERVICE_SCOPE" ? "1" : draftLine.quantityValue;
     const priceBasisQuantity =
       draftLine.lineKind === "SERVICE_SCOPE" ? "1" : draftLine.priceBasisQuantity;
@@ -379,11 +801,15 @@ function Composer({ kind, api }: { kind: "quote" | "order"; api: ScopedApi }) {
     if (
       !draftLine.titleSnapshot.trim() ||
       !requiresSource ||
-      !quantityValue ||
-      !draftLine.unitPriceMinor ||
-      !priceBasisQuantity
+      !/^[1-9][0-9]*$/.test(quantityValue) ||
+      !/^(0|[1-9][0-9]*)$/.test(draftLine.unitPriceMinor) ||
+      !/^[1-9][0-9]*$/.test(priceBasisQuantity) ||
+      !/^(0|[1-9][0-9]*)$/.test(draftLine.discountMinor || "0") ||
+      lines.length >= 100
     ) {
-      setError("Add a title, exact source, quantity and exact price before adding a line.");
+      setError(
+        "Add a title and exact source. Quantity/price basis must be positive integers; price/discount must be non-negative integers. Maximum 100 lines."
+      );
       return;
     }
     setLines((current) => [
@@ -399,11 +825,28 @@ function Composer({ kind, api }: { kind: "quote" | "order"; api: ScopedApi }) {
   };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (sending.current) return;
+    if (
+      lookupStatus.Customers !== "READY" ||
+      !currentCustomer ||
+      currentCustomer.status === "ARCHIVED" ||
+      (sourceServiceOrderId && lookupStatus["Service Orders"] !== "READY") ||
+      (sourceProjectId && lookupStatus.Projects !== "READY")
+    ) {
+      setError("Load the selected Customer and source references before creating this draft.");
+      return;
+    }
+    if (pendingLine) {
+      setError("Finish adding the current line or explicitly clear it before creating the draft.");
+      return;
+    }
     if (lines.length === 0) {
       setError("Add at least one commercial line before creating a draft.");
       return;
     }
+    sending.current = true;
     setWorking(true);
+    setError(undefined);
     try {
       const mappedLines = lines.map((line, index) => ({
         lineOrder: index + 1,
@@ -440,7 +883,7 @@ function Composer({ kind, api }: { kind: "quote" | "order"; api: ScopedApi }) {
         kind === "quote" ? "/commercial-orders/quotes" : "/commercial-orders/orders",
         { method: "POST", body }
       );
-      nav(
+      setDestination(
         kind === "quote"
           ? `/commercial-orders/quotes/${result.quote.quote.id}`
           : `/commercial-orders/${result.order.order.id}`
@@ -448,11 +891,12 @@ function Composer({ kind, api }: { kind: "quote" | "order"; api: ScopedApi }) {
     } catch (error) {
       setError(error instanceof Error ? error.message : "Commercial authoring failed.");
     } finally {
+      sending.current = false;
       setWorking(false);
     }
   };
   return (
-    <section>
+    <section className="nox-commercial-workspace">
       <p className="nox-ai-context">{kind === "quote" ? "NEW QUOTE" : "NEW COMMERCIAL ORDER"}</p>
       <h1>{kind === "quote" ? "Create Quote" : "Create Draft Commercial Order"}</h1>
       <p>
@@ -460,238 +904,299 @@ function Composer({ kind, api }: { kind: "quote" | "order"; api: ScopedApi }) {
         minor units; quantities use integer mg except SERVICE_SCOPE, which is one unit.
       </p>
       <form onSubmit={submit}>
-        <label>
-          {kind === "quote" ? "Quote number" : "Order number"}
-          <input required value={number} onChange={(e) => setNumber(e.target.value)} />
-        </label>
-        <label>
-          Customer
-          <select
-            required
-            value={customerId}
-            onChange={(event) => {
-              setCustomerId(event.target.value);
-              setSourceServiceOrderId("");
-              setDraftLine(newDraftLine());
-            }}
-          >
-            <option value="">Select an existing Customer</option>
-            {customers
-              .filter((customer) => customer.status !== "ARCHIVED")
-              .map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.displayName ?? customer.display_name} · {customer.status}
-                </option>
-              ))}
-          </select>
-        </label>
-        <label>
-          Source Service Order
-          <select
-            value={sourceServiceOrderId}
-            onChange={(event) => setSourceServiceOrderId(event.target.value)}
-            disabled={!customerId}
-          >
-            <option value="">None</option>
-            {matchingServices.map((service) => (
-              <option key={service.id} value={service.id}>
-                {service.serviceOrderNumber ?? service.service_order_number ?? service.id} ·{" "}
-                {service.status}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Source Operational Project
-          <select
-            value={sourceProjectId}
-            onChange={(event) => setSourceProjectId(event.target.value)}
-          >
-            <option value="">None</option>
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.project_code ?? project.id} · {project.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Currency
-          <input
-            required
-            pattern="[A-Z]{3}"
-            value={currency}
-            onChange={(e) => setCurrency(e.target.value.toUpperCase())}
-          />
-        </label>
-        <fieldset>
-          <legend>Commercial lines</legend>
+        <fieldset disabled={working || Boolean(destination)} className="nox-commercial-authoring">
+          <legend>Draft {kind === "quote" ? "Quote" : "Order"} details</legend>
           <label>
-            Line type
-            <select
-              value={draftLine.lineKind}
-              onChange={(event) =>
-                setDraftLine({
-                  ...newDraftLine(),
-                  lineKind: event.target.value as DraftLine["lineKind"]
-                })
-              }
-            >
-              <option value="MATERIAL">Material</option>
-              <option value="SERVICE_SCOPE">Service Scope</option>
-              <option value="MANUFACTURED_PRODUCT">Manufactured Product</option>
-            </select>
-          </label>
-          <label>
-            Title
+            {kind === "quote" ? "Quote number" : "Order number"}
             <input
               required
-              value={draftLine.titleSnapshot}
-              onChange={(event) => setLine("titleSnapshot", event.target.value)}
+              maxLength={80}
+              value={number}
+              onChange={(e) => setNumber(e.target.value)}
             />
           </label>
-          {draftLine.lineKind === "MATERIAL" ? (
+          <div>
             <label>
-              Approved accessible Material
+              Customer
               <select
-                value={draftLine.materialId}
-                onChange={(event) => setLine("materialId", event.target.value)}
+                required
+                disabled={lookupStatus.Customers !== "READY"}
+                value={customerId}
+                onChange={(event) => {
+                  setCustomerId(event.target.value);
+                  setSourceServiceOrderId("");
+                  setDraftLine((current) => ({ ...current, serviceOrderLineId: "" }));
+                }}
               >
-                <option value="">Select Material</option>
-                {materials.map((entry) => {
-                  const material = entry.material ?? entry;
-                  return (
-                    <option key={material.id} value={material.id}>
-                      {material.displayName ?? material.display_name ?? material.id}
+                <option value="">Select an existing Customer</option>
+                {customers
+                  .filter((customer) => customer.status !== "ARCHIVED")
+                  .map((customer) => (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.displayName ?? customer.display_name} · {customer.status}
                     </option>
-                  );
-                })}
+                  ))}
               </select>
             </label>
-          ) : null}
-          {draftLine.lineKind === "SERVICE_SCOPE" ? (
+            <LookupFeedback
+              name="Customers"
+              status={lookupStatus.Customers}
+              empty={!customers.length}
+              retry={() => loadSources("Customers")}
+            />
+          </div>
+          <div>
             <label>
-              Service Order Line
+              Source Service Order
               <select
-                value={draftLine.serviceOrderLineId}
-                onChange={(event) => setLine("serviceOrderLineId", event.target.value)}
-                disabled={!sourceServiceOrderId}
+                value={sourceServiceOrderId}
+                onChange={(event) => {
+                  setSourceServiceOrderId(event.target.value);
+                  setServiceLines([]);
+                  setServiceLineStatus(event.target.value ? "LOADING" : "READY");
+                  setLine("serviceOrderLineId", "");
+                }}
+                disabled={!customerId || lookupStatus["Service Orders"] !== "READY"}
               >
-                <option value="">Select Service Order first</option>
-                {serviceLines.map((line) => (
-                  <option key={line.id} value={line.id}>
-                    {line.title ?? line.service_type ?? line.id}
+                <option value="">None</option>
+                {matchingServices.map((service) => (
+                  <option key={service.id} value={service.id}>
+                    {service.serviceOrderNumber ?? service.service_order_number ?? service.id} ·{" "}
+                    {service.status}
                   </option>
                 ))}
               </select>
             </label>
-          ) : null}
-          {draftLine.lineKind === "MANUFACTURED_PRODUCT" ? (
+            <LookupFeedback
+              name="Service Orders"
+              status={lookupStatus["Service Orders"]}
+              empty={Boolean(customerId) && !matchingServices.length}
+              retry={() => loadSources("Service Orders")}
+            />
+          </div>
+          <div>
             <label>
-              Approved frozen FormulaVersion ID
+              Source Operational Project
+              <select
+                disabled={lookupStatus.Projects !== "READY"}
+                value={sourceProjectId}
+                onChange={(event) => setSourceProjectId(event.target.value)}
+              >
+                <option value="">None</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.project_code ?? project.id} · {project.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <LookupFeedback
+              name="Projects"
+              status={lookupStatus.Projects}
+              empty={!projects.length}
+              retry={() => loadSources("Projects")}
+            />
+          </div>
+          <label>
+            Currency
+            <input
+              required
+              pattern="[A-Z]{3}"
+              value={currency}
+              onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+            />
+          </label>
+          <fieldset>
+            <legend>Commercial lines</legend>
+            <label>
+              Line type
+              <select
+                value={draftLine.lineKind}
+                onChange={(event) =>
+                  setLine("lineKind", event.target.value as DraftLine["lineKind"])
+                }
+              >
+                <option value="MATERIAL">Material</option>
+                <option value="SERVICE_SCOPE">Service Scope</option>
+                <option value="MANUFACTURED_PRODUCT">Manufactured Product</option>
+              </select>
+            </label>
+            <label>
+              Title
               <input
-                required
-                value={draftLine.formulaVersionId}
-                onChange={(event) => setLine("formulaVersionId", event.target.value)}
+                maxLength={300}
+                value={draftLine.titleSnapshot}
+                onChange={(event) => setLine("titleSnapshot", event.target.value)}
               />
             </label>
+            {draftLine.lineKind === "MATERIAL" ? (
+              <div>
+                <label>
+                  Approved accessible Material
+                  <select
+                    disabled={lookupStatus.Materials !== "READY"}
+                    value={draftLine.materialId}
+                    onChange={(event) => setLine("materialId", event.target.value)}
+                  >
+                    <option value="">Select Material</option>
+                    {materials.map((entry) => {
+                      const material = entry.material ?? entry;
+                      return (
+                        <option key={material.id} value={material.id}>
+                          {material.displayName ?? material.display_name ?? material.id}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+                <LookupFeedback
+                  name="Materials"
+                  status={lookupStatus.Materials}
+                  empty={!materials.length}
+                  retry={() => loadSources("Materials")}
+                />
+              </div>
+            ) : null}
+            {draftLine.lineKind === "SERVICE_SCOPE" ? (
+              <div>
+                <label>
+                  Service Order Line
+                  <select
+                    value={draftLine.serviceOrderLineId}
+                    onChange={(event) => setLine("serviceOrderLineId", event.target.value)}
+                    disabled={!sourceServiceOrderId || serviceLineStatus !== "READY"}
+                  >
+                    <option value="">Select Service Order first</option>
+                    {serviceLines.map((line) => (
+                      <option key={line.id} value={line.id}>
+                        {line.title ?? line.service_type ?? line.id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {sourceServiceOrderId ? (
+                  <LookupFeedback
+                    name="Service Lines"
+                    status={serviceLineStatus}
+                    empty={!serviceLines.length}
+                    retry={() => setServiceLineRetry((count) => count + 1)}
+                  />
+                ) : (
+                  <p>Select a Service Order to load its lines.</p>
+                )}
+              </div>
+            ) : null}
+            {draftLine.lineKind === "MANUFACTURED_PRODUCT" ? (
+              <label>
+                Approved frozen FormulaVersion ID
+                <input
+                  value={draftLine.formulaVersionId}
+                  onChange={(event) => setLine("formulaVersionId", event.target.value)}
+                />
+              </label>
+            ) : null}
+            <label>
+              Quantity {draftLine.lineKind === "SERVICE_SCOPE" ? "(one service)" : "(mg)"}
+              <input
+                disabled={draftLine.lineKind === "SERVICE_SCOPE"}
+                inputMode="numeric"
+                value={draftLine.lineKind === "SERVICE_SCOPE" ? "1" : draftLine.quantityValue}
+                onChange={(event) => setLine("quantityValue", event.target.value)}
+              />
+            </label>
+            <label>
+              Unit price (minor units)
+              <input
+                inputMode="numeric"
+                value={draftLine.unitPriceMinor}
+                onChange={(event) => setLine("unitPriceMinor", event.target.value)}
+              />
+            </label>
+            <label>
+              Price basis quantity
+              <input
+                disabled={draftLine.lineKind === "SERVICE_SCOPE"}
+                inputMode="numeric"
+                value={draftLine.lineKind === "SERVICE_SCOPE" ? "1" : draftLine.priceBasisQuantity}
+                onChange={(event) => setLine("priceBasisQuantity", event.target.value)}
+              />
+            </label>
+            <label>
+              Discount (minor units)
+              <input
+                inputMode="numeric"
+                value={draftLine.discountMinor}
+                onChange={(event) => setLine("discountMinor", event.target.value)}
+              />
+            </label>
+            <label>
+              Line notes
+              <input
+                value={draftLine.notes}
+                onChange={(event) => setLine("notes", event.target.value)}
+              />
+            </label>
+            <button type="button" onClick={addLine}>
+              Add line
+            </button>
+            {pendingLine ? (
+              <button type="button" onClick={() => setDraftLine(newDraftLine())}>
+                Clear unadded line
+              </button>
+            ) : null}
+            <LineDraftTable
+              lines={lines}
+              currency={currency}
+              onRemove={(index) =>
+                setLines((current) => current.filter((_, item) => item !== index))
+              }
+            />
+          </fieldset>
+          <label>
+            Commercial terms
+            <textarea
+              value={commercialTerms}
+              onChange={(event) => setCommercialTerms(event.target.value)}
+            />
+          </label>
+          <label>
+            Payment terms text
+            <textarea
+              value={paymentTerms}
+              onChange={(event) => setPaymentTerms(event.target.value)}
+            />
+          </label>
+          <label>
+            Shipping terms text
+            <textarea
+              value={shippingTerms}
+              onChange={(event) => setShippingTerms(event.target.value)}
+            />
+          </label>
+          <fieldset>
+            <legend>Ship-to snapshot</legend>
+            <label>
+              Country
+              <input
+                value={shipToCountry}
+                onChange={(event) => setShipToCountry(event.target.value)}
+              />
+            </label>
+            <label>
+              Locality
+              <input
+                value={shipToLocality}
+                onChange={(event) => setShipToLocality(event.target.value)}
+              />
+            </label>
+          </fieldset>
+          {currentCustomer ? (
+            <p>Selected Customer: {currentCustomer.displayName ?? currentCustomer.display_name}</p>
           ) : null}
-          <label>
-            Quantity {draftLine.lineKind === "SERVICE_SCOPE" ? "(one service)" : "(mg)"}
-            <input
-              required
-              disabled={draftLine.lineKind === "SERVICE_SCOPE"}
-              inputMode="numeric"
-              value={draftLine.lineKind === "SERVICE_SCOPE" ? "1" : draftLine.quantityValue}
-              onChange={(event) => setLine("quantityValue", event.target.value)}
-            />
-          </label>
-          <label>
-            Unit price (minor units)
-            <input
-              required
-              inputMode="numeric"
-              value={draftLine.unitPriceMinor}
-              onChange={(event) => setLine("unitPriceMinor", event.target.value)}
-            />
-          </label>
-          <label>
-            Price basis quantity
-            <input
-              required
-              disabled={draftLine.lineKind === "SERVICE_SCOPE"}
-              inputMode="numeric"
-              value={draftLine.lineKind === "SERVICE_SCOPE" ? "1" : draftLine.priceBasisQuantity}
-              onChange={(event) => setLine("priceBasisQuantity", event.target.value)}
-            />
-          </label>
-          <label>
-            Discount (minor units)
-            <input
-              inputMode="numeric"
-              value={draftLine.discountMinor}
-              onChange={(event) => setLine("discountMinor", event.target.value)}
-            />
-          </label>
-          <label>
-            Line notes
-            <input
-              value={draftLine.notes}
-              onChange={(event) => setLine("notes", event.target.value)}
-            />
-          </label>
-          <button type="button" onClick={addLine}>
-            Add line
+          <button disabled={working} type="submit">
+            {working ? "Creating…" : kind === "quote" ? "Create Draft Quote" : "Create Draft Order"}
           </button>
-          <LineDraftTable
-            lines={lines}
-            onRemove={(index) => setLines((current) => current.filter((_, item) => item !== index))}
-          />
         </fieldset>
-        <label>
-          Commercial terms
-          <textarea
-            value={commercialTerms}
-            onChange={(event) => setCommercialTerms(event.target.value)}
-          />
-        </label>
-        <label>
-          Payment terms text
-          <textarea
-            value={paymentTerms}
-            onChange={(event) => setPaymentTerms(event.target.value)}
-          />
-        </label>
-        <label>
-          Shipping terms text
-          <textarea
-            value={shippingTerms}
-            onChange={(event) => setShippingTerms(event.target.value)}
-          />
-        </label>
-        <fieldset>
-          <legend>Ship-to snapshot</legend>
-          <label>
-            Country
-            <input
-              value={shipToCountry}
-              onChange={(event) => setShipToCountry(event.target.value)}
-            />
-          </label>
-          <label>
-            Locality
-            <input
-              value={shipToLocality}
-              onChange={(event) => setShipToLocality(event.target.value)}
-            />
-          </label>
-        </fieldset>
-        {currentCustomer ? (
-          <p>Selected Customer: {currentCustomer.displayName ?? currentCustomer.display_name}</p>
-        ) : null}
-        <button disabled={working} type="submit">
-          {working ? "Creating…" : kind === "quote" ? "Create Draft Quote" : "Create Draft Order"}
-        </button>
       </form>
       <Problem error={error} />
     </section>
@@ -700,19 +1205,21 @@ function Composer({ kind, api }: { kind: "quote" | "order"; api: ScopedApi }) {
 
 function LineDraftTable({
   lines,
+  currency,
   onRemove
 }: {
   lines: DraftLine[];
+  currency: string;
   onRemove: (index: number) => void;
 }) {
   return lines.length ? (
-    <table>
+    <CommercialTable name="Draft commercial lines">
       <thead>
         <tr>
           <th>Line</th>
           <th>Type</th>
-          <th>Quantity</th>
-          <th>Unit price</th>
+          <th className="nox-numeric">Quantity</th>
+          <th className="nox-numeric">Unit price</th>
           <th>Action</th>
         </tr>
       </thead>
@@ -721,8 +1228,8 @@ function LineDraftTable({
           <tr key={`${line.lineKind}-${line.titleSnapshot}-${index}`}>
             <td>{line.titleSnapshot}</td>
             <td>{line.lineKind}</td>
-            <td>{line.lineKind === "SERVICE_SCOPE" ? "1 service" : `${line.quantityValue} mg`}</td>
-            <td>{line.unitPriceMinor}</td>
+            <td className="nox-numeric">{quantityLabel(line.quantityValue, line.lineKind)}</td>
+            <td className="nox-numeric">{amountLabel(line.unitPriceMinor, currency)}</td>
             <td>
               <button type="button" onClick={() => onRemove(index)}>
                 Remove
@@ -731,7 +1238,7 @@ function LineDraftTable({
           </tr>
         ))}
       </tbody>
-    </table>
+    </CommercialTable>
   ) : (
     <p>No commercial lines added.</p>
   );
@@ -747,6 +1254,27 @@ function QuoteDetail({ api, permissions }: { api: ScopedApi; permissions: string
   const [data, setData] = useState<any>();
   const [error, setError] = useState<string>();
   const [working, setWorking] = useState(false);
+  const workspaceObject = useMemo(
+    () =>
+      !error && data?.quote?.id === quoteId
+        ? {
+            id: data.quote.id,
+            objectType: "CommercialQuote",
+            title: `${data.quote.quote_number} · Rev ${data.quote.revision_number}`,
+            route: `/commercial-orders/quotes/${data.quote.id}`,
+            properties: [
+              { label: "Status", value: data.quote.status },
+              {
+                label: "Customer",
+                value: data.quote.customer_display_name_snapshot ?? data.quote.customer_id
+              },
+              { label: "Currency", value: data.quote.currency_code }
+            ]
+          }
+        : undefined,
+    [data, quoteId, error]
+  );
+  useWorkspaceObject(workspaceObject);
   const nav = useNavigate();
   const refresh = useCallback(
     () =>
@@ -777,7 +1305,7 @@ function QuoteDetail({ api, permissions }: { api: ScopedApi; permissions: string
   if (!data) return <Problem error={error} />;
   const quote = data.quote;
   return (
-    <section>
+    <section className="nox-commercial-workspace">
       <p className="nox-ai-context">QUOTE · {quote.status}</p>
       <h1>
         {quote.quote_number} · Rev {quote.revision_number}
@@ -785,7 +1313,7 @@ function QuoteDetail({ api, permissions }: { api: ScopedApi; permissions: string
       <p>
         {quote.customer_display_name_snapshot ?? quote.customer_id} · {quote.currency_code}
       </p>
-      <LineTable lines={data.lines} />
+      <LineTable lines={data.lines} currency={quote.currency_code} />
       <p>
         Commercial amount: {quote.commercialAmountMinor} {quote.currency_code} minor units.
       </p>
@@ -846,6 +1374,28 @@ function OrderDetail({ api, permissions }: { api: ScopedApi; permissions: string
   const [data, setData] = useState<any>();
   const [error, setError] = useState<string>();
   const [working, setWorking] = useState(false);
+  const workspaceObject = useMemo(
+    () =>
+      !error && data?.order?.id === orderId
+        ? {
+            id: data.order.id,
+            objectType: "CommercialOrder",
+            title: data.order.order_number,
+            route: `/commercial-orders/${data.order.id}`,
+            properties: [
+              { label: "Status", value: data.order.status },
+              {
+                label: "Customer",
+                value: data.order.customer_display_name_snapshot ?? data.order.customer_id
+              },
+              { label: "Fulfillment", value: data.order.fulfillmentStatus },
+              { label: "Shipping", value: data.order.shippingStatus }
+            ]
+          }
+        : undefined,
+    [data, orderId, error]
+  );
+  useWorkspaceObject(workspaceObject);
   const refresh = useCallback(
     () =>
       void api<any>(`/commercial-orders/orders/${orderId}`)
@@ -874,13 +1424,13 @@ function OrderDetail({ api, permissions }: { api: ScopedApi; permissions: string
   if (!data) return <Problem error={error} />;
   const order = data.order;
   return (
-    <section>
+    <section className="nox-commercial-workspace">
       <p className="nox-ai-context">COMMERCIAL ORDER · {order.status}</p>
       <h1>{order.order_number}</h1>
       <p>
         {order.customer_display_name_snapshot ?? order.customer_id} · {order.currency_code}
       </p>
-      <dl>
+      <dl className="nox-commercial-facts">
         <dt>Commercial status</dt>
         <dd>{order.status}</dd>
         <dt>Allocation status</dt>
@@ -890,7 +1440,7 @@ function OrderDetail({ api, permissions }: { api: ScopedApi; permissions: string
         <dt>Shipment status</dt>
         <dd>{order.shippingStatus}</dd>
       </dl>
-      <LineTable lines={data.lines} />
+      <LineTable lines={data.lines} currency={order.currency_code} />
       <section>
         <h2>Allocation</h2>
         <AllocationList
@@ -910,6 +1460,8 @@ function OrderDetail({ api, permissions }: { api: ScopedApi; permissions: string
           orderId={orderId}
           fulfillments={data.fulfillments}
           order={order}
+          orderLines={data.lines}
+          allocations={data.allocations}
           onChange={refresh}
           permissions={permissions}
         />
@@ -953,16 +1505,16 @@ function OrderDetail({ api, permissions }: { api: ScopedApi; permissions: string
     </section>
   );
 }
-function LineTable({ lines }: { lines: any[] }) {
+function LineTable({ lines, currency }: { lines: any[]; currency: string }) {
   return (
-    <table>
+    <CommercialTable name="Commercial lines">
       <thead>
         <tr>
           <th>Line</th>
           <th>Kind</th>
-          <th>Quantity</th>
-          <th>Price</th>
-          <th>Discount</th>
+          <th className="nox-numeric">Quantity</th>
+          <th className="nox-numeric">Price / basis</th>
+          <th className="nox-numeric">Discount</th>
         </tr>
       </thead>
       <tbody>
@@ -970,15 +1522,23 @@ function LineTable({ lines }: { lines: any[] }) {
           <tr key={l.id}>
             <td>{l.title_snapshot}</td>
             <td>{l.line_kind}</td>
-            <td>{l.ordered_quantity ?? l.quantity_value}</td>
-            <td>
-              {l.unit_price_minor}/{l.price_basis_quantity}
+            <td className="nox-numeric">
+              {quantityLabel(l.ordered_quantity ?? l.quantity_value, l.line_kind)}
             </td>
-            <td>{l.discount_minor}</td>
+            <td className="nox-numeric">
+              {amountLabel(l.unit_price_minor, currency)} /{" "}
+              {quantityLabel(l.price_basis_quantity, l.line_kind)}
+            </td>
+            <td className="nox-numeric">{amountLabel(l.discount_minor, currency)}</td>
           </tr>
         ))}
+        {lines.length === 0 ? (
+          <tr>
+            <td colSpan={5}>No commercial lines recorded.</td>
+          </tr>
+        ) : null}
       </tbody>
-    </table>
+    </CommercialTable>
   );
 }
 function AllocationList({
@@ -997,11 +1557,11 @@ function AllocationList({
     onChange();
   };
   return allocations.length ? (
-    <table>
+    <CommercialTable name="Allocations">
       <thead>
         <tr>
           <th>Type</th>
-          <th>Quantity</th>
+          <th className="nox-numeric">Quantity</th>
           <th>State</th>
           <th>Lot / Batch</th>
           <th>Action</th>
@@ -1011,14 +1571,20 @@ function AllocationList({
         {allocations.map((a) => (
           <tr key={a.id}>
             <td>{a.allocation_type}</td>
-            <td>{a.quantity_value}</td>
+            <td className="nox-numeric">{quantityLabel(a.quantity_value, "PHYSICAL")}</td>
             <td>{a.state}</td>
             <td>{a.material_lot_id ?? a.production_batch_id}</td>
             <td>
               {canManage && a.state === "ACTIVE" ? (
-                <button type="button" onClick={() => void release(a.id)}>
-                  Release allocation
-                </button>
+                <CommercialAction
+                  label="Release allocation"
+                  target={a.id}
+                  state={a.state}
+                  version={a.updated_at}
+                  permission="module.commercial-orders.allocation.manage"
+                  effect={`Release this allocation of ${a.quantity_value} mg. This is not stock disposal or shipment.`}
+                  onConfirm={() => release(a.id)}
+                />
               ) : (
                 "—"
               )}
@@ -1026,7 +1592,7 @@ function AllocationList({
           </tr>
         ))}
       </tbody>
-    </table>
+    </CommercialTable>
   ) : (
     <p>No allocation recorded.</p>
   );
@@ -1151,6 +1717,8 @@ function FulfillmentList({
   orderId,
   order,
   fulfillments,
+  orderLines,
+  allocations,
   onChange,
   permissions
 }: {
@@ -1158,12 +1726,13 @@ function FulfillmentList({
   orderId: string;
   order: any;
   fulfillments: any[];
+  orderLines: any[];
+  allocations: any[];
   onChange: () => void;
   permissions: string[];
 }) {
-  const create = async () => {
-    const fulfillmentNumber = window.prompt("Fulfillment number");
-    if (!fulfillmentNumber) return;
+  const [editingId, setEditingId] = useState<string>();
+  const create = async (fulfillmentNumber: string) => {
     await api(`/commercial-orders/orders/${orderId}/fulfillments`, {
       method: "POST",
       body: { fulfillmentNumber }
@@ -1177,21 +1746,7 @@ function FulfillmentList({
     });
     onChange();
   };
-  const setLines = async (fulfillmentId: string) => {
-    const raw = window.prompt(
-      "Fulfillment lines JSON: orderLineId, allocationId (physical only), quantityValue",
-      "[]"
-    );
-    if (!raw) return;
-    await api(`/commercial-orders/fulfillments/${fulfillmentId}/lines`, {
-      method: "PUT",
-      body: { lines: JSON.parse(raw) }
-    });
-    onChange();
-  };
-  const createShipment = async (fulfillmentId: string) => {
-    const shipmentNumber = window.prompt("Shipment number");
-    if (!shipmentNumber) return;
+  const createShipment = async (fulfillmentId: string, shipmentNumber: string) => {
     await api(`/commercial-orders/fulfillments/${fulfillmentId}/shipment`, {
       method: "POST",
       body: { shipmentNumber, shipToSnapshot: order.ship_to_snapshot ?? {} }
@@ -1200,7 +1755,7 @@ function FulfillmentList({
   };
   return (
     <>
-      <table>
+      <CommercialTable name="Fulfillments">
         <thead>
           <tr>
             <th>Fulfillment</th>
@@ -1218,48 +1773,81 @@ function FulfillmentList({
               <td>
                 {f.status === "DRAFT" &&
                 permission(permissions, "module.commercial-orders.fulfillment.edit") ? (
-                  <button type="button" onClick={() => void setLines(f.id)}>
+                  <button type="button" onClick={() => setEditingId(f.id)}>
                     Set exact lines
                   </button>
                 ) : null}
                 {f.status === "DRAFT" &&
                 permission(permissions, "module.commercial-orders.fulfillment.confirm") ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          "Confirm Fulfillment and consume its exact active allocations?"
-                        )
-                      )
-                        void action(f.id, "confirm");
-                    }}
-                  >
-                    Confirm & consume
-                  </button>
+                  <CommercialAction
+                    label="Confirm & consume"
+                    target={`${f.fulfillment_number} · ${f.id}`}
+                    state={f.status}
+                    version={f.updated_at}
+                    disabled={order.status !== "CONFIRMED"}
+                    permission="module.commercial-orders.fulfillment.confirm"
+                    effect="Confirm the saved exact fulfillment lines and consume their active physical allocations atomically. This does not mark a Shipment delivered."
+                    onConfirm={() => action(f.id, "confirm")}
+                  />
                 ) : null}
                 {f.status === "DRAFT" &&
                 permission(permissions, "module.commercial-orders.fulfillment.cancel") ? (
-                  <button
-                    type="button"
-                    onClick={() => void action(f.id, "cancel", { reason: "Cancelled" })}
-                  >
-                    Cancel
-                  </button>
+                  <CommercialAction
+                    label="Cancel Fulfillment"
+                    target={`${f.fulfillment_number} · ${f.id}`}
+                    state={f.status}
+                    version={f.updated_at}
+                    permission="module.commercial-orders.fulfillment.cancel"
+                    input={{ label: "Cancellation reason", maxLength: 2000 }}
+                    effect="Cancel this draft fulfillment. No automatic stock return is performed."
+                    onConfirm={(reason) => action(f.id, "cancel", { reason })}
+                  />
                 ) : null}
                 {f.status === "CONFIRMED" &&
                 permission(permissions, "module.commercial-orders.shipment.create") ? (
-                  <button type="button" onClick={() => void createShipment(f.id)}>
-                    Create Shipment
-                  </button>
+                  <CommercialAction
+                    label="Create Shipment"
+                    target={`${f.fulfillment_number} · ${f.id}`}
+                    state={f.status}
+                    version={f.updated_at}
+                    permission="module.commercial-orders.shipment.create"
+                    input={{ label: "Shipment number", maxLength: 80 }}
+                    effect="Create a draft shipment for this confirmed fulfillment using the Order's shipping-address snapshot. This does not mark it shipped."
+                    onConfirm={(number) => createShipment(f.id, number)}
+                  />
                 ) : null}
               </td>
             </tr>
           ))}
+          {fulfillments.length === 0 ? (
+            <tr>
+              <td colSpan={4}>No fulfillment recorded.</td>
+            </tr>
+          ) : null}
         </tbody>
-      </table>
+      </CommercialTable>
+      {editingId && permission(permissions, "module.commercial-orders.fulfillment.edit") ? (
+        <FulfillmentLines
+          api={api}
+          fulfillmentId={editingId}
+          orderId={orderId}
+          orderLines={orderLines}
+          allocations={allocations}
+          onClose={() => setEditingId(undefined)}
+        />
+      ) : null}
       {permission(permissions, "module.commercial-orders.fulfillment.create") ? (
-        <button onClick={() => void create()}>Create Draft Fulfillment</button>
+        <CommercialAction
+          label="Create Draft Fulfillment"
+          target={`${order.order_number} · ${orderId}`}
+          state={order.status}
+          version={order.updated_at}
+          disabled={order.status !== "CONFIRMED"}
+          permission="module.commercial-orders.fulfillment.create"
+          input={{ label: "Fulfillment number", maxLength: 80 }}
+          effect="Create one draft fulfillment. Creating a draft does not consume stock; exact lines must be saved and explicitly confirmed."
+          onConfirm={create}
+        />
       ) : null}
     </>
   );
@@ -1283,7 +1871,7 @@ function ShipmentList({
     onChange();
   };
   return shipments.length ? (
-    <table>
+    <CommercialTable name="Shipments">
       <thead>
         <tr>
           <th>Shipment</th>
@@ -1301,30 +1889,46 @@ function ShipmentList({
             <td>
               {s.status === "DRAFT" &&
               permission(permissions, "module.commercial-orders.shipment.ship") ? (
-                <button type="button" onClick={() => void action(s.id, "ship")}>
-                  Mark Shipped
-                </button>
+                <CommercialAction
+                  label="Mark Shipped"
+                  target={`${s.shipment_number} · ${s.id}`}
+                  state={s.status}
+                  version={s.updated_at}
+                  permission="module.commercial-orders.shipment.ship"
+                  effect="Record this shipment as shipped. Delivery remains a separate explicit action."
+                  onConfirm={() => action(s.id, "ship")}
+                />
               ) : null}
               {s.status === "SHIPPED" &&
               permission(permissions, "module.commercial-orders.shipment.deliver") ? (
-                <button type="button" onClick={() => void action(s.id, "deliver")}>
-                  Mark Delivered
-                </button>
+                <CommercialAction
+                  label="Mark Delivered"
+                  target={`${s.shipment_number} · ${s.id}`}
+                  state={s.status}
+                  version={s.updated_at}
+                  permission="module.commercial-orders.shipment.deliver"
+                  effect="Record delivery of this shipped shipment. This does not approve or release a Production Batch."
+                  onConfirm={() => action(s.id, "deliver")}
+                />
               ) : null}
               {s.status === "DRAFT" &&
               permission(permissions, "module.commercial-orders.shipment.cancel") ? (
-                <button
-                  type="button"
-                  onClick={() => void action(s.id, "cancel", { reason: "Cancelled" })}
-                >
-                  Cancel
-                </button>
+                <CommercialAction
+                  label="Cancel Shipment"
+                  target={`${s.shipment_number} · ${s.id}`}
+                  state={s.status}
+                  version={s.updated_at}
+                  permission="module.commercial-orders.shipment.cancel"
+                  input={{ label: "Cancellation reason", maxLength: 2000 }}
+                  effect="Cancel this draft shipment. This does not undo its confirmed fulfillment or return stock."
+                  onConfirm={(reason) => action(s.id, "cancel", { reason })}
+                />
               ) : null}
             </td>
           </tr>
         ))}
       </tbody>
-    </table>
+    </CommercialTable>
   ) : (
     <p>No Shipment recorded.</p>
   );

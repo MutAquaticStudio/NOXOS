@@ -1,4 +1,6 @@
 import type { Sql, TransactionSql } from "postgres";
+import { createHash } from "node:crypto";
+import { lockFinalTrialEvidence } from "./trial-sensory-store.js";
 import {
   DesignStudioProblem,
   computeFormulaCandidateId,
@@ -25,6 +27,42 @@ type SqlExecutor = Sql | TransactionSql;
 
 function databaseJson(value: unknown): never {
   return JSON.parse(JSON.stringify(value)) as never;
+}
+
+// Creation fingerprint only. Request tracing is not part of user intent, and
+// JSON object key order must not turn a legitimate retry into a conflict.
+function creationHash(value: unknown): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(value, (_key, entry) =>
+        entry && typeof entry === "object" && !Array.isArray(entry)
+          ? Object.fromEntries(
+              Object.entries(entry).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+            )
+          : entry
+      )
+    )
+    .digest("hex");
+}
+
+function revisionPayloadHash(candidate: FreezeFormulaInput["candidate"]): string {
+  return creationHash({
+    ...candidate,
+    lines: candidate.lines.map((line) => ({
+      ...line,
+      // Retrieval time is not Material truth. snapshotHash/source update time stay bound.
+      materialSnapshot: { ...line.materialSnapshot, capturedAt: null }
+    }))
+  });
+}
+
+function rejectCreationConflict(existingHash: string | undefined, expectedHash: string | null) {
+  if (!existingHash || existingHash !== expectedHash)
+    throw new DesignStudioProblem(
+      409,
+      "IDEMPOTENCY_KEY_CONFLICT",
+      "This operation key was used for a different creation request."
+    );
 }
 
 type ProjectRow = {
@@ -118,18 +156,46 @@ function brief(row: BriefRow): DesignBrief {
 class PostgresDesignStudioStore implements DesignStudioStore {
   constructor(private readonly sql: SqlExecutor) {}
 
-  async createProject(input: {
-    tenantId: string;
-    name: string;
-    description: string | null;
-    actorUserId: string;
-  }): Promise<DesignProject> {
-    const rows = await this.sql<ProjectRow[]>`
-      insert into design_studio.projects (tenant_id, name, description, created_by_user_id)
-      values (${input.tenantId}, ${input.name}, ${input.description}, ${input.actorUserId})
-      returning id, tenant_id, name, description, status, created_by_user_id, created_at, updated_at
-    `;
-    return project(rows[0]);
+  async createProject(
+    input: Parameters<DesignStudioStore["createProject"]>[0]
+  ): Promise<DesignProject> {
+    if (!("begin" in this.sql))
+      throw new Error("Creation requires a transaction-capable SQL client.");
+    const hash = input.operationKey
+      ? creationHash({ name: input.name, description: input.description })
+      : null;
+    return this.sql.begin(async (tx) => {
+      const rows = await tx<ProjectRow[]>`
+        insert into design_studio.projects (
+          tenant_id, name, description, created_by_user_id, creation_key, creation_payload_hash
+        ) values (
+          ${input.tenantId}, ${input.name}, ${input.description}, ${input.actorUserId},
+          ${input.operationKey ?? null}, ${hash}
+        )
+        on conflict (tenant_id, created_by_user_id, creation_key) do nothing
+        returning id, tenant_id, name, description, status, created_by_user_id, created_at, updated_at
+      `;
+      if (!rows[0]) {
+        const existing = await tx<(ProjectRow & { creation_payload_hash: string })[]>`
+          select * from design_studio.projects
+          where tenant_id = ${input.tenantId} and created_by_user_id = ${input.actorUserId}
+            and creation_key = ${input.operationKey ?? null}
+        `;
+        rejectCreationConflict(existing[0]?.creation_payload_hash, hash);
+        return project(existing[0]);
+      }
+      const value = project(rows[0]);
+      await new PostgresDesignStudioStore(tx).recordAudit({
+        tenantId: input.tenantId,
+        actorUserId: input.actorUserId,
+        action: "project.created",
+        resourceType: "DesignProject",
+        resourceId: value.id,
+        requestId: input.requestId,
+        correlationId: input.correlationId
+      });
+      return value;
+    }) as Promise<DesignProject>;
   }
 
   async listProjects(tenantId: string): Promise<DesignProject[]> {
@@ -151,29 +217,55 @@ class PostgresDesignStudioStore implements DesignStudioStore {
     return rows[0] ? project(rows[0]) : undefined;
   }
 
-  async createBrief(input: {
-    tenantId: string;
-    projectId: string;
-    workflowMode: DesignBrief["workflowMode"];
-    rawBrief: string;
-    briefPayload: Record<string, unknown>;
-    normalizedIntent: NonNullable<DesignBrief["normalizedIntent"]>;
-    actorUserId: string;
-  }): Promise<DesignBrief> {
-    const rows = await this.sql<BriefRow[]>`
+  async createBrief(input: Parameters<DesignStudioStore["createBrief"]>[0]): Promise<DesignBrief> {
+    if (!("begin" in this.sql))
+      throw new Error("Creation requires a transaction-capable SQL client.");
+    const hash = input.operationKey
+      ? creationHash({
+          projectId: input.projectId,
+          workflowMode: input.workflowMode,
+          rawBrief: input.rawBrief,
+          briefPayload: input.briefPayload,
+          normalizedIntent: input.normalizedIntent
+        })
+      : null;
+    return this.sql.begin(async (tx) => {
+      const rows = await tx<BriefRow[]>`
       insert into design_studio.design_briefs (
         tenant_id, project_id, workflow_mode, raw_brief, brief_payload,
-        normalized_intent, created_by_user_id
+        normalized_intent, created_by_user_id, creation_key, creation_payload_hash
       ) values (
         ${input.tenantId}, ${input.projectId}, ${input.workflowMode}, ${input.rawBrief},
-        ${this.sql.json(databaseJson(input.briefPayload))}, ${this.sql.json(databaseJson(input.normalizedIntent))},
-        ${input.actorUserId}
+        ${tx.json(databaseJson(input.briefPayload))}, ${tx.json(databaseJson(input.normalizedIntent))},
+        ${input.actorUserId}, ${input.operationKey ?? null}, ${hash}
       )
+      on conflict (tenant_id, created_by_user_id, creation_key) do nothing
       returning id, tenant_id, project_id, workflow_mode, status, raw_brief, brief_payload,
                 normalized_intent, accord_architecture_plan, confirmed_by_user_id, confirmed_at,
                 created_by_user_id, created_at, updated_at
     `;
-    return brief(rows[0]);
+      if (!rows[0]) {
+        const existing = await tx<(BriefRow & { creation_payload_hash: string })[]>`
+        select * from design_studio.design_briefs
+        where tenant_id = ${input.tenantId} and created_by_user_id = ${input.actorUserId}
+          and creation_key = ${input.operationKey ?? null}
+      `;
+        rejectCreationConflict(existing[0]?.creation_payload_hash, hash);
+        return brief(existing[0]);
+      }
+      const value = brief(rows[0]);
+      await new PostgresDesignStudioStore(tx).recordAudit({
+        tenantId: input.tenantId,
+        actorUserId: input.actorUserId,
+        action: "brief.updated",
+        resourceType: "DesignBrief",
+        resourceId: value.id,
+        requestId: input.requestId,
+        correlationId: input.correlationId,
+        metadata: { operation: "CREATED" }
+      });
+      return value;
+    }) as Promise<DesignBrief>;
   }
 
   async findBrief(tenantId: string, briefId: string): Promise<DesignBrief | undefined> {
@@ -288,6 +380,67 @@ class PostgresDesignStudioStore implements DesignStudioStore {
         }
         formulaId = parent.formula_id;
         formulaName = parent.name;
+        if (
+          !input.sourceTrialId ||
+          !input.sourceEvaluationId ||
+          !(await lockFinalTrialEvidence(
+            tx,
+            {
+              tenantId: input.tenantId,
+              formulaVersionId: input.parentFormulaVersionId,
+              sourceTrialId: input.sourceTrialId,
+              sourceEvaluationId: input.sourceEvaluationId
+            },
+            "REVISION_REQUIRED"
+          ))
+        ) {
+          throw new DesignStudioProblem(
+            409,
+            "REVISION_CONTEXT_INVALID",
+            "Revision evidence is no longer valid."
+          );
+        }
+        // The locked parent Formula serializes this exact sensory intent. Reuse
+        // the existing atomic audit rather than add another revision authority.
+        const previous = await tx<
+          { resource_id: string; metadata: { revisionPayloadHash?: string } }[]
+        >`
+          select resource_id, metadata from platform.audit_events
+          where tenant_id = ${input.tenantId} and action = 'formula.generated'
+            and resource_type = 'FormulaVersion'
+            and metadata->>'operation' = 'SENSORY_REVISION'
+            and metadata->>'parentFormulaVersionId' = ${input.parentFormulaVersionId}
+            and metadata->>'sourceTrialId' = ${input.sourceTrialId}
+            and metadata->>'sourceEvaluationId' = ${input.sourceEvaluationId}
+            and metadata->>'strategy' = ${input.candidate.generationStrategy}
+        `;
+        if (previous.length) {
+          if (
+            previous.length !== 1 ||
+            previous[0].metadata.revisionPayloadHash !== revisionPayloadHash(input.candidate)
+          )
+            throw new DesignStudioProblem(
+              409,
+              "IDEMPOTENCY_KEY_CONFLICT",
+              "This sensory revision was already frozen with different or unverifiable input."
+            );
+          const replay = await new PostgresDesignStudioStore(tx).findFrozenFormulaVersion(
+            input.tenantId,
+            previous[0].resource_id
+          );
+          if (
+            !replay ||
+            replay.formulaId !== formulaId ||
+            replay.parentFormulaVersionId !== input.parentFormulaVersionId ||
+            replay.generationStrategy !== input.candidate.generationStrategy
+          )
+            throw new DesignStudioProblem(
+              409,
+              "REVISION_CONTEXT_INVALID",
+              "The prior revision result is unavailable."
+            );
+          return replay;
+        }
         const nextRows = await tx<{ version_number: number }[]>`
           select coalesce(max(version_number), 0)::integer + 1 as version_number
           from design_studio.formula_versions
@@ -378,6 +531,7 @@ class PostgresDesignStudioStore implements DesignStudioStore {
             ${formulaVersionId}, ${input.requestId}, ${input.correlationId},
             ${tx.json({
               operation: "SENSORY_REVISION",
+              revisionPayloadHash: revisionPayloadHash(input.candidate),
               generationStrategy: input.candidate.generationStrategy,
               parentFormulaVersionId: input.parentFormulaVersionId,
               sourceTrialId: input.sourceTrialId,
@@ -515,6 +669,13 @@ class PostgresDesignStudioStore implements DesignStudioStore {
     if (!("begin" in this.sql))
       throw new Error("Approval requires a transaction-capable SQL client.");
     const changed = await this.sql.begin(async (tx) => {
+      if (!(await lockFinalTrialEvidence(tx, input, "READY_FOR_APPROVAL"))) {
+        throw new DesignStudioProblem(
+          409,
+          "APPROVAL_EVIDENCE_INVALID",
+          "Approval evidence is no longer valid."
+        );
+      }
       const rows = await tx<{ formula_id: string; composition_kind: string }[]>`
         update design_studio.formula_versions as version set
           approval_state = 'APPROVED', approved_by_user_id = ${input.actorUserId},

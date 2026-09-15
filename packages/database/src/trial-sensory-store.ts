@@ -1,4 +1,5 @@
 import type { Sql, TransactionSql } from "postgres";
+import { isFinalTrialEvidence, TrialSensoryProblem } from "@nox-os/trial-sensory";
 import type {
   SensoryDelta,
   SensoryEvaluation,
@@ -11,6 +12,56 @@ import {
 } from "./inventory-store.js";
 
 type SqlExecutor = Sql | TransactionSql;
+
+/** Read-only cross-gate seam: hold evidence stable until the caller commits. */
+export async function lockFinalTrialEvidence(
+  tx: TransactionSql,
+  input: {
+    tenantId: string;
+    formulaVersionId: string;
+    sourceTrialId: string;
+    sourceEvaluationId: string;
+  },
+  decision: "READY_FOR_APPROVAL" | "REVISION_REQUIRED"
+): Promise<boolean> {
+  const trials = await tx<Pick<TrialRow, "id" | "tenant_id" | "status" | "formula_version_id">[]>`
+    select id, tenant_id, status, formula_version_id from trial_sensory.trials
+    where tenant_id = ${input.tenantId} and id = ${input.sourceTrialId}
+    for share
+  `;
+  const trial = trials[0];
+  if (!trial) return false;
+  const evaluations = await tx<
+    Pick<EvaluationRow, "tenant_id" | "trial_id" | "status" | "decision" | "finalized_at">[]
+  >`
+    select tenant_id, trial_id, status, decision, finalized_at
+    from trial_sensory.sensory_evaluations
+    where tenant_id = ${input.tenantId} and trial_id = ${input.sourceTrialId}
+      and id = ${input.sourceEvaluationId}
+    for share
+  `;
+  const evaluation = evaluations[0];
+  return (
+    !!evaluation &&
+    isFinalTrialEvidence(
+      {
+        id: trial.id,
+        tenantId: trial.tenant_id,
+        status: trial.status,
+        formulaVersionId: trial.formula_version_id
+      },
+      {
+        tenantId: evaluation.tenant_id,
+        trialId: evaluation.trial_id,
+        status: evaluation.status,
+        decision: evaluation.decision,
+        finalizedAt: evaluation.finalized_at
+      },
+      decision,
+      input.formulaVersionId
+    )
+  );
+}
 
 type TrialRow = {
   id: string;
@@ -494,6 +545,42 @@ class PostgresTrialSensoryStore implements TrialSensoryStore {
     return changed
       ? loadEvaluation(this.sql, input.tenantId, input.trialId, input.evaluationId)
       : undefined;
+  }
+
+  async recordRevisionRequest(
+    input: Parameters<TrialSensoryStore["recordRevisionRequest"]>[0]
+  ): Promise<void> {
+    await this.sql.begin(async (tx) => {
+      // The existing Trial is the serialization point; no persisted candidate model.
+      await tx`select id from trial_sensory.trials where tenant_id = ${input.tenantId}
+        and id = ${input.sourceTrialId} for update`;
+      if (
+        !(await lockFinalTrialEvidence(
+          tx,
+          { ...input, formulaVersionId: input.parentFormulaVersionId },
+          "REVISION_REQUIRED"
+        ))
+      )
+        throw new TrialSensoryProblem(
+          409,
+          "REVISION_NOT_ALLOWED",
+          "Revision evidence is no longer valid."
+        );
+      const prior = await tx`select id from platform.audit_events
+        where tenant_id = ${input.tenantId} and action = 'revision.requested'
+          and resource_type = 'SensoryEvaluation' and resource_id = ${input.sourceEvaluationId}`;
+      if (prior.length) return;
+      await audit(tx, {
+        ...input,
+        action: "revision.requested",
+        resourceType: "SensoryEvaluation",
+        resourceId: input.sourceEvaluationId,
+        metadata: {
+          sourceTrialId: input.sourceTrialId,
+          parentFormulaVersionId: input.parentFormulaVersionId
+        }
+      });
+    });
   }
 
   recordAudit(input: Parameters<TrialSensoryStore["recordAudit"]>[0]): Promise<void> {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Route, Routes, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import type { FormulaCandidate, OsmoTaxonomyAssignmentType } from "@nox-os/design-studio/browser";
+import type { OsmoTaxonomyAssignmentType } from "@nox-os/design-studio/browser";
 import {
   formatMassMg,
   type FinalEvaluationDecision,
@@ -10,6 +10,8 @@ import {
   type TrialPreparationPlan
 } from "@nox-os/trial-sensory/browser";
 import type { ApiClient } from "./platform-control";
+import { useWorkspaceObject, useUnsavedChanges } from "@nox-os/ui";
+import { resolveDevelopmentContext, type PhaseFormula } from "./development-context";
 
 const permissions = {
   read: "module.trial-sensory.trial.read",
@@ -19,10 +21,7 @@ const permissions = {
   createEvaluation: "module.trial-sensory.evaluation.create",
   editEvaluation: "module.trial-sensory.evaluation.edit",
   finalizeEvaluation: "module.trial-sensory.evaluation.finalize",
-  revision: "module.trial-sensory.revision.request",
   recommendApproval: "module.trial-sensory.approval.recommend",
-  freezeRevision: "module.design-studio.formula.freeze",
-  approveFormula: "module.design-studio.formula.approve",
   inventoryRead: "module.inventory.read"
 } as const;
 
@@ -306,22 +305,79 @@ function TrialDetail({
 }) {
   const navigate = useNavigate();
   const { trialId = "" } = useParams();
+  const [viewParams, setViewParams] = useSearchParams();
   const [trial, setTrial] = useState<TrialPayload>();
   const [formula, setFormula] = useState<FormulaSummary>();
+  const [phaseFormula, setPhaseFormula] = useState<PhaseFormula>();
+  const canReadFormula = modulePermissions.includes("module.design-studio.studio.read");
+  const phaseFormulaId = trial?.formulaVersionId;
+  useEffect(() => {
+    let active = true;
+    setPhaseFormula(undefined);
+    if (!canReadFormula || !phaseFormulaId) return;
+    void api<{ formulaVersion: PhaseFormula }>(
+      `/design-studio/formula-versions/${phaseFormulaId}`,
+      { tenantId }
+    )
+      .then((result) => {
+        if (active) setPhaseFormula(result.formulaVersion);
+      })
+      .catch(() => {
+        if (active) setPhaseFormula(undefined);
+      });
+    return () => {
+      active = false;
+    };
+  }, [api, tenantId, phaseFormulaId, canReadFormula]);
   const [evaluation, setEvaluation] = useState<EvaluationPayload>();
   const [taxonomy, setTaxonomy] = useState<TaxonomyChoice[]>([]);
   const [evaluationText, setEvaluationText] = useState("");
   const [diagnosticNote, setDiagnosticNote] = useState("");
+  const [unsaved, setUnsaved] = useState(false);
+  useUnsavedChanges(unsaved);
   const [medium, setMedium] = useState<EvaluationPayload["context"]["evaluationMedium"]>("BLOTTER");
   const [sampleAgeMinutes, setSampleAgeMinutes] = useState(0);
   const [temperatureC, setTemperatureC] = useState<number | null>(null);
   const [humidityPct, setHumidityPct] = useState<number | null>(null);
   const [deltas, setDeltas] = useState<SensoryDeltaDraft[]>([]);
   const [decision, setDecision] = useState<FinalEvaluationDecision>("REVISION_REQUIRED");
-  const [revisionCandidates, setRevisionCandidates] = useState<FormulaCandidate[]>([]);
   const [preparationPlan, setPreparationPlan] = useState<TrialPreparationPlan>();
   const [inventory, setInventory] = useState<TrialInventoryAvailability>();
   const [inventoryTrace, setInventoryTrace] = useState<TrialInventoryTrace>();
+  const workspaceObject = useMemo(
+    () =>
+      trial
+        ? {
+            id: trial.id,
+            objectType: "Trial",
+            title: formula?.name ? `${formula.name} · Trial` : "Trial",
+            route: `/trials/${trial.id}`,
+            development: resolveDevelopmentContext({
+              tenantId,
+              queryTenantId: trial.tenantId,
+              formulaVersionId: trial.formulaVersionId,
+              formula: phaseFormula,
+              selectedTrialId: trialId,
+              selectedEvaluationId: evaluation?.id,
+              trial,
+              evaluation,
+              permissions: modulePermissions
+            }),
+            properties: [
+              { label: "State", value: trial.status },
+              { label: "FormulaVersion", value: trial.formulaVersionId },
+              { label: "Target mass", value: formatMassMg(trial.preparation.targetMassMg) },
+              { label: "Evaluation", value: evaluation?.status ?? "Not started" },
+              {
+                label: "Decision",
+                value: evaluation?.decision?.replaceAll("_", " ") ?? "Not decided"
+              }
+            ]
+          }
+        : undefined,
+    [trial, formula?.name, evaluation, phaseFormula, tenantId, trialId, modulePermissions]
+  );
+  useWorkspaceObject(workspaceObject);
   const [allocations, setAllocations] = useState<TrialLotAllocation[]>([]);
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
@@ -480,6 +536,9 @@ function TrialDetail({
         diagnosticNote: diagnosticNote || null,
         deltas
       }
+    }).then((result) => {
+      setUnsaved(false);
+      return result;
     });
   };
 
@@ -544,7 +603,27 @@ function TrialDetail({
     [...requiredByMaterial].every(
       ([materialId, mass]) => activeReservedByMaterial.get(materialId) === mass
     );
-  if (!trial) return <p aria-busy="true">Loading Trial…</p>;
+  if (!trial)
+    return error ? (
+      <p role="alert" className="nox-design-warning">
+        {error}
+      </p>
+    ) : (
+      <p aria-busy="true">Loading Trial…</p>
+    );
+  // URL view preference only. Trial/Evaluation statuses still come from G5.
+  const requestedView = viewParams.get("view");
+  const activeView =
+    requestedView === "preparation" || requestedView === "sensory"
+      ? requestedView
+      : trial.status === "DRAFT" || !evaluation
+        ? "preparation"
+        : "sensory";
+  const selectView = (view: "preparation" | "sensory") => {
+    const next = new URLSearchParams(viewParams);
+    next.set("view", view);
+    setViewParams(next);
+  };
   const canEditEvaluation = evaluation?.status === "DRAFT" && trial.status === "PREPARED";
 
   const prompts =
@@ -569,7 +648,11 @@ function TrialDetail({
         ];
 
   return (
-    <section className="nox-trial" aria-labelledby="trial-detail-title">
+    <section
+      className="nox-trial"
+      aria-labelledby="trial-detail-title"
+      onChangeCapture={() => setUnsaved(true)}
+    >
       <header className="nox-design-header">
         <div>
           <button type="button" className="nox-design-back" onClick={() => navigate("/trials")}>
@@ -585,8 +668,52 @@ function TrialDetail({
           <strong>{formatMassMg(trial.preparation.targetMassMg)}</strong>
         </div>
       </header>
-      <div className="nox-trial-layout">
-        <section className="nox-design-plan" aria-labelledby="preparation-title">
+      <nav aria-label="Selected Trial lineage" className="nox-trial-lineage">
+        {has(modulePermissions, "module.design-studio.studio.read") ? (
+          <button
+            type="button"
+            onClick={() => navigate(`/design-studio/formula-versions/${trial.formulaVersionId}`)}
+          >
+            Formula v{formula?.versionNumber ?? "—"} · {trial.formulaVersionId.slice(0, 8)}
+          </button>
+        ) : (
+          <span>Formula · {trial.formulaVersionId.slice(0, 8)}</span>
+        )}
+        <span aria-hidden="true">→</span>
+        <span>Trial · {trial.id.slice(0, 8)}</span>
+        {evaluation ? (
+          <>
+            <span aria-hidden="true">→</span>
+            <span>
+              Evaluation · {evaluation.id.slice(0, 8)} · {evaluation.status}
+            </span>
+          </>
+        ) : null}
+      </nav>
+      <nav className="nox-local-stages" aria-label="Trial workspace views">
+        <button
+          type="button"
+          aria-current={activeView === "preparation" ? "page" : undefined}
+          onClick={() => selectView("preparation")}
+        >
+          Preparation · {statusLabel(trial.status)}
+        </button>
+        <button
+          type="button"
+          aria-current={activeView === "sensory" ? "page" : undefined}
+          onClick={() => selectView("sensory")}
+        >
+          Sensory ·{" "}
+          {evaluation?.status === "FINAL" ? "Final evidence" : evaluation ? "Draft" : "Not started"}
+        </button>
+      </nav>
+      <div className="nox-trial-layout" data-task-view={activeView}>
+        <section
+          className="nox-design-plan"
+          aria-labelledby="preparation-title"
+          hidden={activeView !== "preparation"}
+          data-screen-id="TS-01"
+        >
           <h2 id="preparation-title">Preparation</h2>
           <dl className="nox-design-intent-list">
             <div>
@@ -919,11 +1046,22 @@ function TrialDetail({
             </>
           ) : null}
         </section>
-        <section className="nox-design-panel" aria-labelledby="sensory-title">
+        <section
+          className="nox-design-panel"
+          aria-labelledby="sensory-title"
+          hidden={activeView !== "sensory"}
+        >
           <p className="nox-ai-context">
             WHOLE {trial.compositionKind === "FULL_FORMULA" ? "FORMULA" : "ACCORD"}
           </p>
           <h2 id="sensory-title">Sensory Evaluation</h2>
+          {!evaluation && trial.status !== "PREPARED" ? (
+            <p role="status">
+              {trial.status === "DRAFT"
+                ? "Prepare this Trial before starting a sensory evaluation. Inventory is consumed only by the canonical preparation command."
+                : "No sensory evaluation is available for this Trial."}
+            </p>
+          ) : null}
           <ul className="nox-trial-prompts">
             {prompts.map((prompt) => (
               <li key={prompt}>{prompt}</li>
@@ -1125,22 +1263,33 @@ function TrialDetail({
                   </button>
                   <button
                     type="button"
-                    disabled={working}
+                    disabled={
+                      working ||
+                      !evaluationText.trim() ||
+                      !has(modulePermissions, permissions.editEvaluation)
+                    }
                     onClick={() =>
-                      void action(
-                        () =>
-                          api(`/trials/${trialId}/evaluations/${evaluation.id}/interpret`, {
-                            method: "POST",
-                            tenantId
-                          }),
-                        "Interpreter suggestions loaded."
-                      )
+                      void action(async () => {
+                        if (
+                          !evaluationText.trim() ||
+                          !has(modulePermissions, permissions.editEvaluation)
+                        )
+                          throw new Error(
+                            "Record raw observations with evaluation edit permission before analysis."
+                          );
+                        await saveEvaluation();
+                        return api(`/trials/${trialId}/evaluations/${evaluation.id}/interpret`, {
+                          method: "POST",
+                          tenantId
+                        });
+                      }, "Interpreter suggestions loaded.")
                     }
                   >
-                    Interpret text
+                    Analyze evaluation
                   </button>
                   <p className="nox-design-muted">
-                    If interpretation is unavailable, manual mapping remains authoritative.
+                    Record raw human observations before analysis. If interpretation is unavailable,
+                    manual mapping remains authoritative.
                   </p>
                   <label>
                     Final decision
@@ -1182,55 +1331,18 @@ function TrialDetail({
           ) : null}
           {evaluation?.status === "FINAL" &&
           evaluation.decision === "REVISION_REQUIRED" &&
-          has(modulePermissions, permissions.revision) ? (
+          has(modulePermissions, "module.design-studio.studio.read") ? (
             <button
               type="button"
               disabled={working}
               onClick={() =>
-                void action(async () => {
-                  const response = await api<{ candidates: FormulaCandidate[] }>(
-                    `/trials/${trialId}/evaluations/${evaluation.id}/create-revision`,
-                    { method: "POST", tenantId }
-                  );
-                  setRevisionCandidates(response.candidates);
-                }, "G4 generated revision candidates from confirmed sensory intent.")
+                navigate(
+                  `/design-studio/formula-versions/${trial.formulaVersionId}?sourceTrialId=${trial.id}&sourceEvaluationId=${evaluation.id}`
+                )
               }
             >
-              Create Revision Candidates
+              Review revision in Design Studio
             </button>
-          ) : null}
-          {revisionCandidates.length > 0 ? (
-            <div>
-              <h3>G4 revision candidates</h3>
-              {revisionCandidates.map((candidate) => (
-                <button
-                  key={candidate.candidateId}
-                  type="button"
-                  disabled={working || !has(modulePermissions, permissions.freezeRevision)}
-                  onClick={() =>
-                    void action(
-                      () =>
-                        api(
-                          `/design-studio/formula-versions/${trial.formulaVersionId}/revisions/freeze`,
-                          {
-                            method: "POST",
-                            tenantId,
-                            body: {
-                              sourceTrialId: trial.id,
-                              sourceEvaluationId: evaluation!.id,
-                              strategy: candidate.generationStrategy,
-                              formulaName: formula?.name ?? "Sensory Revision"
-                            }
-                          }
-                        ),
-                      "New immutable FormulaVersion frozen with parent lineage."
-                    )
-                  }
-                >
-                  {candidate.generationStrategy} · Freeze Revision
-                </button>
-              ))}
-            </div>
           ) : null}
           {evaluation?.status === "FINAL" &&
           evaluation.decision === "READY_FOR_APPROVAL" &&
@@ -1254,22 +1366,17 @@ function TrialDetail({
           ) : null}
           {evaluation?.status === "FINAL" &&
           evaluation.decision === "READY_FOR_APPROVAL" &&
-          has(modulePermissions, permissions.approveFormula) ? (
+          has(modulePermissions, "module.design-studio.studio.read") ? (
             <button
               type="button"
               disabled={working}
               onClick={() =>
-                void action(async () => {
-                  await api(`/design-studio/formula-versions/${trial.formulaVersionId}/approve`, {
-                    method: "POST",
-                    tenantId,
-                    body: { sourceTrialId: trial.id, sourceEvaluationId: evaluation.id }
-                  });
-                  navigate(`/design-studio/formula-versions/${trial.formulaVersionId}`);
-                }, "Formula approved by G4 using FINAL G5 evidence.")
+                navigate(
+                  `/design-studio/formula-versions/${trial.formulaVersionId}?sourceTrialId=${trial.id}&sourceEvaluationId=${evaluation.id}`
+                )
               }
             >
-              Approve in Design Studio
+              Review approval in Design Studio
             </button>
           ) : null}
         </section>

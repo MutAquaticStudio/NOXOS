@@ -1,0 +1,342 @@
+:root {
+  --nox-font-sans: "Geist", "Inter", system-ui, sans-serif;
+  --nox-font-mono: "Geist Mono", "JetBrains Mono", monospace;
+
+  --nox-space-0: 0;
+  --nox-space-0-5: 2px;
+  --nox-space-1: 4px;
+  --nox-space-1-5: 6px;
+  --nox-space-2: 8px;
+  --nox-space-3: 12px;
+  --nox-space-4: 16px;
+  --nox-space-5: 20px;
+  --nox-space-6: 24px;
+  --nox-space-8: 32px;
+  --nox-space-10: 40px;
+  --nox-space-12: 48px;
+  --nox-space-16: 64px;
+
+  --nox-radius-xs: 6px;
+  --nox-radius-sm: 7px;
+  --nox-radius-md: 10px;
+  --nox-radius-lg: 12px;
+  --nox-radius-xl: 14px;
+  --nox-radius-full: 999px;
+
+  --nox-system-bar-h: 44px;
+  --nox-workspace-tabs-h: 36px;
+  --nox-status-bar-h: 24px;
+  --nox-app-rail-expanded-w: 216px;
+  --nox-app-rail-collapsed-w: 52px;
+  --nox-inspector-w: 320px;
+
+  --nox-font-size-workspace: 24px;
+  --nox-line-height-workspace: 32px;
+  --nox-font-size-object: 20px;
+  --nox-line-height-object: 28px;
+  --nox-font-size-section: 15px;
+  --nox-line-height-section: 22px;
+  --nox-font-size-body: 13px;
+  --nox-line-height-body: 20px;
+  --nox-font-size-control: 12px;
+  --nox-line-height-control: 18px;
+  --nox-font-size-label: 11px;
+  --nox-line-height-label: 16px;
+  --nox-font-size-metadata: 10px;
+  --nox-line-height-metadata: 14px;
+  --nox-font-weight-regular: 400;
+  --nox-font-weight-medium: 500;
+  --nox-font-weight-semibold: 600;
+
+  --nox-control-h-compact: 28px;
+  --nox-control-h-default: 32px;
+  --nox-control-h-comfortable: 36px;
+  --nox-row-h-compact: 28px;
+  --nox-row-h-default: 34px;
+  --nox-row-h-comfortable: 40px;
+  --nox-touch-target-min: 44px;
+  --nox-touch-row-min: 48px;
+
+  --nox-motion-none: 0ms;
+  --nox-motion-instant: 80ms;
+  --nox-motion-fast: 120ms;
+  --nox-motion-standard: 160ms;
+  --nox-motion-deliberate: 220ms;
+  --nox-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  --nox-z-base: 0;
+  --nox-z-sticky: 10;
+  --nox-z-drawer: 20;
+  --nox-z-popover: 30;
+  --nox-z-menu: 40;
+  --nox-z-overlay: 50;
+  --nox-z-modal: 60;
+  --nox-z-toast: 70;
+  --nox-z-command: 80;
+  --nox-z-tooltip: 90;
+}
+
+.nox-os,
+.nox-os[data-theme="DARK"],
+.nox-os[data-theme="SYSTEM"] {
+  --nox-bg-canvas: #07080c;
+  --nox-bg-shell: #0a0c12;
+  --nox-bg-surface: #11141c;
+  --nox-bg-raised: #151923;
+  --nox-bg-strong: #1b202c;
+  --nox-bg-hover: #1b202c;
+  --nox-bg-selected: #211d35;
+  --nox-bg-disabled: #151923;
+  --nox-text-primary: #f2f4f7;
+  --nox-text-secondary: #a5abb6;
+  --nox-text-muted: #818996;
+  --nox-text-disabled: #626978;
+  --nox-border-subtle: #252a36;
+  --nox-border-control: #626b80;
+  --nox-border-strong: #778197;
+  --nox-action-primary: #8b7cff;
+  --nox-action-primary-fg: #07080c;
+  --nox-action-primary-hover: #9b90ff;
+  --nox-action-primary-pressed: #7a69f4;
+  --nox-action-secondary: #1b202c;
+  --nox-action-secondary-fg: #f2f4f7;
+  --nox-action-secondary-hover: #252a36;
+  --nox-action-secondary-pressed: #211d35;
+  --nox-action-secondary-border: #626b80;
+  --nox-action-link-fg: #9b90ff;
+  --nox-action-link-hover: #ada5ff;
+  --nox-action-link-pressed: #8b7cff;
+  --nox-action-disabled: #1b202c;
+  --nox-action-disabled-fg: #626978;
+  --nox-focus-ring: #8b7cff;
+  --nox-selection-active: #8b7cff;
+  --nox-ai-proposal: #6edbe7;
+  --nox-ai-fg: #6edbe7;
+  --nox-ai-border: #6edbe7;
+  --nox-ai-surface: #10272a;
+  --nox-status-positive-fg: #58d6a3;
+  --nox-status-positive-border: #58d6a3;
+  --nox-status-positive-surface: #10281f;
+  --nox-status-warning-fg: #f3c66c;
+  --nox-status-warning-border: #f3c66c;
+  --nox-status-warning-surface: #2a2111;
+  --nox-status-critical-fg: #ff7c8c;
+  --nox-status-critical-border: #ff7c8c;
+  --nox-status-critical-surface: #30161c;
+  --nox-status-critical-surface-hover: #401b24;
+  --nox-status-critical-surface-pressed: #4d202a;
+  --nox-status-info-fg: #71b5ff;
+  --nox-status-info-border: #71b5ff;
+  --nox-status-info-surface: #102633;
+  --nox-status-blocked-fg: #c88bff;
+  --nox-status-blocked-border: #c88bff;
+  --nox-status-blocked-surface: #291b35;
+  --nox-olfactory-top-fg: #e8b75e;
+  --nox-olfactory-top-border: #e8b75e;
+  --nox-olfactory-top-surface: #2a2416;
+  --nox-olfactory-heart-fg: #d987a8;
+  --nox-olfactory-heart-border: #d987a8;
+  --nox-olfactory-heart-surface: #2c1923;
+  --nox-olfactory-base-fg: #8b7cff;
+  --nox-olfactory-base-border: #8b7cff;
+  --nox-olfactory-base-surface: #211d35;
+  --nox-olfactory-cross-fg: #5fb9c6;
+  --nox-olfactory-cross-border: #5fb9c6;
+  --nox-olfactory-cross-surface: #11262b;
+  --nox-scrim: rgba(2, 3, 6, 0.68);
+  --nox-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --nox-shadow-2: 0 8px 24px rgba(0, 0, 0, 0.34);
+  --nox-shadow-3: 0 16px 48px rgba(0, 0, 0, 0.42);
+}
+
+.nox-os[data-theme="LIGHT"] {
+  --nox-bg-canvas: #f3f4f8;
+  --nox-bg-shell: #f0f1f5;
+  --nox-bg-surface: #ffffff;
+  --nox-bg-raised: #fafafd;
+  --nox-bg-strong: #eeeff4;
+  --nox-bg-hover: #f1f2f6;
+  --nox-bg-selected: #f0edff;
+  --nox-bg-disabled: #eeeff4;
+  --nox-text-primary: #171821;
+  --nox-text-secondary: #4f5362;
+  --nox-text-muted: #666c7a;
+  --nox-text-disabled: #8f94a1;
+  --nox-border-subtle: #d4d8e2;
+  --nox-border-control: #7c8494;
+  --nox-border-strong: #5e6675;
+  --nox-action-primary: #6653e9;
+  --nox-action-primary-fg: #ffffff;
+  --nox-action-primary-hover: #5846d7;
+  --nox-action-primary-pressed: #4e3cc7;
+  --nox-action-secondary: #eeeff4;
+  --nox-action-secondary-fg: #171821;
+  --nox-action-secondary-hover: #e3e5ec;
+  --nox-action-secondary-pressed: #d9dce6;
+  --nox-action-secondary-border: #7c8494;
+  --nox-action-link-fg: #5846d7;
+  --nox-action-link-hover: #4e3cc7;
+  --nox-action-link-pressed: #3f2daf;
+  --nox-action-disabled: #eeeff4;
+  --nox-action-disabled-fg: #8f94a1;
+  --nox-focus-ring: #5d3fd3;
+  --nox-selection-active: #6653e9;
+  --nox-ai-proposal: #0b6a75;
+  --nox-ai-fg: #0b6a75;
+  --nox-ai-border: #2f818a;
+  --nox-ai-surface: #e5f9fb;
+  --nox-status-positive-fg: #147a55;
+  --nox-status-positive-border: #278a67;
+  --nox-status-positive-surface: #e5f6ef;
+  --nox-status-warning-fg: #765400;
+  --nox-status-warning-border: #9a7310;
+  --nox-status-warning-surface: #fff6da;
+  --nox-status-critical-fg: #aa2031;
+  --nox-status-critical-border: #c84150;
+  --nox-status-critical-surface: #ffe9ec;
+  --nox-status-critical-surface-hover: #ffdae0;
+  --nox-status-critical-surface-pressed: #ffc9d2;
+  --nox-status-info-fg: #155f9e;
+  --nox-status-info-border: #377db5;
+  --nox-status-info-surface: #e8f3ff;
+  --nox-status-blocked-fg: #6f2e91;
+  --nox-status-blocked-border: #8c4fac;
+  --nox-status-blocked-surface: #f6eafe;
+  --nox-olfactory-top-fg: #7a5600;
+  --nox-olfactory-top-border: #a77a18;
+  --nox-olfactory-top-surface: #fff6db;
+  --nox-olfactory-heart-fg: #91405f;
+  --nox-olfactory-heart-border: #b55b7c;
+  --nox-olfactory-heart-surface: #fbeaf0;
+  --nox-olfactory-base-fg: #5845c8;
+  --nox-olfactory-base-border: #6653e9;
+  --nox-olfactory-base-surface: #f0edff;
+  --nox-olfactory-cross-fg: #1e6f78;
+  --nox-olfactory-cross-border: #2f818a;
+  --nox-olfactory-cross-surface: #e7f6f7;
+  --nox-scrim: rgba(17, 18, 25, 0.44);
+  --nox-shadow-1: 0 1px 2px rgba(23, 24, 33, 0.1);
+  --nox-shadow-2: 0 8px 24px rgba(23, 24, 33, 0.14);
+  --nox-shadow-3: 0 16px 48px rgba(23, 24, 33, 0.18);
+}
+
+[data-density="COMPACT"] {
+  --nox-control-h-current: var(--nox-control-h-compact);
+  --nox-row-h-current: var(--nox-row-h-compact);
+}
+
+[data-density="DEFAULT"] {
+  --nox-control-h-current: var(--nox-control-h-default);
+  --nox-row-h-current: var(--nox-row-h-default);
+}
+
+[data-density="COMFORTABLE"] {
+  --nox-control-h-current: var(--nox-control-h-comfortable);
+  --nox-row-h-current: var(--nox-row-h-comfortable);
+}
+
+[data-interaction-mode="touch"] {
+  --nox-control-h-current: max(var(--nox-control-h-default), var(--nox-touch-target-min));
+  --nox-row-h-current: max(var(--nox-row-h-default), var(--nox-touch-row-min));
+  --nox-workspace-tabs-h: var(--nox-touch-target-min);
+}
+
+@media (prefers-color-scheme: light) {
+  .nox-os[data-theme="SYSTEM"] {
+    --nox-bg-canvas: #f3f4f8;
+    --nox-bg-shell: #f0f1f5;
+    --nox-bg-surface: #ffffff;
+    --nox-bg-raised: #fafafd;
+    --nox-bg-strong: #eeeff4;
+    --nox-bg-hover: #f1f2f6;
+    --nox-bg-selected: #f0edff;
+    --nox-bg-disabled: #eeeff4;
+    --nox-text-primary: #171821;
+    --nox-text-secondary: #4f5362;
+    --nox-text-muted: #666c7a;
+    --nox-text-disabled: #8f94a1;
+    --nox-border-subtle: #d4d8e2;
+    --nox-border-control: #7c8494;
+    --nox-border-strong: #5e6675;
+    --nox-action-primary: #6653e9;
+    --nox-action-primary-fg: #ffffff;
+    --nox-action-primary-hover: #5846d7;
+    --nox-action-primary-pressed: #4e3cc7;
+    --nox-action-secondary: #eeeff4;
+    --nox-action-secondary-fg: #171821;
+    --nox-action-secondary-hover: #e3e5ec;
+    --nox-action-secondary-pressed: #d9dce6;
+    --nox-action-secondary-border: #7c8494;
+    --nox-action-link-fg: #5846d7;
+    --nox-action-link-hover: #4e3cc7;
+    --nox-action-link-pressed: #3f2daf;
+    --nox-action-disabled: #eeeff4;
+    --nox-action-disabled-fg: #8f94a1;
+    --nox-focus-ring: #5d3fd3;
+    --nox-selection-active: #6653e9;
+    --nox-ai-proposal: #0b6a75;
+    --nox-ai-fg: #0b6a75;
+    --nox-ai-border: #2f818a;
+    --nox-ai-surface: #e5f9fb;
+    --nox-status-positive-fg: #147a55;
+    --nox-status-positive-border: #278a67;
+    --nox-status-positive-surface: #e5f6ef;
+    --nox-status-warning-fg: #765400;
+    --nox-status-warning-border: #9a7310;
+    --nox-status-warning-surface: #fff6da;
+    --nox-status-critical-fg: #aa2031;
+    --nox-status-critical-border: #c84150;
+    --nox-status-critical-surface: #ffe9ec;
+    --nox-status-critical-surface-hover: #ffdae0;
+    --nox-status-critical-surface-pressed: #ffc9d2;
+    --nox-status-info-fg: #155f9e;
+    --nox-status-info-border: #377db5;
+    --nox-status-info-surface: #e8f3ff;
+    --nox-status-blocked-fg: #6f2e91;
+    --nox-status-blocked-border: #8c4fac;
+    --nox-status-blocked-surface: #f6eafe;
+    --nox-olfactory-top-fg: #7a5600;
+    --nox-olfactory-top-border: #a77a18;
+    --nox-olfactory-top-surface: #fff6db;
+    --nox-olfactory-heart-fg: #91405f;
+    --nox-olfactory-heart-border: #b55b7c;
+    --nox-olfactory-heart-surface: #fbeaf0;
+    --nox-olfactory-base-fg: #5845c8;
+    --nox-olfactory-base-border: #6653e9;
+    --nox-olfactory-base-surface: #f0edff;
+    --nox-olfactory-cross-fg: #1e6f78;
+    --nox-olfactory-cross-border: #2f818a;
+    --nox-olfactory-cross-surface: #e7f6f7;
+    --nox-scrim: rgba(17, 18, 25, 0.44);
+    --nox-shadow-1: 0 1px 2px rgba(23, 24, 33, 0.1);
+    --nox-shadow-2: 0 8px 24px rgba(23, 24, 33, 0.14);
+    --nox-shadow-3: 0 16px 48px rgba(23, 24, 33, 0.18);
+  }
+}
+
+.nox-os {
+  --nox-canvas-atelier:
+    radial-gradient(circle at 12% 10%, rgba(232, 183, 94, 0.075) 0, transparent 38%),
+    linear-gradient(135deg, #07080c 0%, #100c0d 100%);
+  --nox-canvas-sensory:
+    radial-gradient(circle at 88% 12%, rgba(88, 214, 163, 0.065) 0, transparent 40%),
+    linear-gradient(135deg, #07080c 0%, #09100d 100%);
+}
+.nox-os[data-theme="LIGHT"] {
+  --nox-canvas-atelier:
+    radial-gradient(circle at 12% 10%, #fff1e9 0, transparent 38%),
+    linear-gradient(135deg, #fff9f5 0%, #f7e7de 100%);
+  --nox-canvas-sensory:
+    radial-gradient(circle at 88% 12%, #edf8ef 0, transparent 40%),
+    linear-gradient(135deg, #fffdf8 0%, #e7f4e9 100%);
+}
+@media (prefers-color-scheme: light) {
+  .nox-os[data-theme="SYSTEM"] {
+    --nox-canvas-atelier:
+      radial-gradient(circle at 12% 10%, #fff1e9 0, transparent 38%),
+      linear-gradient(135deg, #fff9f5 0%, #f7e7de 100%);
+    --nox-canvas-sensory:
+      radial-gradient(circle at 88% 12%, #edf8ef 0, transparent 40%),
+      linear-gradient(135deg, #fffdf8 0%, #e7f4e9 100%);
+  }
+}

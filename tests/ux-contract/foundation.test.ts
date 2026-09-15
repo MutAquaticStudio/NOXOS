@@ -2,22 +2,25 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const css = readFileSync("packages/ui/src/styles.css", "utf8");
+const tokens = readFileSync("packages/ui/src/tokens.css", "utf8");
 const shell = readFileSync("packages/ui/src/index.tsx", "utf8");
+const workspaceTabs = readFileSync("packages/ui/src/workspace-tabs.tsx", "utf8");
 const app = readFileSync("apps/nox-os/src/app.tsx", "utf8");
 
 describe("frozen UX/UI foundation", () => {
   it("implements the canonical dark/light tokens, density, and motion boundary", () => {
     for (const token of [
-      "--canvas: #07080a",
-      "--shell: #0a0c0f",
-      "--accent: #8075ff",
-      "--canvas: #f5f6f7",
-      "--accent: #655be8",
-      "data-density",
-      "prefers-reduced-motion"
+      "--nox-bg-canvas: #07080C",
+      "--nox-bg-shell: #0A0C12",
+      "--nox-action-primary: #8B7CFF",
+      "--nox-action-primary-fg: #07080C",
+      "--nox-bg-canvas: #F3F4F8",
+      "--nox-action-primary: #6653E9",
+      "data-density"
     ]) {
-      expect(css).toContain(token);
+      expect(tokens.toLowerCase()).toContain(token.toLowerCase());
     }
+    expect(css).toContain("prefers-reduced-motion");
   });
 
   it("contains all structural shell surfaces with accessible semantics", () => {
@@ -27,10 +30,11 @@ describe("frozen UX/UI foundation", () => {
       "nox-workspace-tabs",
       "nox-inspector",
       "nox-command-center",
-      "nox-assist"
+      "nox-assist-content"
     ]) {
-      expect(shell).toContain(surface);
+      expect(shell + workspaceTabs).toContain(surface);
     }
+    expect(shell).toContain("<WorkspaceTabs");
     expect(shell).toContain('role="dialog"');
     expect(shell).toContain("aria-label");
     expect(shell).toContain("useShortcut");
@@ -45,6 +49,6 @@ describe("frozen UX/UI foundation", () => {
   it("keeps AI proposals confirmable and non-mutating in the foundation", () => {
     expect(shell).toContain("Suggestions remain previewable");
     expect(shell).toContain("confirmation and audit");
-    expect(shell).toContain("Business mutation is not implemented in Gate 1.");
+    expect(shell).toContain("No assistant provider is connected");
   });
 });

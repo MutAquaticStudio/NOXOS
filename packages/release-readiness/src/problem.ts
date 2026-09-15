@@ -8,6 +8,7 @@ export type ReleaseReadinessProblemCode = Extract<
   | "NOT_FOUND"
   | "PERMISSION_DENIED"
   | "TENANT_ACCESS_DENIED"
+  | "IDEMPOTENCY_CONFLICT"
 >;
 
 export class ReleaseReadinessProblem extends Error {

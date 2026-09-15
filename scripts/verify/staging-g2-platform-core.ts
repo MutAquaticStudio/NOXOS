@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { chromium } from "@playwright/test";
-import { createRuntimeDatabase, createStagingFixtureMaintenanceDatabase } from "@nox-os/database";
+import {
+  createRuntimeDatabase,
+  createStagingFixtureMaintenanceDatabase,
+  createPostgresPlatformStore
+} from "@nox-os/database";
 import { createPlatformCoreApi } from "@nox-os/platform";
 
 type FixtureUserKey = "P" | "A" | "B" | "C" | "D" | "E" | "F";
@@ -438,6 +442,30 @@ async function api<T = unknown>(
     headers?: Record<string, string>;
   } = {}
 ): Promise<ApiResult & { body: T }> {
+  let body = options.body;
+  if (
+    options.method === "PATCH" &&
+    body &&
+    typeof body === "object" &&
+    !Object.hasOwn(body, "expectedRevision")
+  ) {
+    // Acceptance-fixture setup only: read the target revision with the existing
+    // limited connection, then send the command with the tested actor. Never
+    // refresh an explicit revision or automatically retry a conflicting mutation.
+    const store = createPostgresPlatformStore(runtime);
+    const parts = path.split("/");
+    const current =
+      parts[1] === "platform" && parts[2] === "users"
+        ? await store.findPlatformUser(parts[3]!)
+        : path.includes("/members/")
+          ? await store.findTenantMembership(
+              parts[1] === "tenant" ? options.tenantId! : parts[3]!,
+              parts.at(-1)!
+            )
+          : await store.findTenant(path === "/tenant" ? options.tenantId! : parts[3]!);
+    if (!current?.revision) throw new Error("G2 acceptance target revision is unavailable.");
+    body = { ...body, expectedRevision: current.revision };
+  }
   const headers: Record<string, string> = {
     authorization: `Bearer ${accessToken}`,
     "x-vercel-protection-bypass": protectionBypass,
@@ -449,7 +477,7 @@ async function api<T = unknown>(
   const response = await fetch(new URL("/api/v1" + path, stagingUrl), {
     method: options.method ?? "GET",
     headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body)
+    body: body === undefined ? undefined : JSON.stringify(body)
   });
   return {
     status: response.status,

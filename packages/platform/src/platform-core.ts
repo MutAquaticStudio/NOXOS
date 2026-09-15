@@ -66,24 +66,53 @@ const provisionUserSchema = z.object({
   userId: uuidSchema,
   displayName: z.string().trim().min(1).max(120).nullable().optional()
 });
+const resourceRevisionSchema = z.string().regex(/^\d{1,16}\.\d{6}$/);
+function requireCurrentRevision(current: string, expected: string): void {
+  if (!current || current !== expected)
+    throw new CoreProblem(
+      409,
+      "PLATFORM_RESOURCE_STALE",
+      "This object changed. Reload its current state before saving."
+    );
+}
 const updatePlatformUserSchema = z
   .object({
+    expectedRevision: resourceRevisionSchema,
     displayName: z.string().trim().min(1).max(120).nullable().optional(),
     status: platformUserStatusSchema.optional(),
     platformRoleKey: platformRoleKeySchema.nullable().optional()
   })
-  .refine((value) => Object.keys(value).length > 0, "At least one update is required.");
+  .refine(
+    (value) =>
+      value.displayName !== undefined ||
+      value.status !== undefined ||
+      value.platformRoleKey !== undefined,
+    "At least one update is required."
+  );
 const createTenantSchema = z.object({
   name: tenantNameSchema,
   slug: tenantSlugSchema,
   initialOwnerUserId: uuidSchema
 });
-const updateTenantProfileSchema = z.object({ name: tenantNameSchema });
-const updatePlatformTenantStatusSchema = z.object({ status: tenantStatusSchema });
+const updateTenantProfileSchema = z.object({
+  name: tenantNameSchema,
+  expectedRevision: resourceRevisionSchema
+});
+const updatePlatformTenantStatusSchema = z.object({
+  status: tenantStatusSchema,
+  expectedRevision: resourceRevisionSchema
+});
 const createMembershipSchema = z.object({ userId: uuidSchema, roleKey: tenantRoleKeySchema });
 const updateMembershipSchema = z
-  .object({ roleKey: tenantRoleKeySchema.optional(), status: membershipStatusSchema.optional() })
-  .refine((value) => Object.keys(value).length > 0, "At least one update is required.");
+  .object({
+    roleKey: tenantRoleKeySchema.optional(),
+    status: membershipStatusSchema.optional(),
+    expectedRevision: resourceRevisionSchema
+  })
+  .refine(
+    (value) => value.roleKey !== undefined || value.status !== undefined,
+    "At least one update is required."
+  );
 const entitlementUpdateSchema = z.object({ enabled: z.boolean() });
 const auditQuerySchema = z.object({
   tenantId: uuidSchema.optional(),
@@ -131,6 +160,7 @@ function envelope(code: ErrorCode, message: string, requestId: string) {
 
 function userPayload(user: PlatformUserRecord) {
   return {
+    revision: user.revision,
     id: user.id,
     displayName: user.displayName,
     status: user.status,
@@ -144,6 +174,7 @@ function userPayload(user: PlatformUserRecord) {
 
 function membershipPayload(membership: TenantMembershipRecord) {
   return {
+    revision: membership.revision,
     tenantId: membership.tenantId,
     userId: membership.userId,
     roleKey: membership.roleKey,
@@ -373,6 +404,7 @@ export class PlatformCoreService {
           if (existing.name === update.name) {
             return existing;
           }
+          requireCurrentRevision(existing.revision, update.expectedRevision);
           const updated = await store.updateTenant(existing.id, { name: update.name });
           if (!updated) {
             throw new CoreProblem(403, "TENANT_ACCESS_DENIED", "Tenant access is not granted.");
@@ -583,6 +615,7 @@ export class PlatformCoreService {
           if (existing.status === update.status) {
             return existing;
           }
+          requireCurrentRevision(existing.revision, update.expectedRevision);
           const updated = await store.updateTenant(tenantId, { status: update.status });
           if (!updated) {
             throw new CoreProblem(403, "TENANT_ACCESS_DENIED", "Tenant access is not granted.");
@@ -869,12 +902,12 @@ export class PlatformCoreService {
 
   private async updatePlatformUserWithSafety(
     userId: string,
-    update: PlatformUserUpdate,
+    update: PlatformUserUpdate & { expectedRevision: string },
     context: AuthenticatedRequestContext
   ): Promise<PlatformUserRecord> {
     return this.options.store.transaction(async (store) => {
       await store.lockActivePlatformOwners();
-      const existing = await store.findPlatformUser(userId);
+      const existing = await store.lockPlatformUser(userId);
       if (!existing) {
         throw new CoreProblem(404, "PLATFORM_USER_NOT_FOUND", "PlatformUser was not found.");
       }
@@ -886,6 +919,7 @@ export class PlatformCoreService {
       if (!statusChanged && !roleChanged && !displayNameChanged) {
         return existing;
       }
+      requireCurrentRevision(existing.revision, update.expectedRevision);
       const nextStatus = update.status ?? existing.status;
       const nextRole =
         update.platformRoleKey === undefined ? existing.platformRoleKey : update.platformRoleKey;
@@ -913,7 +947,8 @@ export class PlatformCoreService {
           }
         }
       }
-      const updated = await store.updatePlatformUser(userId, update);
+      const { expectedRevision: _expectedRevision, ...fields } = update;
+      const updated = await store.updatePlatformUser(userId, fields);
       if (!updated) {
         throw new CoreProblem(404, "PLATFORM_USER_NOT_FOUND", "PlatformUser was not found.");
       }
@@ -945,7 +980,7 @@ export class PlatformCoreService {
   private async updateMembershipWithSafety(
     tenantId: string,
     userId: string,
-    update: TenantMembershipUpdate,
+    update: TenantMembershipUpdate & { expectedRevision: string },
     context: AuthenticatedRequestContext | TenantRequestContext,
     auditScope: "platform" | "tenant"
   ): Promise<TenantMembershipRecord> {
@@ -966,6 +1001,7 @@ export class PlatformCoreService {
       if (!roleChanged && !statusChanged) {
         return membership;
       }
+      requireCurrentRevision(membership.revision, update.expectedRevision);
       const next = {
         ...membership,
         roleKey: update.roleKey ?? membership.roleKey,
@@ -982,7 +1018,8 @@ export class PlatformCoreService {
           "At least one effective active TenantOwner is required."
         );
       }
-      const updated = await store.updateTenantMembership(tenantId, userId, update);
+      const { expectedRevision: _expectedRevision, ...fields } = update;
+      const updated = await store.updateTenantMembership(tenantId, userId, fields);
       if (!updated) {
         throw new CoreProblem(404, "MEMBER_NOT_FOUND", "Membership was not found.");
       }

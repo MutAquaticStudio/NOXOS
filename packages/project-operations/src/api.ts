@@ -18,6 +18,8 @@ import {
   phasePlansSchema,
   projectUuidSchema,
   reasonSchema,
+  guardedHoldSchema,
+  projectCommandGuardSchema,
   updateProjectSchema,
   updateTaskSchema
 } from "./contracts.js";
@@ -117,7 +119,13 @@ export class ProjectOperationsApi {
         this.handle(async (r) => {
           const c = await this.tenant(r, permission);
           const projectId = id(r, "projectId");
-          const input = ctx(c, r);
+          const guard =
+            action === "hold"
+              ? guardedHoldSchema.parse(r.body)
+              : action === "resume"
+                ? projectCommandGuardSchema.parse(r.body ?? {})
+                : {};
+          const input = { ...ctx(c, r), ...guard };
           const value =
             action === "activate"
               ? await this.options.application.activate(input, projectId)
@@ -125,7 +133,7 @@ export class ProjectOperationsApi {
                 ? await this.options.application.hold(
                     input,
                     projectId,
-                    reasonSchema.parse(r.body).reason
+                    guardedHoldSchema.parse(r.body).reason
                   )
                 : action === "resume"
                   ? await this.options.application.resume(input, projectId)

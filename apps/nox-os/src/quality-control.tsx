@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  useWorkspaceObject,
+  NoxReadFeedback,
+  NoxDialog,
+  useUnsavedChanges,
+  type NoxReadState
+} from "@nox-os/ui";
+import { Link, Route, Routes, useNavigate, useParams, useLocation } from "react-router-dom";
+import { NoxApiError } from "./api-client";
 import type {
   BatchInspection,
   BatchSpecification,
@@ -21,20 +29,33 @@ const permissions = {
 
 type Props = { api: ApiClient; tenantId?: string; modulePermissions?: string[] };
 const allowed = (values: string[], permission: string) => values.includes(permission);
-const message = (error: unknown) =>
-  error instanceof Error ? error.message : "Quality Control is unavailable.";
+const message = (_error: unknown) =>
+  "Quality Control request could not be completed. Review current state and permissions.";
 
 function Registry({ api, tenantId, modulePermissions = [] }: Props) {
   const [batches, setBatches] = useState<QualityBatchView[]>([]);
-  const [error, setError] = useState<unknown>();
+  const [readState, setReadState] = useState<NoxReadState>("LOADING");
+  const [reload, setReload] = useState(0);
+  const canRead = allowed(modulePermissions, permissions.read);
   useEffect(() => {
-    if (!tenantId || !allowed(modulePermissions, permissions.read)) return;
+    let current = true;
+    setReadState("LOADING");
+    setBatches([]);
+    if (!tenantId || !canRead) return;
     void api<{ batches: QualityBatchView[] }>("/quality-control", { tenantId })
-      .then((value) => setBatches(value.batches ?? []))
-      .catch(setError);
-  }, [api, tenantId, modulePermissions]);
+      .then((value) => {
+        if (!Array.isArray(value.batches)) throw new Error("Invalid registry response");
+        if (!current) return;
+        setBatches(value.batches);
+        setReadState("READY");
+      })
+      .catch(() => current && setReadState("ERROR"));
+    return () => {
+      current = false;
+    };
+  }, [api, tenantId, canRead, reload]);
   return (
-    <main aria-labelledby="qc-title">
+    <section aria-labelledby="qc-title">
       <header className="nox-module-header">
         <div>
           <p className="nox-ai-context">OPERATIONS / QUALITY CONTROL</p>
@@ -47,7 +68,11 @@ function Registry({ api, tenantId, modulePermissions = [] }: Props) {
           </Link>
         ) : null}
       </header>
-      {error ? <p role="alert">{message(error)}</p> : null}
+      <NoxReadFeedback
+        state={readState}
+        subject="Quality Control"
+        retry={() => setReload((value) => value + 1)}
+      />
       <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <caption className="sr-only">
@@ -99,35 +124,76 @@ function Registry({ api, tenantId, modulePermissions = [] }: Props) {
                   </td>
                 </tr>
               ))
-            ) : (
+            ) : readState === "READY" ? (
               <tr>
                 <td colSpan={9}>No completed Production Batches found.</td>
               </tr>
-            )}
+            ) : null}
           </tbody>
         </table>
       </div>
-    </main>
+    </section>
   );
 }
 
 function Specifications({ api, tenantId, modulePermissions = [] }: Props) {
   const navigate = useNavigate();
   const [values, setValues] = useState<BatchSpecification[]>([]);
+  const [readState, setReadState] = useState<NoxReadState>("LOADING");
+  const readGeneration = useRef(0);
   const [error, setError] = useState<unknown>();
+  const [dirty, setDirty] = useState(false);
+  const [discard, setDiscard] = useState(false);
+  const draftForm = useRef<HTMLFormElement>(null);
+  const [creating, setCreating] = useState<"IDLE" | "PENDING" | "UNKNOWN">("IDLE");
+  const createLock = useRef(false);
+  const current = useRef(true);
+  useEffect(() => {
+    current.current = true;
+    return () => {
+      current.current = false;
+    };
+  }, []);
+  useUnsavedChanges(dirty || creating !== "IDLE");
   const load = useCallback(() => {
     if (!tenantId) return;
+    const generation = ++readGeneration.current;
+    setReadState("LOADING");
+    setValues([]);
     void api<{ specifications: BatchSpecification[] }>("/quality-control/specifications", {
       tenantId
     })
-      .then((value) => setValues(value.specifications ?? []))
-      .catch(setError);
+      .then((value) => {
+        if (
+          !Array.isArray(value.specifications) ||
+          value.specifications.some(
+            (spec) => !spec || spec.tenantId !== tenantId || !Array.isArray(spec.items)
+          )
+        )
+          throw new Error("Invalid specifications");
+        if (current.current && generation === readGeneration.current) {
+          setValues(value.specifications);
+          setReadState("READY");
+        }
+      })
+      .catch(() => {
+        if (current.current && generation === readGeneration.current) setReadState("ERROR");
+      });
   }, [api, tenantId]);
   useEffect(load, [load]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!tenantId) return;
+    if (
+      !tenantId ||
+      createLock.current ||
+      readState !== "READY" ||
+      !allowed(modulePermissions, permissions.manageSpecification) ||
+      !event.currentTarget.reportValidity()
+    )
+      return;
     const data = new FormData(event.currentTarget);
+    createLock.current = true;
+    setCreating("PENDING");
     try {
       const response = await api<{ specification: BatchSpecification }>(
         "/quality-control/specifications",
@@ -143,13 +209,22 @@ function Specifications({ api, tenantId, modulePermissions = [] }: Props) {
           }
         }
       );
-      navigate(`/quality-control/specifications/${response.specification.id}`);
+      if (!current.current) return;
+      if (!response.specification?.id) throw new Error("Invalid creation response");
+      setDirty(false);
+      setCreating("IDLE");
+      navigate(`/quality-control/specifications/${encodeURIComponent(response.specification.id)}`);
     } catch (value) {
+      if (!current.current) return;
       setError(value);
+      if (value instanceof NoxApiError && value.status >= 400 && value.status < 500) {
+        createLock.current = false;
+        setCreating("IDLE");
+      } else setCreating("UNKNOWN");
     }
   }
   return (
-    <main aria-labelledby="qc-specifications-title">
+    <section aria-labelledby="qc-specifications-title">
       <header className="nox-module-header">
         <div>
           <Link to="/quality-control">← Quality Control</Link>
@@ -158,6 +233,11 @@ function Specifications({ api, tenantId, modulePermissions = [] }: Props) {
         </div>
       </header>
       {error ? <p role="alert">{message(error)}</p> : null}
+      {readState !== "READY" ? (
+        <NoxReadFeedback state={readState} subject="Specifications" retry={load} />
+      ) : values.length === 0 ? (
+        <p>No specifications recorded.</p>
+      ) : null}
       <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
@@ -189,32 +269,73 @@ function Specifications({ api, tenantId, modulePermissions = [] }: Props) {
         </table>
       </div>
       {allowed(modulePermissions, permissions.manageSpecification) ? (
-        <form className="nox-form-grid" onSubmit={(event) => void submit(event)}>
-          <h2>New DRAFT specification</h2>
-          <label>
-            Code
-            <input name="code" required />
-          </label>
-          <label>
-            Version
-            <input name="version" type="number" min="1" required />
-          </label>
-          <label>
-            FormulaVersion ID
-            <input name="formulaVersionId" required />
-          </label>
-          <label>
-            Bundle Hash
-            <input name="bundleHash" pattern="[a-f0-9]{64}" required />
-          </label>
-          <label>
-            Notes
-            <textarea name="notes" />
-          </label>
-          <button type="submit">Create DRAFT</button>
+        <form
+          aria-label="Create specification"
+          ref={draftForm}
+          onChange={() => setDirty(true)}
+          onSubmit={(event) => void submit(event)}
+        >
+          {creating === "PENDING" ? <p role="status">Creating specification…</p> : null}
+          {creating === "UNKNOWN" ? (
+            <p role="alert">
+              Creation outcome unknown. Draft retained; do not submit again until current
+              specifications are reconciled.
+            </p>
+          ) : null}
+          <fieldset
+            className="nox-design-panel nox-qc-creation"
+            disabled={creating !== "IDLE" || readState !== "READY"}
+          >
+            <h2>New DRAFT specification</h2>
+            <label>
+              Code
+              <input name="code" required />
+            </label>
+            <label>
+              Version
+              <input name="version" type="number" min="1" required />
+            </label>
+            <label>
+              FormulaVersion ID
+              <input name="formulaVersionId" required />
+            </label>
+            <label>
+              Bundle Hash
+              <input name="bundleHash" pattern="[a-f0-9]{64}" required />
+            </label>
+            <label>
+              Notes
+              <textarea name="notes" />
+            </label>
+            <button type="submit">Create DRAFT</button>
+            {dirty ? (
+              <button type="button" onClick={() => setDiscard(true)}>
+                Discard draft
+              </button>
+            ) : null}
+          </fieldset>
+          {discard ? (
+            <NoxDialog title="Discard specification draft" onClose={() => setDiscard(false)}>
+              <p>Discard unsaved specification fields? No server data will be changed.</p>
+              <button type="button" onClick={() => setDiscard(false)}>
+                Keep editing
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (creating !== "IDLE") return;
+                  draftForm.current?.reset();
+                  setDirty(false);
+                  setDiscard(false);
+                }}
+              >
+                Discard unsaved fields
+              </button>
+            </NoxDialog>
+          ) : null}
         </form>
       ) : null}
-    </main>
+    </section>
   );
 }
 
@@ -222,76 +343,147 @@ function SpecificationDetail({ api, tenantId, modulePermissions = [] }: Props) {
   const { specificationId = "" } = useParams();
   const [value, setValue] = useState<BatchSpecification>();
   const [error, setError] = useState<unknown>();
+  const [intent, setIntent] = useState<"items" | "activate" | "retire">();
+  const [phase, setPhase] = useState<"CONFIRM" | "PENDING" | "UNKNOWN" | "SAVED">("CONFIRM");
+  const locked = useRef(false);
+  const current = useRef(true);
+  useEffect(() => {
+    current.current = true;
+    return () => {
+      current.current = false;
+    };
+  }, []);
+  useUnsavedChanges(Boolean(intent));
+  const workspaceObject = useMemo(
+    () =>
+      !error && value?.id === specificationId && value.tenantId === tenantId
+        ? {
+            id: value.id,
+            objectType: "QCSpecification",
+            title: `${value.specificationCode} · v${value.versionNumber}`,
+            route: `/quality-control/specifications/${value.id}`,
+            properties: [
+              { label: "Status", value: value.status },
+              { label: "FormulaVersion", value: value.formulaVersionId },
+              { label: "Version", value: String(value.versionNumber) },
+              { label: "Bundle hash", value: value.formulaBundleHash }
+            ]
+          }
+        : undefined,
+    [value, specificationId, tenantId, error]
+  );
+  useWorkspaceObject(workspaceObject);
   const load = useCallback(() => {
     if (!tenantId) return;
-    void api<{ specification: BatchSpecification }>(
+    return api<{ specification: BatchSpecification }>(
       `/quality-control/specifications/${specificationId}`,
       { tenantId }
-    )
-      .then((result) => setValue(result.specification))
-      .catch(setError);
+    ).then((result) => {
+      if (
+        !result.specification ||
+        result.specification.id !== specificationId ||
+        result.specification.tenantId !== tenantId ||
+        !Array.isArray(result.specification.items)
+      )
+        throw new Error("Invalid specification");
+      if (current.current) {
+        setValue(result.specification);
+        setError(undefined);
+      }
+    });
   }, [api, tenantId, specificationId]);
-  useEffect(load, [load]);
+  useEffect(() => {
+    void load()?.catch(setError);
+  }, [load]);
   async function setDefaultItems() {
     if (!tenantId) return;
-    try {
-      await api(`/quality-control/specifications/${specificationId}/items`, {
-        method: "PUT",
-        tenantId,
-        body: {
-          items: [
-            {
-              itemOrder: 1,
-              checkKey: "specific-gravity",
-              name: "Specific gravity",
-              checkType: "NUMERIC_RANGE",
-              unitCode: "ratio",
-              minValue: "0.850",
-              maxValue: "0.900"
-            },
-            {
-              itemOrder: 2,
-              checkKey: "appearance-clear",
-              name: "Appearance clear",
-              checkType: "BOOLEAN",
-              expectedBoolean: true
-            },
-            {
-              itemOrder: 3,
-              checkKey: "odor-conformance",
-              name: "Odor conformance",
-              checkType: "QUALITATIVE",
-              acceptanceCriteriaText: "Conforms to approved reference."
-            }
-          ]
-        }
-      });
-      load();
-    } catch (result) {
-      setError(result);
-    }
+    await api(`/quality-control/specifications/${specificationId}/items`, {
+      method: "PUT",
+      tenantId,
+      body: {
+        items: [
+          {
+            itemOrder: 1,
+            checkKey: "specific-gravity",
+            name: "Specific gravity",
+            checkType: "NUMERIC_RANGE",
+            unitCode: "ratio",
+            minValue: "0.850",
+            maxValue: "0.900"
+          },
+          {
+            itemOrder: 2,
+            checkKey: "appearance-clear",
+            name: "Appearance clear",
+            checkType: "BOOLEAN",
+            expectedBoolean: true
+          },
+          {
+            itemOrder: 3,
+            checkKey: "odor-conformance",
+            name: "Odor conformance",
+            checkType: "QUALITATIVE",
+            acceptanceCriteriaText: "Conforms to approved reference."
+          }
+        ]
+      }
+    });
   }
-  async function action(name: "activate" | "retire") {
-    if (!tenantId) return;
+  async function confirm() {
+    if (
+      !tenantId ||
+      !intent ||
+      locked.current ||
+      !allowed(modulePermissions, permissions.manageSpecification)
+    )
+      return;
+    if (value?.status !== (intent === "retire" ? "ACTIVE" : "DRAFT")) return;
+    locked.current = true;
+    setPhase("PENDING");
     try {
-      await api(`/quality-control/specifications/${specificationId}/${name}`, {
-        method: "POST",
-        tenantId
-      });
-      load();
+      if (intent === "items") await setDefaultItems();
+      else
+        await api(`/quality-control/specifications/${specificationId}/${intent}`, {
+          method: "POST",
+          tenantId
+        });
     } catch (result) {
+      if (!current.current) return;
       setError(result);
+      if (result instanceof NoxApiError && result.status >= 400 && result.status < 500) {
+        locked.current = false;
+        setPhase("CONFIRM");
+      } else setPhase("UNKNOWN");
+      return;
+    }
+    if (!current.current) return;
+    try {
+      await load();
+      if (current.current) {
+        locked.current = false;
+        setIntent(undefined);
+        setPhase("CONFIRM");
+      }
+    } catch {
+      if (current.current) setPhase("SAVED");
     }
   }
   if (!value)
     return (
-      <main>
+      <section>
         <Link to="/quality-control/specifications">← Specifications</Link>
-        {error ? <p role="alert">{message(error)}</p> : <p>Loading specification…</p>}
-      </main>
+        <NoxReadFeedback
+          state={error ? "ERROR" : "LOADING"}
+          subject="Specification"
+          retry={() => {
+            setError(undefined);
+            void load()?.catch(setError);
+          }}
+        />
+      </section>
     );
   return (
-    <main aria-labelledby="qc-spec-title">
+    <section aria-labelledby="qc-spec-title">
       <Link to="/quality-control/specifications">← Specifications</Link>
       <header className="nox-module-header">
         <div>
@@ -304,26 +496,81 @@ function SpecificationDetail({ api, tenantId, modulePermissions = [] }: Props) {
           </p>
         </div>
         {allowed(modulePermissions, permissions.manageSpecification) ? (
-          <div>
+          <fieldset disabled={Boolean(intent)}>
             {value.status === "DRAFT" ? (
               <>
-                <button type="button" onClick={() => void setDefaultItems()}>
+                <button type="button" onClick={() => setIntent("items")}>
                   Load baseline items
                 </button>
-                <button type="button" onClick={() => void action("activate")}>
+                <button type="button" onClick={() => setIntent("activate")}>
                   Activate
                 </button>
               </>
             ) : value.status === "ACTIVE" ? (
-              <button type="button" onClick={() => void action("retire")}>
+              <button type="button" onClick={() => setIntent("retire")}>
                 Retire
               </button>
             ) : null}
-          </div>
+          </fieldset>
         ) : null}
       </header>
+      {intent ? (
+        <NoxDialog
+          title="Confirm specification action"
+          onClose={() => {
+            if (phase === "CONFIRM") setIntent(undefined);
+          }}
+        >
+          <p>
+            {value.specificationCode} · v{value.versionNumber} · {specificationId}
+          </p>
+          <p>
+            {intent === "items"
+              ? "Replace all current checks with baseline examples: specific gravity 0.850–0.900 ratio; appearance clear = true; odor conforms to approved reference. These are not validated limits for this formula. Review before activation."
+              : intent === "activate"
+                ? "Activate this specification for matching FormulaVersion inspections. Verify every acceptance criterion; this does not release a batch."
+                : "Retire this specification from new inspections. Existing inspection evidence remains unchanged."}
+          </p>
+          {phase === "CONFIRM" ? (
+            <>
+              <button type="button" onClick={() => setIntent(undefined)}>
+                Cancel action
+              </button>
+              <button type="button" onClick={() => void confirm()}>
+                Confirm action
+              </button>
+            </>
+          ) : (
+            <p role="status">
+              {phase === "PENDING"
+                ? "Submitting specification action…"
+                : phase === "UNKNOWN"
+                  ? "Outcome unknown. Do not resubmit; review current specification."
+                  : "Change saved. Refresh failed; retry the read only."}
+            </p>
+          )}
+          {phase === "SAVED" || phase === "UNKNOWN" ? (
+            <button
+              type="button"
+              onClick={() => {
+                void load()
+                  ?.then(() => {
+                    if (current.current && phase === "SAVED") {
+                      locked.current = false;
+                      setIntent(undefined);
+                      setPhase("CONFIRM");
+                    }
+                  })
+                  .catch(setError);
+              }}
+            >
+              Read current specification
+            </button>
+          ) : null}
+        </NoxDialog>
+      ) : null}
       {error ? <p role="alert">{message(error)}</p> : null}
-      <div className="nox-table-wrap">
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -351,7 +598,7 @@ function SpecificationDetail({ api, tenantId, modulePermissions = [] }: Props) {
           </tbody>
         </table>
       </div>
-    </main>
+    </section>
   );
 }
 
@@ -361,6 +608,24 @@ function BatchDetail({ api, tenantId, modulePermissions = [] }: Props) {
   const [value, setValue] = useState<QualityBatchView>();
   const [specifications, setSpecifications] = useState<BatchSpecification[]>([]);
   const [error, setError] = useState<unknown>();
+  const [decision, setDecision] = useState<"hold" | "release" | "reject">();
+  const [reason, setReason] = useState("");
+  const [decisionState, setDecisionState] = useState<"CONFIRM" | "PENDING" | "UNKNOWN">("CONFIRM");
+  const [inspectionDraft, setInspectionDraft] = useState(false);
+  const [discardInspection, setDiscardInspection] = useState(false);
+  const inspectionForm = useRef<HTMLFormElement>(null);
+  const [inspectionCreation, setInspectionCreation] = useState<"IDLE" | "PENDING" | "UNKNOWN">(
+    "IDLE"
+  );
+  const sending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    []
+  );
+  useUnsavedChanges(Boolean(decision) || inspectionDraft || inspectionCreation !== "IDLE");
   const load = useCallback(() => {
     if (!tenantId) return;
     void Promise.all([
@@ -376,8 +641,17 @@ function BatchDetail({ api, tenantId, modulePermissions = [] }: Props) {
   useEffect(load, [load]);
   async function createInspection(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!tenantId) return;
+    if (
+      !tenantId ||
+      sending.current ||
+      decision ||
+      !allowed(modulePermissions, permissions.createInspection) ||
+      !event.currentTarget.reportValidity()
+    )
+      return;
     const data = new FormData(event.currentTarget);
+    sending.current = true;
+    setInspectionCreation("PENDING");
     try {
       const response = await api<{ inspection: BatchInspection }>("/quality-control/inspections", {
         method: "POST",
@@ -388,38 +662,64 @@ function BatchDetail({ api, tenantId, modulePermissions = [] }: Props) {
           sampleReference: data.get("sampleReference") || null
         }
       });
-      navigate(`/quality-control/inspections/${response.inspection.id}`);
+      if (!mounted.current) return;
+      if (!response.inspection?.id) throw new Error("Invalid creation response");
+      setInspectionDraft(false);
+      setInspectionCreation("IDLE");
+      navigate(`/quality-control/inspections/${encodeURIComponent(response.inspection.id)}`);
     } catch (result) {
+      if (!mounted.current) return;
       setError(result);
+      if (result instanceof NoxApiError && result.status >= 400 && result.status < 500) {
+        sending.current = false;
+        setInspectionCreation("IDLE");
+      } else setInspectionCreation("UNKNOWN");
     }
   }
-  async function decide(action: "hold" | "release" | "reject") {
-    if (!tenantId) return;
-    const reason =
-      action === "release"
-        ? undefined
-        : window.prompt(action === "hold" ? "Hold reason" : "Reject reason");
-    if (action !== "release" && !reason) return;
+  async function decide() {
+    if (!tenantId || !decision || sending.current || decisionState !== "CONFIRM") return;
+    const permission = {
+      hold: permissions.holdBatch,
+      release: permissions.releaseBatch,
+      reject: permissions.rejectBatch
+    }[decision];
+    if (!allowed(modulePermissions, permission) || (decision !== "release" && !reason.trim())) {
+      setError(new Error("Decision unavailable"));
+      return;
+    }
+    sending.current = true;
+    setDecisionState("PENDING");
     try {
-      await api(`/quality-control/batches/${batchId}/${action}`, {
+      await api(`/quality-control/batches/${batchId}/${decision}`, {
         method: "POST",
         tenantId,
-        body: reason ? { reason } : undefined
+        body: decision !== "release" ? { reason: reason.trim() } : undefined
       });
+      if (!mounted.current) return;
+      setDecision(undefined);
+      setReason("");
+      setError(undefined);
+      sending.current = false;
+      setDecisionState("CONFIRM");
       load();
     } catch (result) {
+      if (!mounted.current) return;
       setError(result);
+      if (result instanceof NoxApiError && result.status >= 400 && result.status < 500) {
+        sending.current = false;
+        setDecisionState("CONFIRM");
+      } else setDecisionState("UNKNOWN");
     }
   }
   if (!value)
     return (
-      <main>
+      <section>
         <Link to="/quality-control">← Quality Control</Link>
         {error ? <p role="alert">{message(error)}</p> : <p>Loading Batch…</p>}
-      </main>
+      </section>
     );
   return (
-    <main aria-labelledby="qc-batch-title">
+    <section aria-labelledby="qc-batch-title">
       <Link to="/quality-control">← Quality Control</Link>
       <header className="nox-module-header">
         <div>
@@ -432,14 +732,14 @@ function BatchDetail({ api, tenantId, modulePermissions = [] }: Props) {
             Disposition: <strong>{value.disposition}</strong>
           </p>
         </div>
-        <div>
+        <fieldset disabled={Boolean(decision) || inspectionCreation !== "IDLE" || inspectionDraft}>
           {allowed(modulePermissions, permissions.holdBatch) ? (
-            <button type="button" onClick={() => void decide("hold")}>
+            <button type="button" onClick={() => setDecision("hold")}>
               Hold
             </button>
           ) : null}
           {allowed(modulePermissions, permissions.releaseBatch) ? (
-            <button type="button" onClick={() => void decide("release")}>
+            <button type="button" onClick={() => setDecision("release")}>
               Release
             </button>
           ) : null}
@@ -447,13 +747,74 @@ function BatchDetail({ api, tenantId, modulePermissions = [] }: Props) {
             <button
               type="button"
               className="nox-danger-action"
-              onClick={() => void decide("reject")}
+              onClick={() => setDecision("reject")}
             >
               Reject
             </button>
           ) : null}
-        </div>
+        </fieldset>
       </header>
+      {decision ? (
+        <NoxDialog
+          title="Confirm QC decision"
+          onClose={() => {
+            if (decisionState === "CONFIRM") {
+              setDecision(undefined);
+              setReason("");
+            }
+          }}
+        >
+          <p>
+            {decision.toUpperCase()} · {value.batch.batchNumber} · {batchId}
+          </p>
+          <p>
+            {decision === "release"
+              ? "Release is terminal and rechecks current G6 readiness. QC PASS alone is not release."
+              : decision === "reject"
+                ? "Reject is terminal. This decision does not return inventory or change Production Batch truth."
+                : "Hold records a QC decision. It does not change inventory or Production Batch truth."}
+          </p>
+          {decision !== "release" ? (
+            <label>
+              Decision reason
+              <textarea
+                aria-label="Decision reason"
+                value={reason}
+                disabled={decisionState !== "CONFIRM"}
+                onChange={(event) => setReason(event.target.value)}
+              />
+            </label>
+          ) : null}
+          {decisionState === "PENDING" ? <p role="status">Submitting decision…</p> : null}
+          {decisionState === "UNKNOWN" ? (
+            <>
+              <p role="alert">
+                Outcome unknown. Do not resubmit. Read current batch state before further action.
+              </p>
+              <p>Last read disposition: {value.disposition}</p>
+              <button type="button" onClick={load}>
+                Read current batch state
+              </button>
+            </>
+          ) : null}
+          {decisionState === "CONFIRM" ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setDecision(undefined);
+                  setReason("");
+                }}
+              >
+                Cancel decision
+              </button>
+              <button type="button" onClick={() => void decide()}>
+                Confirm decision
+              </button>
+            </>
+          ) : null}
+        </NoxDialog>
+      ) : null}
       {error ? <p role="alert">{message(error)}</p> : null}
       <dl className="nox-detail-list">
         <dt>FormulaVersion</dt>
@@ -480,35 +841,79 @@ function BatchDetail({ api, tenantId, modulePermissions = [] }: Props) {
           </Link>
         </p>
       ) : allowed(modulePermissions, permissions.createInspection) ? (
-        <form onSubmit={(event) => void createInspection(event)}>
-          <h2>Start inspection</h2>
-          <label>
-            Active specification
-            <select name="specificationId" required>
-              <option value="">Select…</option>
-              {specifications
-                .filter(
-                  (spec) =>
-                    spec.status === "ACTIVE" &&
-                    spec.formulaVersionId === value.batch.formulaVersionId &&
-                    spec.formulaBundleHash === value.batch.formulaBundleHash
-                )
-                .map((spec) => (
-                  <option key={spec.id} value={spec.id}>
-                    {spec.specificationCode} v{spec.versionNumber}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label>
-            Sample reference
-            <input name="sampleReference" />
-          </label>
-          <button type="submit">Create inspection</button>
+        <form
+          aria-label="Start inspection"
+          ref={inspectionForm}
+          onChange={() => setInspectionDraft(true)}
+          onSubmit={(event) => void createInspection(event)}
+        >
+          {inspectionCreation === "PENDING" ? <p role="status">Creating inspection…</p> : null}
+          {inspectionCreation === "UNKNOWN" ? (
+            <p role="alert">
+              Inspection creation outcome unknown. Sample reference retained; do not resubmit until
+              current batch inspections are reconciled.
+            </p>
+          ) : null}
+          <fieldset
+            className="nox-design-panel nox-qc-creation"
+            disabled={Boolean(decision) || inspectionCreation !== "IDLE"}
+          >
+            <h2>Start inspection</h2>
+            <label>
+              Active specification
+              <select name="specificationId" required>
+                <option value="">Select…</option>
+                {specifications
+                  .filter(
+                    (spec) =>
+                      spec.status === "ACTIVE" &&
+                      spec.formulaVersionId === value.batch.formulaVersionId &&
+                      spec.formulaBundleHash === value.batch.formulaBundleHash
+                  )
+                  .map((spec) => (
+                    <option key={spec.id} value={spec.id}>
+                      {spec.specificationCode} v{spec.versionNumber}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              Sample reference
+              <input name="sampleReference" />
+            </label>
+            <button type="submit">Create inspection</button>
+            {inspectionDraft ? (
+              <button type="button" onClick={() => setDiscardInspection(true)}>
+                Discard draft
+              </button>
+            ) : null}
+          </fieldset>
+          {discardInspection ? (
+            <NoxDialog title="Discard inspection draft" onClose={() => setDiscardInspection(false)}>
+              <p>
+                Discard the selected specification and sample reference? No inspection will be
+                created.
+              </p>
+              <button type="button" onClick={() => setDiscardInspection(false)}>
+                Keep editing
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (inspectionCreation !== "IDLE") return;
+                  inspectionForm.current?.reset();
+                  setInspectionDraft(false);
+                  setDiscardInspection(false);
+                }}
+              >
+                Discard unsaved fields
+              </button>
+            </NoxDialog>
+          ) : null}
         </form>
       ) : null}
       <h2>Consumed input provenance</h2>
-      <div className="nox-table-wrap">
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -540,7 +945,7 @@ function BatchDetail({ api, tenantId, modulePermissions = [] }: Props) {
           </tbody>
         </table>
       </div>
-    </main>
+    </section>
   );
 }
 
@@ -550,25 +955,87 @@ function InspectionDetail({ api, tenantId, modulePermissions = [] }: Props) {
   const [value, setValue] = useState<BatchInspection>();
   const [specification, setSpecification] = useState<BatchSpecification>();
   const [error, setError] = useState<unknown>();
+  const [dirty, setDirty] = useState(false);
+  const [saveState, setSaveState] = useState<"IDLE" | "PENDING" | "UNKNOWN" | "REFRESH_REQUIRED">(
+    "IDLE"
+  );
+  const saveLock = useRef(false);
+  const [intent, setIntent] = useState<"finalize" | "cancel" | "reinspect">();
+  const [retestReason, setRetestReason] = useState("");
+  const [actionState, setActionState] = useState<"CONFIRM" | "PENDING" | "UNKNOWN">("CONFIRM");
+  const actionLock = useRef(false);
+  const current = useRef(true);
+  useEffect(() => {
+    current.current = true;
+    return () => {
+      current.current = false;
+    };
+  }, []);
+  useUnsavedChanges(dirty || saveState !== "IDLE" || Boolean(intent));
+  const workspaceObject = useMemo(
+    () =>
+      !error && value?.id === inspectionId && value.tenantId === tenantId
+        ? {
+            id: value.id,
+            objectType: "QCInspection",
+            title: value.inspectionNumber,
+            route: `/quality-control/inspections/${value.id}`,
+            readOnly: value.status !== "DRAFT",
+            properties: [
+              { label: "Status", value: value.status },
+              { label: "QC outcome (not Batch Release)", value: value.outcome ?? "Not assessed" },
+              { label: "Batch", value: value.batchId },
+              { label: "Specification", value: value.specificationId }
+            ]
+          }
+        : undefined,
+    [value, inspectionId, tenantId, error]
+  );
+  useWorkspaceObject(workspaceObject);
   const load = useCallback(() => {
     if (!tenantId) return;
-    void api<{ inspection: BatchInspection }>(`/quality-control/inspections/${inspectionId}`, {
+    return api<{ inspection: BatchInspection }>(`/quality-control/inspections/${inspectionId}`, {
       tenantId
-    })
-      .then(async (result) => {
-        setValue(result.inspection);
-        const spec = await api<{ specification: BatchSpecification }>(
-          `/quality-control/specifications/${result.inspection.specificationId}`,
-          { tenantId }
-        );
-        setSpecification(spec.specification);
-      })
-      .catch(setError);
+    }).then(async (result) => {
+      if (
+        !result.inspection ||
+        result.inspection.id !== inspectionId ||
+        result.inspection.tenantId !== tenantId ||
+        !Array.isArray(result.inspection.results)
+      )
+        throw new Error("Invalid inspection response");
+      const spec = await api<{ specification: BatchSpecification }>(
+        `/quality-control/specifications/${result.inspection.specificationId}`,
+        { tenantId }
+      );
+      if (
+        !spec.specification ||
+        spec.specification.id !== result.inspection.specificationId ||
+        spec.specification.tenantId !== tenantId ||
+        !Array.isArray(spec.specification.items)
+      )
+        throw new Error("Invalid specification response");
+      if (!current.current) return;
+      setError(undefined);
+      setValue(result.inspection);
+      setSpecification(spec.specification);
+    });
   }, [api, tenantId, inspectionId]);
-  useEffect(load, [load]);
+  useEffect(() => {
+    void load()?.catch(setError);
+  }, [load]);
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!tenantId || !specification) return;
+    if (
+      !tenantId ||
+      saveLock.current ||
+      Boolean(intent) ||
+      !specification ||
+      value?.status !== "DRAFT" ||
+      !allowed(modulePermissions, permissions.editInspection) ||
+      !event.currentTarget.reportValidity()
+    )
+      return;
     const data = new FormData(event.currentTarget);
     const results = specification.items.map((item) =>
       item.checkType === "NUMERIC_RANGE"
@@ -590,38 +1057,103 @@ function InspectionDetail({ api, tenantId, modulePermissions = [] }: Props) {
               judgement: data.get(item.id)
             }
     );
+    saveLock.current = true;
+    setSaveState("PENDING");
     try {
       await api(`/quality-control/inspections/${inspectionId}/results`, {
         method: "PUT",
         tenantId,
         body: { results }
       });
-      load();
     } catch (result) {
+      if (!current.current) return;
       setError(result);
+      if (result instanceof NoxApiError && result.status >= 400 && result.status < 500) {
+        saveLock.current = false;
+        setSaveState("IDLE");
+      } else setSaveState("UNKNOWN");
+      return;
+    }
+    if (!current.current) return;
+    setDirty(false);
+    setError(undefined);
+    try {
+      await load();
+      if (current.current) {
+        saveLock.current = false;
+        setSaveState("IDLE");
+      }
+    } catch {
+      if (current.current) setSaveState("REFRESH_REQUIRED");
     }
   }
-  async function action(name: "finalize" | "cancel" | "reinspect") {
-    if (!tenantId) return;
+  async function action() {
+    if (!tenantId || saveLock.current || dirty || !intent || actionLock.current) return;
+    const name = intent;
+    const permission = {
+      finalize: permissions.finalizeInspection,
+      cancel: permissions.cancelInspection,
+      reinspect: permissions.createInspection
+    }[name];
+    if (
+      !allowed(modulePermissions, permission) ||
+      value?.status !== (name === "reinspect" ? "FINAL" : "DRAFT")
+    ) {
+      setError(new Error("Action unavailable"));
+      return;
+    }
+    const body = name === "reinspect" ? { retestReason: retestReason.trim() } : undefined;
+    if (name === "reinspect" && !body?.retestReason) return;
+    actionLock.current = true;
+    setActionState("PENDING");
     try {
-      const body =
-        name === "reinspect" ? { retestReason: window.prompt("Retest reason") } : undefined;
-      if (name === "reinspect" && !body?.retestReason) return;
       const result = await api<{ inspection: BatchInspection }>(
         `/quality-control/inspections/${inspectionId}/${name}`,
         { method: "POST", tenantId, body }
       );
-      name === "reinspect"
-        ? navigate(`/quality-control/inspections/${result.inspection.id}`)
-        : load();
+      if (!current.current) return;
+      if (name === "reinspect") {
+        if (!result.inspection?.id) throw new Error("Invalid response");
+        navigate(`/quality-control/inspections/${encodeURIComponent(result.inspection.id)}`);
+      } else {
+        try {
+          await load();
+        } catch {
+          setSaveState("REFRESH_REQUIRED");
+          saveLock.current = true;
+        }
+      }
+      if (current.current) {
+        setIntent(undefined);
+        setRetestReason("");
+        setActionState("CONFIRM");
+        actionLock.current = false;
+      }
     } catch (result) {
+      if (!current.current) return;
       setError(result);
+      if (result instanceof NoxApiError && result.status >= 400 && result.status < 500) {
+        actionLock.current = false;
+        setActionState("CONFIRM");
+      } else setActionState("UNKNOWN");
     }
   }
   if (!value || !specification)
-    return <main>{error ? <p role="alert">{message(error)}</p> : <p>Loading inspection…</p>}</main>;
+    return (
+      <section>
+        <h1>QC Inspection</h1>
+        <NoxReadFeedback
+          state={error ? "ERROR" : "LOADING"}
+          subject="Inspection"
+          retry={() => {
+            setError(undefined);
+            void load()?.catch(setError);
+          }}
+        />
+      </section>
+    );
   return (
-    <main aria-labelledby="qc-inspection-title">
+    <section aria-labelledby="qc-inspection-title">
       <Link to={`/quality-control/batches/${value.batchId}`}>← Batch</Link>
       <header className="nox-module-header">
         <div>
@@ -634,120 +1166,233 @@ function InspectionDetail({ api, tenantId, modulePermissions = [] }: Props) {
             {specification.specificationCode} v{specification.versionNumber}
           </p>
         </div>
-        <div>
+        <fieldset disabled={saveState !== "IDLE" || dirty || Boolean(intent)}>
           {value.status === "DRAFT" &&
           allowed(modulePermissions, permissions.finalizeInspection) ? (
-            <button type="button" onClick={() => void action("finalize")}>
+            <button type="button" onClick={() => setIntent("finalize")}>
               Finalize
             </button>
           ) : null}
           {value.status === "DRAFT" && allowed(modulePermissions, permissions.cancelInspection) ? (
-            <button type="button" onClick={() => void action("cancel")}>
+            <button type="button" onClick={() => setIntent("cancel")}>
               Cancel
             </button>
           ) : null}
           {value.status === "FINAL" && allowed(modulePermissions, permissions.createInspection) ? (
-            <button type="button" onClick={() => void action("reinspect")}>
+            <button type="button" onClick={() => setIntent("reinspect")}>
               Reinspect
             </button>
           ) : null}
-        </div>
+        </fieldset>
       </header>
+      {intent ? (
+        <NoxDialog
+          title="Confirm inspection action"
+          onClose={() => {
+            if (actionState === "CONFIRM") {
+              setIntent(undefined);
+              setRetestReason("");
+            }
+          }}
+        >
+          <p>
+            {intent.toUpperCase()} · {value.inspectionNumber} · {inspectionId}
+          </p>
+          <p>
+            {intent === "finalize"
+              ? "Finalize saved inspection evidence. QC PASS does not release this batch."
+              : intent === "cancel"
+                ? "Cancel this draft inspection. This does not change Batch Release or inventory."
+                : "Create a new linked inspection. Existing finalized evidence remains unchanged."}
+          </p>
+          {intent === "reinspect" ? (
+            <label>
+              Retest reason
+              <textarea
+                aria-label="Retest reason"
+                value={retestReason}
+                disabled={actionState !== "CONFIRM"}
+                onChange={(event) => setRetestReason(event.target.value)}
+              />
+            </label>
+          ) : null}
+          {actionState === "CONFIRM" ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setIntent(undefined);
+                  setRetestReason("");
+                }}
+              >
+                Cancel action
+              </button>
+              <button type="button" onClick={() => void action()}>
+                Confirm action
+              </button>
+            </>
+          ) : (
+            <p role="status">
+              {actionState === "PENDING"
+                ? "Submitting inspection action…"
+                : "Outcome unknown. Do not resubmit; review current inspection evidence."}
+            </p>
+          )}
+        </NoxDialog>
+      ) : null}
       {error ? <p role="alert">{message(error)}</p> : null}
-      <form onSubmit={(event) => void save(event)}>
-        <div className="nox-table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Check</th>
-                <th>Criteria</th>
-                <th>Observation</th>
-                <th>Judgement</th>
-              </tr>
-            </thead>
-            <tbody>
-              {specification.items.map((item) => {
-                const existing = value.results.find(
-                  (result) => result.specificationItemId === item.id
-                );
-                return (
-                  <tr key={item.id}>
-                    <td>{item.name}</td>
-                    <td>
-                      {item.checkType === "NUMERIC_RANGE"
-                        ? `${item.minValue ?? "—"}–${item.maxValue ?? "—"} ${item.unitCode}`
-                        : item.checkType === "BOOLEAN"
-                          ? String(item.expectedBoolean)
-                          : item.acceptanceCriteriaText}
-                    </td>
-                    <td>
-                      {item.checkType === "NUMERIC_RANGE" ? (
-                        <input
-                          name={item.id}
-                          defaultValue={existing?.observedNumericValue ?? ""}
-                          disabled={value.status !== "DRAFT"}
-                          required
-                        />
-                      ) : item.checkType === "BOOLEAN" ? (
-                        <select
-                          name={item.id}
-                          defaultValue={String(existing?.observedBooleanValue ?? true)}
-                          disabled={value.status !== "DRAFT"}
-                        >
-                          <option value="true">True</option>
-                          <option value="false">False</option>
-                        </select>
-                      ) : (
-                        <textarea
-                          name={`${item.id}-text`}
-                          defaultValue={existing?.observedText ?? ""}
-                          disabled={value.status !== "DRAFT"}
-                          required
-                        />
-                      )}
-                    </td>
-                    <td>
-                      {item.checkType === "QUALITATIVE" && value.status === "DRAFT" ? (
-                        <select name={item.id} defaultValue={existing?.judgement ?? "PASS"}>
-                          <option>PASS</option>
-                          <option>REVIEW_REQUIRED</option>
-                          <option>FAIL</option>
-                        </select>
-                      ) : (
-                        (existing?.judgement ?? "Server derived")
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        {value.status === "DRAFT" && allowed(modulePermissions, permissions.editInspection) ? (
-          <button type="submit">Save observations</button>
-        ) : null}
+      {dirty ? (
+        <p role="status">Unsaved observations. Save before changing inspection status.</p>
+      ) : null}
+      {saveState === "PENDING" ? <p role="status">Saving observations…</p> : null}
+      {saveState === "UNKNOWN" ? (
+        <p role="alert">
+          Save outcome unknown. Draft retained; do not resubmit until current inspection evidence is
+          reconciled.
+        </p>
+      ) : null}
+      {saveState === "REFRESH_REQUIRED" ? (
+        <p role="alert">
+          Change saved, but current inspection could not be refreshed.{" "}
+          <button
+            type="button"
+            onClick={() => {
+              void load()
+                ?.then(() => {
+                  if (current.current) {
+                    saveLock.current = false;
+                    setSaveState("IDLE");
+                  }
+                })
+                .catch(setError);
+            }}
+          >
+            Retry inspection read
+          </button>
+        </p>
+      ) : null}
+      <form onChange={() => setDirty(true)} onSubmit={(event) => void save(event)}>
+        <fieldset disabled={saveState !== "IDLE" || Boolean(intent)}>
+          <div className="nox-table-wrap" tabIndex={0}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Check</th>
+                  <th>Criteria</th>
+                  <th>Observation</th>
+                  <th>Judgement</th>
+                </tr>
+              </thead>
+              <tbody>
+                {specification.items.map((item) => {
+                  const existing = value.results.find(
+                    (result) => result.specificationItemId === item.id
+                  );
+                  return (
+                    <tr key={item.id}>
+                      <td>{item.name}</td>
+                      <td>
+                        {item.checkType === "NUMERIC_RANGE"
+                          ? `${item.minValue ?? "—"}–${item.maxValue ?? "—"} ${item.unitCode}`
+                          : item.checkType === "BOOLEAN"
+                            ? String(item.expectedBoolean)
+                            : item.acceptanceCriteriaText}
+                      </td>
+                      <td>
+                        {item.checkType === "NUMERIC_RANGE" ? (
+                          <input
+                            name={item.id}
+                            aria-label={`${item.name} observation`}
+                            defaultValue={existing?.observedNumericValue ?? ""}
+                            disabled={
+                              value.status !== "DRAFT" ||
+                              !allowed(modulePermissions, permissions.editInspection)
+                            }
+                            required
+                          />
+                        ) : item.checkType === "BOOLEAN" ? (
+                          <select
+                            name={item.id}
+                            aria-label={`${item.name} observation`}
+                            defaultValue={
+                              existing?.observedBooleanValue == null
+                                ? ""
+                                : String(existing.observedBooleanValue)
+                            }
+                            disabled={
+                              value.status !== "DRAFT" ||
+                              !allowed(modulePermissions, permissions.editInspection)
+                            }
+                            required
+                          >
+                            <option value="">Select observation…</option>
+                            <option value="true">True</option>
+                            <option value="false">False</option>
+                          </select>
+                        ) : (
+                          <textarea
+                            name={`${item.id}-text`}
+                            aria-label={`${item.name} observation`}
+                            defaultValue={existing?.observedText ?? ""}
+                            disabled={
+                              value.status !== "DRAFT" ||
+                              !allowed(modulePermissions, permissions.editInspection)
+                            }
+                            required
+                          />
+                        )}
+                      </td>
+                      <td>
+                        {item.checkType === "QUALITATIVE" && value.status === "DRAFT" ? (
+                          <select
+                            name={item.id}
+                            aria-label={`${item.name} judgement`}
+                            defaultValue={existing?.judgement ?? ""}
+                            required
+                            disabled={!allowed(modulePermissions, permissions.editInspection)}
+                          >
+                            <option value="">Select judgement…</option>
+                            <option>PASS</option>
+                            <option>REVIEW_REQUIRED</option>
+                            <option>FAIL</option>
+                          </select>
+                        ) : (
+                          (existing?.judgement ?? "Server derived")
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {value.status === "DRAFT" && allowed(modulePermissions, permissions.editInspection) ? (
+            <button type="submit">Save observations</button>
+          ) : null}
+        </fieldset>
       </form>
-    </main>
+    </section>
   );
 }
 
 export function QualityControlExperience(props: Props) {
+  const location = useLocation();
   if (!props.tenantId)
     return (
-      <main>
+      <section>
         <h1>Quality Control</h1>
         <p>Select a tenant workspace to continue.</p>
-      </main>
+      </section>
     );
   if (!allowed(props.modulePermissions ?? [], permissions.read))
     return (
-      <main>
+      <section>
         <h1>Quality Control</h1>
         <p role="alert">Permission denied.</p>
-      </main>
+      </section>
     );
   return (
-    <Routes>
+    <Routes key={`${props.tenantId}:${location.pathname}`}>
       <Route index element={<Registry {...props} />} />
       <Route path="specifications" element={<Specifications {...props} />} />
       <Route path="specifications/:specificationId" element={<SpecificationDetail {...props} />} />

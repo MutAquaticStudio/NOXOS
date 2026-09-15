@@ -128,8 +128,10 @@ export const allocationSchema = z.discriminatedUnion("allocationType", [
 export const createFulfillmentSchema = z
   .object({ fulfillmentNumber: text(80), notes: optionalText(4000) })
   .strict();
+const fulfillmentRevisionSchema = z.string().regex(/^\d{1,16}\.\d{6}$/);
 export const fulfillmentLinesSchema = z
   .object({
+    expectedRevision: fulfillmentRevisionSchema,
     lines: z
       .array(
         z
@@ -144,7 +146,9 @@ export const fulfillmentLinesSchema = z
       .max(100)
   })
   .strict();
-export const updateFulfillmentSchema = z.object({ notes: optionalText(4000) }).strict();
+export const updateFulfillmentSchema = z
+  .object({ expectedRevision: fulfillmentRevisionSchema, notes: optionalText(4000) })
+  .strict();
 export const createShipmentSchema = z
   .object({
     shipmentNumber: text(80),

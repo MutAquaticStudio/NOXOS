@@ -67,9 +67,11 @@ export class ReleaseReadinessApi {
       this.handle(async (request) => {
         const context = await this.tenant(request, releaseReadinessPermissions.create);
         await this.requirePermission(context, releaseReadinessPermissions.run);
-        const profile = releaseProfileSchema.parse(request.body);
+        const { idempotencyKey, ...profile } = releaseProfileSchema
+          .extend({ idempotencyKey: uuid.optional() })
+          .parse(request.body);
         const assessment = await this.options.application.assess(
-          commandContext(context, request),
+          { ...commandContext(context, request), idempotencyKey },
           profile
         );
         return { status: 201, body: { assessment: payload(assessment) } };
@@ -94,8 +96,12 @@ export class ReleaseReadinessApi {
       this.handle(async (request) => {
         const context = await this.tenant(request, releaseReadinessPermissions.run);
         await this.requirePermission(context, releaseReadinessPermissions.review);
+        const { idempotencyKey } = z
+          .object({ idempotencyKey: uuid.optional() })
+          .strict()
+          .parse(request.body ?? {});
         const assessment = await this.options.application.reassess(
-          commandContext(context, request),
+          { ...commandContext(context, request), idempotencyKey },
           routeUuid(request, "assessmentId")
         );
         return { status: 201, body: { assessment: payload(assessment) } };

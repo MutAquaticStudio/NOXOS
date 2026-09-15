@@ -27,6 +27,7 @@ import {
   type UpdateEvaluationRequest
 } from "./contracts.js";
 import { TrialSensoryProblem } from "./problem.js";
+import { isFinalTrialEvidence } from "./evidence.js";
 import type { TrialInventoryPort, TrialSensoryStore } from "./persistence.js";
 
 export type TrialSensoryFormulaSource = {
@@ -463,13 +464,7 @@ export class TrialSensoryApplication
           input.sourceEvaluationId
         )
       : undefined;
-    if (
-      !trial ||
-      !evaluation ||
-      trial.status !== "COMPLETED" ||
-      evaluation.status !== "FINAL" ||
-      evaluation.decision !== "REVISION_REQUIRED"
-    ) {
+    if (!trial || !evaluation || !isFinalTrialEvidence(trial, evaluation, "REVISION_REQUIRED")) {
       return undefined;
     }
     const ambientContext =
@@ -533,10 +528,7 @@ export class TrialSensoryApplication
     if (
       !trial ||
       !evaluation ||
-      trial.formulaVersionId !== input.formulaVersionId ||
-      trial.status !== "COMPLETED" ||
-      evaluation.status !== "FINAL" ||
-      evaluation.decision !== "READY_FOR_APPROVAL" ||
+      !isFinalTrialEvidence(trial, evaluation, "READY_FOR_APPROVAL", input.formulaVersionId) ||
       !evaluation.finalizedAt
     ) {
       return undefined;

@@ -42,11 +42,16 @@ export interface CommercialOrdersStore extends CommercialAnalyticsSource {
   ): Promise<unknown>;
   findFulfillment(tenantId: string, fulfillmentId: string): Promise<unknown | undefined>;
   updateFulfillment(
-    input: CommercialCommandContext & { fulfillmentId: string; notes?: string | null }
+    input: CommercialCommandContext & {
+      fulfillmentId: string;
+      expectedRevision: string;
+      notes?: string | null;
+    }
   ): Promise<unknown>;
   replaceFulfillmentLines(
     input: CommercialCommandContext & {
       fulfillmentId: string;
+      expectedRevision: string;
       lines: readonly Record<string, unknown>[];
     }
   ): Promise<unknown[]>;

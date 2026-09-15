@@ -236,6 +236,26 @@ export class InMemoryTrialSensoryStore implements TrialSensoryStore, TrialInvent
     return cloneEvaluation(next);
   }
 
+  async recordRevisionRequest(
+    input: Parameters<TrialSensoryStore["recordRevisionRequest"]>[0]
+  ): Promise<void> {
+    if (
+      this.auditEvents.some(
+        (event) =>
+          event.action === "revision.requested" && event.resourceId === input.sourceEvaluationId
+      )
+    )
+      return;
+    this.auditEvents.push({
+      action: "revision.requested",
+      resourceId: input.sourceEvaluationId,
+      metadata: {
+        sourceTrialId: input.sourceTrialId,
+        parentFormulaVersionId: input.parentFormulaVersionId
+      }
+    });
+  }
+
   async recordAudit(input: Parameters<TrialSensoryStore["recordAudit"]>[0]): Promise<void> {
     this.auditEvents.push({
       action: input.action,

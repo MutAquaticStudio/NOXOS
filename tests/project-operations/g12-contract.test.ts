@@ -4,6 +4,9 @@ import { describe, expect, it } from "vitest";
 import {
   artifactTypeSchema,
   createProjectSchema,
+  guardedHoldSchema,
+  projectCommandGuardSchema,
+  createUpdateSchema,
   phaseKeySchema,
   phasePlansSchema
 } from "../../packages/project-operations/src/contracts.js";
@@ -14,7 +17,7 @@ const migration = readFileSync(
   "utf8"
 );
 const application = readFileSync(resolve(root, "apps/nox-os/src/app.tsx"), "utf8");
-const shellStyles = readFileSync(resolve(root, "packages/ui/src/styles.css"), "utf8");
+const shellSource = readFileSync(resolve(root, "packages/ui/src/index.tsx"), "utf8");
 const projectOperationsStore = readFileSync(
   resolve(root, "packages/database/src/project-operations-store.ts"),
   "utf8"
@@ -29,6 +32,27 @@ const stagingAcceptance = readFileSync(
 );
 
 describe("G12 Project Operations contract", () => {
+  it("accepts exact revision/replay metadata but rejects forged guard fields", () => {
+    const guard = {
+      expectedRevision: "4070908800.123456",
+      idempotencyKey: "00000000-0000-4000-8000-000000000001"
+    };
+    expect(guardedHoldSchema.parse({ ...guard, reason: "Hold" })).toEqual({
+      ...guard,
+      reason: "Hold"
+    });
+    expect(projectCommandGuardSchema.safeParse({ ...guard, idempotencyKey: "bad" }).success).toBe(
+      false
+    );
+    expect(projectCommandGuardSchema.safeParse({ ...guard, role: "OWNER" }).success).toBe(false);
+    expect(
+      createUpdateSchema.parse({ ...guard, updateType: "NOTE", summary: "Note" })
+    ).toMatchObject(guard);
+    expect(
+      createUpdateSchema.safeParse({ ...guard, updateType: "BLOCKER_RESOLVED", summary: "Note" })
+        .success
+    ).toBe(false);
+  });
   it("owns exactly six G12 tables and no mutable phase truth", () => {
     expect((migration.match(/create table project_operations\./g) ?? []).length).toBe(6);
     expect(migration).not.toMatch(/project_phase_status|current_phase_status|percent_complete/);
@@ -82,10 +106,9 @@ describe("G12 Project Operations contract", () => {
     expect(application).toContain('path="/project-operations/*"');
     expect(application).toContain('definition.descriptor.id !== "project-operations"');
   });
-  it("keeps tenant selection usable on the compact operational workspace", () => {
-    expect(shellStyles).toContain(
-      ".nox-system-actions > :not(:first-child):not(.nox-tenant-selector)"
-    );
+  it("keeps the tenant control in its dedicated OS shell slot", () => {
+    // Actual compact visibility/switching is exercised in module-registry-read-v3.spec.ts.
+    expect(shellSource).toContain('<div className="nox-system-tenant">{tenantControl}</div>');
   });
   it("refreshes the G12 actor token after G4 signs the fixture out", () => {
     const g4Acceptance = stagingAcceptance.indexOf(

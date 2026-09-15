@@ -251,6 +251,14 @@ describe("Trial and Sensory API", () => {
       status: 200,
       body: { revisionContext: { parentFormulaVersionId: G5_IDS.version } }
     });
+    const replay = await request({
+      path: `/trials/${trialId}/evaluations/${evaluationId}/create-revision`,
+      method: "POST"
+    });
+    expect(replay).toEqual(revision);
+    expect(
+      trialStore.auditEvents.filter((event) => event.action === "revision.requested")
+    ).toHaveLength(1);
     expect(JSON.stringify(trialStore.evaluations.get(evaluationId)?.deltas)).not.toContain(
       "materialId"
     );

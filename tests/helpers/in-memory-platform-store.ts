@@ -37,6 +37,15 @@ function entitlementKey(tenantId: string, key: string): string {
   return tenantId + ":" + key;
 }
 
+function revisionAt(date: Date): string {
+  const micros = String(BigInt(date.getTime()) * 1000n);
+  return `${micros.slice(0, -6)}.${micros.slice(-6)}`;
+}
+function nextRevision(revision: string): string {
+  const micros = String(BigInt(revision.replace(".", "")) + 1n);
+  return `${micros.slice(0, -6)}.${micros.slice(-6)}`;
+}
+
 function cloneState(state: State): State {
   return {
     users: new Map([...state.users].map(([id, value]) => [id, { ...value }])),
@@ -78,7 +87,8 @@ export class InMemoryPlatformStore implements PlatformStore {
       status: input.status ?? "ACTIVE",
       platformRoleKey: input.platformRoleKey ?? null,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      revision: revisionAt(now)
     });
   }
 
@@ -88,7 +98,8 @@ export class InMemoryPlatformStore implements PlatformStore {
       ...input,
       status: input.status ?? "ACTIVE",
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      revision: revisionAt(now)
     });
   }
 
@@ -103,7 +114,8 @@ export class InMemoryPlatformStore implements PlatformStore {
       ...input,
       status: input.status ?? "ACTIVE",
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      revision: revisionAt(now)
     });
   }
 
@@ -137,6 +149,9 @@ export class InMemoryPlatformStore implements PlatformStore {
   async findPlatformUser(userId: string) {
     return this.state.users.get(userId);
   }
+  async lockPlatformUser(userId: string) {
+    return this.findPlatformUser(userId);
+  }
   async listPlatformUsers() {
     return [...this.state.users.values()];
   }
@@ -153,7 +168,8 @@ export class InMemoryPlatformStore implements PlatformStore {
       status: input.status ?? "ACTIVE",
       platformRoleKey: input.platformRoleKey ?? null,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      revision: revisionAt(now)
     };
     this.state.users.set(user.id, user);
     return user;
@@ -161,7 +177,12 @@ export class InMemoryPlatformStore implements PlatformStore {
   async updatePlatformUser(userId: string, update: PlatformUserUpdate) {
     const existing = this.state.users.get(userId);
     if (!existing) return undefined;
-    const value = { ...existing, ...update, updatedAt: new Date() };
+    const value = {
+      ...existing,
+      ...update,
+      updatedAt: new Date(),
+      revision: nextRevision(existing.revision)
+    };
     this.state.users.set(userId, value);
     return value;
   }
@@ -201,7 +222,8 @@ export class InMemoryPlatformStore implements PlatformStore {
       slug: input.slug,
       status: input.status ?? "ACTIVE",
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      revision: revisionAt(now)
     };
     this.state.tenants.set(id, tenant);
     return tenant;
@@ -209,7 +231,12 @@ export class InMemoryPlatformStore implements PlatformStore {
   async updateTenant(tenantId: string, update: { name?: string; status?: TenantStatus }) {
     const existing = this.state.tenants.get(tenantId);
     if (!existing) return undefined;
-    const value = { ...existing, ...update, updatedAt: new Date() };
+    const value = {
+      ...existing,
+      ...update,
+      updatedAt: new Date(),
+      revision: nextRevision(existing.revision)
+    };
     this.state.tenants.set(tenantId, value);
     return value;
   }
@@ -242,7 +269,8 @@ export class InMemoryPlatformStore implements PlatformStore {
       roleKey: input.roleKey,
       status: input.status ?? "ACTIVE",
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      revision: revisionAt(now)
     };
     this.state.memberships.set(membershipKey(input.tenantId, input.userId), membership);
     return membership;
@@ -250,7 +278,12 @@ export class InMemoryPlatformStore implements PlatformStore {
   async updateTenantMembership(tenantId: string, userId: string, update: TenantMembershipUpdate) {
     const existing = this.state.memberships.get(membershipKey(tenantId, userId));
     if (!existing) return undefined;
-    const value = { ...existing, ...update, updatedAt: new Date() };
+    const value = {
+      ...existing,
+      ...update,
+      updatedAt: new Date(),
+      revision: nextRevision(existing.revision)
+    };
     this.state.memberships.set(membershipKey(tenantId, userId), value);
     return value;
   }

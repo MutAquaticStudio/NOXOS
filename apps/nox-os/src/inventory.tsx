@@ -1,5 +1,12 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  useWorkspaceObject,
+  NoxReadFeedback,
+  NoxDialog,
+  useUnsavedChanges,
+  type NoxReadState
+} from "@nox-os/ui";
+import { Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import type {
   InventoryLocation,
   MaterialLot,
@@ -8,6 +15,7 @@ import type {
 } from "@nox-os/inventory/browser";
 import { formatMassMg } from "@nox-os/trial-sensory/browser";
 import type { ApiClient } from "./platform-control";
+import { NoxApiError } from "./api-client";
 
 const permissions = {
   read: "module.inventory.read",
@@ -22,6 +30,16 @@ const permissions = {
   reservation: "module.inventory.reservation.manage"
 } as const;
 
+const movementPermissions = {
+  receive: permissions.receive,
+  transfer: permissions.transfer,
+  consume: permissions.consume,
+  "adjust-in": permissions.adjust,
+  "adjust-out": permissions.adjust,
+  dispose: permissions.dispose,
+  reserve: permissions.reservation
+} as const;
+
 function has(values: readonly string[], permission: string): boolean {
   return values.includes(permission);
 }
@@ -31,7 +49,7 @@ function total(lot: MaterialLot, field: "onHandMg" | "reservedMg" | "availableMg
 }
 
 function issue(reason: unknown): string {
-  return reason instanceof Error ? reason.message : "Inventory operation failed.";
+  return "Inventory operation could not be confirmed. Review current state before retrying.";
 }
 
 function operationKey(prefix: string): string {
@@ -56,37 +74,75 @@ function InventoryRegistry({
   const [materialId, setMaterialId] = useState("");
   const [lotCode, setLotCode] = useState("");
   const [supplierLotCode, setSupplierLotCode] = useState("");
-
-  const load = async () => {
-    const [lotPayload, locationPayload] = await Promise.all([
-      api<{ lots: MaterialLot[] }>("/inventory/lots", { tenantId }),
-      api<{ locations: InventoryLocation[] }>("/inventory/locations", { tenantId })
-    ]);
-    setLots(lotPayload.lots);
-    setLocations(locationPayload.locations);
+  const [readState, setReadState] = useState<NoxReadState>("LOADING");
+  const request = useRef(0);
+  const commandLock = useRef(false);
+  const [commandState, setCommandState] = useState<"IDLE" | "PENDING" | "UNKNOWN">("IDLE");
+  const [archiveTarget, setArchiveTarget] = useState<InventoryLocation>();
+  useUnsavedChanges(
+    Boolean(
+      locationCode ||
+      locationName ||
+      materialId ||
+      lotCode ||
+      supplierLotCode ||
+      commandState !== "IDLE"
+    )
+  );
+  const runCommand = async (permission: string, action: () => Promise<void>) => {
+    if (commandLock.current || readState !== "READY" || !has(modulePermissions, permission)) return;
+    commandLock.current = true;
+    setCommandState("PENDING");
+    setError(undefined);
+    try {
+      await action();
+      commandLock.current = false;
+      setCommandState("IDLE");
+    } catch (reason) {
+      const rejected = reason instanceof NoxApiError && reason.status >= 400 && reason.status < 500;
+      commandLock.current = !rejected;
+      setCommandState(rejected ? "IDLE" : "UNKNOWN");
+      setError(
+        rejected
+          ? "Server rejected the command. Review values and current permissions."
+          : issue(reason)
+      );
+    }
   };
 
-  useEffect(() => {
-    let current = true;
-    Promise.all([
-      api<{ lots: MaterialLot[] }>("/inventory/lots", { tenantId }),
-      api<{ locations: InventoryLocation[] }>("/inventory/locations", { tenantId })
-    ])
-      .then(([lotPayload, locationPayload]) => {
-        if (!current) return;
-        setLots(lotPayload.lots);
-        setLocations(locationPayload.locations);
-      })
-      .catch((reason) => current && setError(issue(reason)));
-    return () => {
-      current = false;
-    };
+  const load = useCallback(async () => {
+    const generation = ++request.current;
+    setReadState("LOADING");
+    setLots([]);
+    setLocations([]);
+    try {
+      const [lotPayload, locationPayload] = await Promise.all([
+        api<{ lots: MaterialLot[] }>("/inventory/lots", { tenantId }),
+        api<{ locations: InventoryLocation[] }>("/inventory/locations", { tenantId })
+      ]);
+      if (!Array.isArray(lotPayload.lots) || !Array.isArray(locationPayload.locations))
+        throw new Error("Invalid registry response");
+      if (request.current !== generation) return;
+      setLots(lotPayload.lots);
+      setLocations(locationPayload.locations);
+      setReadState("READY");
+    } catch (reason) {
+      if (request.current === generation) setReadState("ERROR");
+      throw reason;
+    }
   }, [api, tenantId]);
+
+  useEffect(() => {
+    void load().catch(() => {});
+    return () => {
+      request.current += 1;
+    };
+  }, [load]);
 
   const createLocation = async (event: FormEvent) => {
     event.preventDefault();
-    setError(undefined);
-    try {
+    if (archiveTarget) return;
+    await runCommand(permissions.location, async () => {
       await api("/inventory/locations", {
         method: "POST",
         tenantId,
@@ -94,16 +150,14 @@ function InventoryRegistry({
       });
       setLocationCode("");
       setLocationName("");
-      await load();
-    } catch (reason) {
-      setError(issue(reason));
-    }
+      await load().catch(() => setError("Location saved; current records could not be refreshed."));
+    });
   };
 
   const createLot = async (event: FormEvent) => {
     event.preventDefault();
-    setError(undefined);
-    try {
+    if (archiveTarget) return;
+    await runCommand(permissions.lotCreate, async () => {
       const response = await api<{ lot: MaterialLot }>("/inventory/lots", {
         method: "POST",
         tenantId,
@@ -117,20 +171,22 @@ function InventoryRegistry({
           notes: null
         }
       });
-      navigate(`/inventory/lots/${response.lot.id}`);
-    } catch (reason) {
-      setError(issue(reason));
-    }
+      if (!response?.lot?.id) throw new Error("Unconfirmed created lot identity");
+      setMaterialId("");
+      setLotCode("");
+      setSupplierLotCode("");
+      navigate(`/inventory/lots/${encodeURIComponent(response.lot.id)}`);
+    });
   };
 
   const archiveLocation = async (locationId: string) => {
-    setError(undefined);
-    try {
+    setArchiveTarget(undefined);
+    await runCommand(permissions.location, async () => {
       await api(`/inventory/locations/${locationId}/archive`, { method: "POST", tenantId });
-      await load();
-    } catch (reason) {
-      setError(issue(reason));
-    }
+      await load().catch(() =>
+        setError("Archive confirmed; current records could not be refreshed.")
+      );
+    });
   };
 
   const materialSummary = useMemo(() => {
@@ -191,7 +247,17 @@ function InventoryRegistry({
           {error}
         </p>
       ) : null}
-      <div className="nox-table-wrap">
+      <NoxReadFeedback
+        state={readState}
+        subject="Inventory"
+        retry={load}
+        disabled={
+          commandState === "PENDING" ||
+          (commandState !== "UNKNOWN" &&
+            Boolean(locationCode || locationName || materialId || lotCode || supplierLotCode))
+        }
+      />
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -223,12 +289,12 @@ function InventoryRegistry({
           </tbody>
         </table>
       </div>
-      {materialSummary.length === 0 ? (
+      {readState === "READY" && materialSummary.length === 0 ? (
         <p className="nox-design-empty">No physical stock has been registered.</p>
       ) : null}
 
       <h2>Lots</h2>
-      <div className="nox-table-wrap">
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -279,9 +345,40 @@ function InventoryRegistry({
         </table>
       </div>
 
-      <div className="nox-trial-form-grid">
+      {commandState !== "IDLE" ? (
+        <p role="status">
+          {commandState === "PENDING"
+            ? "Submitting inventory command…"
+            : "Outcome unknown. Writes remain locked; read current records before leaving this workspace. Do not resubmit blindly."}
+        </p>
+      ) : null}
+      {archiveTarget ? (
+        <NoxDialog title="Archive inventory location" onClose={() => setArchiveTarget(undefined)}>
+          <p>
+            {archiveTarget.locationCode} · {archiveTarget.name}
+          </p>
+          <p>
+            Archives this location under server stock and reservation rules. No stock movement is
+            created.
+          </p>
+          <button type="button" onClick={() => setArchiveTarget(undefined)}>
+            Cancel archive
+          </button>
+          <button type="button" onClick={() => void archiveLocation(archiveTarget.id)}>
+            Confirm archive
+          </button>
+        </NoxDialog>
+      ) : null}
+      <fieldset
+        disabled={commandState !== "IDLE" || Boolean(archiveTarget) || readState !== "READY"}
+        className="nox-trial-form-grid"
+      >
         {has(modulePermissions, permissions.location) ? (
-          <form className="nox-design-panel" onSubmit={createLocation}>
+          <form
+            className="nox-design-panel"
+            onSubmit={createLocation}
+            aria-label="Create inventory location"
+          >
             <h2>Add Location</h2>
             <label>
               Code
@@ -303,7 +400,7 @@ function InventoryRegistry({
           </form>
         ) : null}
         {has(modulePermissions, permissions.lotCreate) ? (
-          <form className="nox-design-panel" onSubmit={createLot}>
+          <form className="nox-design-panel" onSubmit={createLot} aria-label="Create inventory lot">
             <h2>Register Material Lot</h2>
             <label>
               Material UUID
@@ -331,10 +428,10 @@ function InventoryRegistry({
             <button type="submit">Create Lot</button>
           </form>
         ) : null}
-      </div>
+      </fieldset>
 
       <h2>Locations</h2>
-      <div className="nox-table-wrap">
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -354,8 +451,13 @@ function InventoryRegistry({
                   <td>
                     <button
                       type="button"
-                      disabled={item.status === "ARCHIVED"}
-                      onClick={() => void archiveLocation(item.id)}
+                      disabled={
+                        item.status === "ARCHIVED" ||
+                        commandState !== "IDLE" ||
+                        Boolean(archiveTarget) ||
+                        readState !== "READY"
+                      }
+                      onClick={() => setArchiveTarget(item)}
                     >
                       Archive
                     </button>
@@ -388,6 +490,8 @@ function LotDetail({
   const { lotId = "" } = useParams();
   const navigate = useNavigate();
   const [detail, setDetail] = useState<DetailPayload>();
+  const [readState, setReadState] = useState<NoxReadState>("LOADING");
+  const readGeneration = useRef(0);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
   const [locationId, setLocationId] = useState("");
   const [toLocationId, setToLocationId] = useState("");
@@ -396,25 +500,96 @@ function LotDetail({
     "receive" | "transfer" | "consume" | "adjust-in" | "adjust-out" | "dispose" | "reserve"
   >("receive");
   const [error, setError] = useState<string>();
+  const [movement, setMovement] = useState<{
+    path: string;
+    body: unknown;
+    permission: string;
+    summary: string;
+    replayable?: boolean;
+    state: "CONFIRM" | "PENDING" | "UNKNOWN";
+  }>();
+  const movementLock = useRef(false);
+  const movementSending = useRef(false);
+  const [movementDraftDirty, setMovementDraftDirty] = useState(false);
+  const livePermissions = useRef(modulePermissions);
+  livePermissions.current = modulePermissions;
+  useUnsavedChanges(Boolean(movement) || movementDraftDirty);
+  useEffect(() => {
+    if (movement || has(modulePermissions, movementPermissions[operation])) return;
+    const first = (
+      Object.keys(movementPermissions) as Array<keyof typeof movementPermissions>
+    ).find((value) => has(modulePermissions, movementPermissions[value]));
+    if (first) setOperation(first);
+  }, [modulePermissions, operation, movement]);
+  const workspaceObject = useMemo(
+    () =>
+      !error && detail?.lot.id === lotId && detail.lot.tenantId === tenantId
+        ? {
+            id: detail.lot.id,
+            objectType: "MaterialLot",
+            title: detail.lot.lotCode,
+            route: `/inventory/lots/${detail.lot.id}`,
+            properties: [
+              { label: "Material", value: detail.lot.materialId },
+              { label: "On hand", value: `${total(detail.lot, "onHandMg")} mg` },
+              { label: "Reserved", value: `${total(detail.lot, "reservedMg")} mg` },
+              { label: "Available", value: `${total(detail.lot, "availableMg")} mg` }
+            ]
+          }
+        : undefined,
+    [detail, lotId, tenantId, error]
+  );
+  useWorkspaceObject(workspaceObject);
 
-  const load = async () => {
-    const [value, locationPayload] = await Promise.all([
-      api<DetailPayload>(`/inventory/lots/${lotId}`, { tenantId }),
-      api<{ locations: InventoryLocation[] }>("/inventory/locations", { tenantId })
-    ]);
-    setDetail(value);
-    const active = locationPayload.locations.filter((item) => item.status === "ACTIVE");
-    setLocations(active);
-    setLocationId((current) => current || active[0]?.id || "");
-    setToLocationId((current) => current || active[1]?.id || active[0]?.id || "");
-  };
+  const load = useCallback(async () => {
+    const generation = ++readGeneration.current;
+    setReadState("LOADING");
+    setDetail(undefined);
+    setLocations([]);
+    try {
+      const [value, locationPayload] = await Promise.all([
+        api<DetailPayload>(`/inventory/lots/${lotId}`, { tenantId }),
+        api<{ locations: InventoryLocation[] }>("/inventory/locations", { tenantId })
+      ]);
+      if (
+        value?.lot?.id !== lotId ||
+        value.lot.tenantId !== tenantId ||
+        !Array.isArray(value.lot.balances) ||
+        !Array.isArray(value.movements) ||
+        !Array.isArray(value.reservations) ||
+        !Array.isArray(locationPayload.locations) ||
+        value.lot.balances.some(
+          (balance) =>
+            !balance ||
+            ![balance.onHandMg, balance.reservedMg, balance.availableMg].every(
+              (mass) => typeof mass === "string" && /^\d+$/.test(mass)
+            )
+        )
+      )
+        throw new Error("Invalid lot response");
+      if (generation !== readGeneration.current) return;
+      setDetail(value);
+      const active = locationPayload.locations.filter((item) => item.status === "ACTIVE");
+      setLocations(active);
+      setLocationId((current) => current || active[0]?.id || "");
+      setToLocationId((current) => current || active[1]?.id || active[0]?.id || "");
+      setReadState("READY");
+    } catch (reason) {
+      if (generation === readGeneration.current) setReadState("ERROR");
+      throw reason;
+    }
+  }, [api, tenantId, lotId]);
 
   useEffect(() => {
-    void load().catch((reason) => setError(issue(reason)));
-  }, [api, tenantId, lotId]);
+    void load().catch(() => {});
+    return () => {
+      readGeneration.current += 1;
+    };
+  }, [load]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (movementLock.current || !detail) return;
     setError(undefined);
     const key = operationKey(`inventory:${operation}:${lotId}`);
     const routes = {
@@ -453,47 +628,100 @@ function LotDetail({
         body: { quantityMg, locationId, sourceReferenceId: null, operationKey: key }
       }
     } as const;
-    try {
-      const target = routes[operation];
-      await api(`/inventory/lots/${lotId}/${target.path}`, {
-        method: "POST",
-        tenantId,
-        body: target.body
-      });
-      await load();
-    } catch (reason) {
-      setError(issue(reason));
+    const permission = movementPermissions[operation];
+    if (!has(modulePermissions, permission)) {
+      setError("This operation is not permitted.");
+      return;
     }
+    const target = routes[operation];
+    movementLock.current = true;
+    setMovement({
+      path: `/inventory/lots/${lotId}/${target.path}`,
+      body: target.body,
+      permission,
+      summary: `${operation} · Lot ${detail.lot.lotCode} · ${quantityMg} mg · Location ${locationId}${operation === "transfer" ? " → " + toLocationId : ""}. ${operation === "reserve" ? "Reduces Available only; On Hand is unchanged." : "Records a physical stock movement."}`,
+      state: "CONFIRM"
+    });
+  };
+
+  const sendMovement = async () => {
+    if (!movement || movement.state === "PENDING") return;
+    if (movement.state === "UNKNOWN" && movement.replayable === false) return;
+    // Ref prevents two synchronous confirmations/retries before React rerenders.
+    if (movementSending.current) return;
+    if (!livePermissions.current.includes(movement.permission)) {
+      setError("Permission changed. No further request was sent.");
+      return;
+    }
+    movementSending.current = true;
+    setMovement({ ...movement, state: "PENDING" });
+    try {
+      await api(movement.path, { method: "POST", tenantId, body: movement.body });
+    } catch (reason) {
+      const rejected = reason instanceof NoxApiError && reason.status >= 400 && reason.status < 500;
+      if (rejected && movement.state === "CONFIRM") {
+        setMovement(undefined);
+        movementLock.current = false;
+      } else setMovement({ ...movement, state: "UNKNOWN" });
+      setError(
+        rejected
+          ? "Server rejected the operation. Review current state and permissions."
+          : movement.replayable === false
+            ? "Outcome unknown. Read current state before further action."
+            : "Outcome unknown. Retry only the same recorded request."
+      );
+      movementSending.current = false;
+      return;
+    }
+    if (movement.replayable !== false) setMovementDraftDirty(false);
+    setMovement(undefined);
+    setError(undefined);
+    try {
+      await load();
+    } catch {
+      setError("Operation saved; current lot could not be reloaded.");
+    }
+    movementLock.current = false;
+    movementSending.current = false;
   };
 
   const changeLotState = async (action: "hold" | "release-hold" | "close") => {
+    if (movementLock.current || !detail || !has(modulePermissions, permissions.lotManage)) return;
     setError(undefined);
-    try {
-      await api(`/inventory/lots/${lotId}/${action}`, { method: "POST", tenantId });
-      await load();
-    } catch (reason) {
-      setError(issue(reason));
-    }
+    movementLock.current = true;
+    setMovement({
+      path: `/inventory/lots/${lotId}/${action}`,
+      body: undefined,
+      permission: permissions.lotManage,
+      replayable: false,
+      state: "CONFIRM",
+      summary: `${action} · Lot ${detail.lot.lotCode}. ${action === "close" ? "Closes this lot under server balance and reservation rules." : "Changes lot availability; does not create or reverse stock movements."}`
+    });
   };
 
   const transitionReservation = async (
     reservationId: string,
     action: "release" | "cancel" | "consume"
   ) => {
+    if (movementLock.current || !detail || !has(modulePermissions, permissions.reservation)) return;
+    const reservation = detail.reservations.find(
+      (item) =>
+        item.id === reservationId && item.status === "ACTIVE" && item.sourceModule === "MANUAL"
+    );
+    if (!reservation) return;
     setError(undefined);
-    try {
-      await api(`/inventory/reservations/${reservationId}/${action}`, {
-        method: "POST",
-        tenantId,
-        body: { operationKey: operationKey(`inventory:reservation:${action}:${reservationId}`) }
-      });
-      await load();
-    } catch (reason) {
-      setError(issue(reason));
-    }
+    movementLock.current = true;
+    setMovement({
+      path: `/inventory/reservations/${reservationId}/${action}`,
+      body: { operationKey: operationKey(`inventory:reservation:${action}:${reservationId}`) },
+      permission: permissions.reservation,
+      replayable: false,
+      state: "CONFIRM",
+      summary: `${action} reservation ${reservationId} · Lot ${detail.lot.lotCode} · ${reservation.quantityMg} mg · Location ${reservation.locationId}. ${action === "consume" ? "Consumes reserved physical stock." : "Ends the reservation without consuming physical stock."}`
+    });
   };
 
-  if (!detail) return <p aria-busy="true">Loading Material Lot…</p>;
+  if (!detail) return <NoxReadFeedback state={readState} subject="Material Lot" retry={load} />;
   const { lot, movements, reservations } = detail;
   const allowedOperations = [
     ...(has(modulePermissions, permissions.receive) ? ["receive"] : []),
@@ -526,13 +754,18 @@ function LotDetail({
             <div className="nox-design-actions">
               <button
                 type="button"
+                disabled={Boolean(movement)}
                 onClick={() =>
                   void changeLotState(lot.availabilityStatus === "HOLD" ? "release-hold" : "hold")
                 }
               >
                 {lot.availabilityStatus === "HOLD" ? "Release hold" : "Place on hold"}
               </button>
-              <button type="button" onClick={() => void changeLotState("close")}>
+              <button
+                type="button"
+                disabled={Boolean(movement)}
+                onClick={() => void changeLotState("close")}
+              >
                 Close lot
               </button>
             </div>
@@ -545,6 +778,65 @@ function LotDetail({
         </p>
       ) : null}
       <dl className="nox-design-intent-list">
+        {movement ? (
+          <NoxDialog
+            title="Confirm inventory movement"
+            onClose={() => {
+              if (movement.state === "CONFIRM") {
+                setMovement(undefined);
+                movementLock.current = false;
+              }
+            }}
+          >
+            <p>{movement.summary}</p>
+            <p>Server permissions, stock and lot state remain authoritative.</p>
+            {movement.state === "PENDING" ? <p role="status">Recording movement…</p> : null}
+            {movement.state === "UNKNOWN" ? (
+              <p role="alert">
+                {movement.replayable === false
+                  ? "Outcome unknown. Read current lot and reservation state before deciding on another action; no automatic retry."
+                  : "Outcome unknown. Inputs are locked; retry preserves the exact operation key and payload."}
+              </p>
+            ) : null}
+            {movement.state === "CONFIRM" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setMovement(undefined);
+                  movementLock.current = false;
+                }}
+              >
+                Cancel movement
+              </button>
+            ) : null}
+            {movement.state === "UNKNOWN" && movement.replayable === false ? (
+              <button
+                type="button"
+                onClick={() =>
+                  void load()
+                    .then(() => {
+                      setMovement(undefined);
+                      movementLock.current = false;
+                      setError(
+                        "Current records reloaded. Review state; the previous action was not resubmitted."
+                      );
+                    })
+                    .catch(() => {})
+                }
+              >
+                Read current lot without resubmitting
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={movement.state === "PENDING"}
+                onClick={() => void sendMovement()}
+              >
+                {movement.state === "UNKNOWN" ? "Retry same movement" : "Confirm movement"}
+              </button>
+            )}
+          </NoxDialog>
+        ) : null}
         <div>
           <dt>Supplier lot</dt>
           <dd>{lot.supplierLotCode ?? "—"}</dd>
@@ -559,7 +851,8 @@ function LotDetail({
         </div>
       </dl>
       <h2>Balances by Location</h2>
-      <div className="nox-table-wrap">
+      {lot.balances.length === 0 ? <p>No location balances recorded for this lot.</p> : null}
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -585,9 +878,14 @@ function LotDetail({
         </table>
       </div>
       {allowedOperations.length > 0 && lot.lifecycleStatus === "OPEN" ? (
-        <form className="nox-design-panel" onSubmit={submit}>
+        <form
+          className="nox-design-panel"
+          onSubmit={submit}
+          onChange={() => setMovementDraftDirty(true)}
+          aria-label="Inventory movement"
+        >
           <h2>Operational Movement / Reservation</h2>
-          <div className="nox-trial-form-grid">
+          <fieldset disabled={Boolean(movement)} className="nox-trial-form-grid">
             <label>
               Operation
               <select
@@ -636,12 +934,15 @@ function LotDetail({
                 </select>
               </label>
             ) : null}
-          </div>
-          <button type="submit">Record {operation.replace("-", " ")}</button>
+          </fieldset>
+          <button type="submit" disabled={Boolean(movement)}>
+            Record {operation.replace("-", " ")}
+          </button>
         </form>
       ) : null}
       <h2>Append-only Movement Ledger</h2>
-      <div className="nox-table-wrap">
+      {movements.length === 0 ? <p>No stock movements recorded for this lot.</p> : null}
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -670,7 +971,8 @@ function LotDetail({
         </table>
       </div>
       <h2>Reservations</h2>
-      <div className="nox-table-wrap">
+      {reservations.length === 0 ? <p>No reservations recorded for this lot.</p> : null}
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -700,6 +1002,7 @@ function LotDetail({
                           <button
                             key={action}
                             type="button"
+                            disabled={Boolean(movement)}
                             onClick={() => void transitionReservation(item.id, action)}
                           >
                             {action}
@@ -729,6 +1032,7 @@ export function InventoryExperience({
   tenantId?: string;
   modulePermissions: readonly string[];
 }) {
+  const { pathname } = useLocation();
   if (!tenantId || !has(modulePermissions, permissions.read))
     return (
       <section>
@@ -741,12 +1045,24 @@ export function InventoryExperience({
       <Route
         index
         element={
-          <InventoryRegistry api={api} tenantId={tenantId} modulePermissions={modulePermissions} />
+          <InventoryRegistry
+            key={tenantId}
+            api={api}
+            tenantId={tenantId}
+            modulePermissions={modulePermissions}
+          />
         }
       />
       <Route
         path="lots/:lotId"
-        element={<LotDetail api={api} tenantId={tenantId} modulePermissions={modulePermissions} />}
+        element={
+          <LotDetail
+            key={`${tenantId}:${pathname}`}
+            api={api}
+            tenantId={tenantId}
+            modulePermissions={modulePermissions}
+          />
+        }
       />
     </Routes>
   );

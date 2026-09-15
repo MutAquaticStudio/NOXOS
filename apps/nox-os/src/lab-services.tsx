@@ -1,4 +1,5 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useWorkspaceObject, NoxReadFeedback, type NoxReadState } from "@nox-os/ui";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import {
   labServicesPermissions as permissions,
@@ -28,8 +29,14 @@ function Registry(props: Props) {
   const [error, setError] = useState<string>();
   const [showCustomerForm, setShowCustomerForm] = useState(false);
   const [showOrderForm, setShowOrderForm] = useState(false);
+  const [readState, setReadState] = useState<NoxReadState>("LOADING");
+  const [reload, setReload] = useState(0);
   const navigate = useNavigate();
-  const load = () => {
+  useEffect(() => {
+    let current = true;
+    setReadState("LOADING");
+    setCustomers([]);
+    setOrders([]);
     if (!props.tenantId) return;
     void Promise.all([
       props.api<{ customers: CustomerRegistryEntry[] }>("/lab-services/customers", {
@@ -40,12 +47,18 @@ function Registry(props: Props) {
       })
     ])
       .then(([a, b]) => {
+        if (!Array.isArray(a.customers) || !Array.isArray(b.serviceOrders))
+          throw new Error("Invalid registry response");
+        if (!current) return;
         setCustomers(a.customers);
         setOrders(b.serviceOrders);
+        setReadState("READY");
       })
-      .catch((reason) => setError(message(reason)));
-  };
-  useEffect(load, [props.tenantId]);
+      .catch(() => current && setReadState("ERROR"));
+    return () => {
+      current = false;
+    };
+  }, [props.api, props.tenantId, reload]);
 
   async function createCustomer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -98,7 +111,7 @@ function Registry(props: Props) {
     }
   }
   return (
-    <main aria-labelledby="lab-services-title">
+    <section aria-labelledby="lab-services-title">
       <header className="nox-module-header">
         <div>
           <p className="nox-ai-context">CUSTOMER & SERVICE AUTHORITY</p>
@@ -119,6 +132,12 @@ function Registry(props: Props) {
         </div>
       </header>
       {error ? <p role="alert">{error}</p> : null}
+      <NoxReadFeedback
+        state={readState}
+        subject="Lab Services"
+        retry={() => setReload((value) => value + 1)}
+        disabled={showCustomerForm || showOrderForm}
+      />
       {showCustomerForm ? (
         <form className="nox-form-grid" onSubmit={(event) => void createCustomer(event)}>
           <label>
@@ -185,7 +204,7 @@ function Registry(props: Props) {
           Service Orders
         </button>
       </nav>
-      <div className="nox-table-wrap">
+      <div className="nox-table-wrap" tabIndex={0}>
         <table>
           <thead>
             <tr>
@@ -246,9 +265,13 @@ function Registry(props: Props) {
           </tbody>
         </table>
       </div>
-      {view === "customers" && customers.length === 0 ? <p>No Customers found.</p> : null}
-      {view === "orders" && orders.length === 0 ? <p>No Service Orders found.</p> : null}
-    </main>
+      {readState === "READY" && view === "customers" && customers.length === 0 ? (
+        <p>No Customers found.</p>
+      ) : null}
+      {readState === "READY" && view === "orders" && orders.length === 0 ? (
+        <p>No Service Orders found.</p>
+      ) : null}
+    </section>
   );
 }
 
@@ -259,6 +282,24 @@ function CustomerDetail(props: Props) {
   const [interactions, setInteractions] = useState<CustomerInteraction[]>([]);
   const [serviceOrders, setServiceOrders] = useState<ServiceOrder[]>([]);
   const [error, setError] = useState<string>();
+  const workspaceObject = useMemo(
+    () =>
+      !error && customer?.id === customerId && customer.tenantId === props.tenantId
+        ? {
+            id: customer.id,
+            objectType: "Customer",
+            title: customer.displayName,
+            route: `/lab-services/customers/${customer.id}`,
+            properties: [
+              { label: "Code", value: customer.customerCode },
+              { label: "Status", value: customer.status },
+              { label: "Type", value: customer.customerType }
+            ]
+          }
+        : undefined,
+    [customer, customerId, props.tenantId, error]
+  );
+  useWorkspaceObject(workspaceObject);
   const load = () => {
     if (!props.tenantId) return;
     void props
@@ -347,10 +388,10 @@ function CustomerDetail(props: Props) {
     }
   }
   if (!customer)
-    return <main>{error ? <p role="alert">{error}</p> : <p>Loading Customer…</p>}</main>;
+    return <section>{error ? <p role="alert">{error}</p> : <p>Loading Customer…</p>}</section>;
   const manageCustomer = allowed(props.modulePermissions ?? [], permissions.manageCustomer);
   return (
-    <main aria-labelledby="customer-title">
+    <section aria-labelledby="customer-title">
       <Link to="/lab-services">← Lab Services</Link>
       <header className="nox-module-header">
         <div>
@@ -404,7 +445,7 @@ function CustomerDetail(props: Props) {
             <button type="submit">Add Contact</button>
           </form>
         ) : null}
-        <div className="nox-table-wrap">
+        <div className="nox-table-wrap" tabIndex={0}>
           <table>
             <thead>
               <tr>
@@ -451,7 +492,7 @@ function CustomerDetail(props: Props) {
       </section>
       <section>
         <h2>Service Orders</h2>
-        <div className="nox-table-wrap">
+        <div className="nox-table-wrap" tabIndex={0}>
           <table>
             <thead>
               <tr>
@@ -514,7 +555,7 @@ function CustomerDetail(props: Props) {
           </ol>
         )}
       </section>
-    </main>
+    </section>
   );
 }
 
@@ -522,6 +563,24 @@ function ServiceOrderDetail(props: Props) {
   const { serviceOrderId = "" } = useParams();
   const [order, setOrder] = useState<ServiceOrder>();
   const [error, setError] = useState<string>();
+  const workspaceObject = useMemo(
+    () =>
+      !error && order?.id === serviceOrderId && order.tenantId === props.tenantId
+        ? {
+            id: order.id,
+            objectType: "ServiceOrder",
+            title: order.orderNumber,
+            route: `/lab-services/service-orders/${order.id}`,
+            properties: [
+              { label: "Status", value: order.status },
+              { label: "Customer", value: order.customerDisplayName },
+              { label: "Service lines", value: String(order.lines.length) }
+            ]
+          }
+        : undefined,
+    [order, serviceOrderId, props.tenantId, error]
+  );
+  useWorkspaceObject(workspaceObject);
   const load = () => {
     if (!props.tenantId) return;
     void props
@@ -583,10 +642,10 @@ function ServiceOrderDetail(props: Props) {
     }
   }
   if (!order)
-    return <main>{error ? <p role="alert">{error}</p> : <p>Loading Service Order…</p>}</main>;
+    return <section>{error ? <p role="alert">{error}</p> : <p>Loading Service Order…</p>}</section>;
   const perms = props.modulePermissions ?? [];
   return (
-    <main aria-labelledby="service-order-title">
+    <section aria-labelledby="service-order-title">
       <Link to="/lab-services">← Lab Services</Link>
       <header className="nox-module-header">
         <div>
@@ -635,7 +694,7 @@ function ServiceOrderDetail(props: Props) {
           <dt>Customer reference</dt>
           <dd>{order.customerExternalReference ?? "—"}</dd>
         </dl>
-        <div className="nox-table-wrap">
+        <div className="nox-table-wrap" tabIndex={0}>
           <table>
             <thead>
               <tr>
@@ -687,24 +746,24 @@ function ServiceOrderDetail(props: Props) {
           require cancellation and replacement.
         </p>
       ) : null}
-    </main>
+    </section>
   );
 }
 
 export function LabServicesExperience(props: Props) {
   if (!props.tenantId)
     return (
-      <main>
+      <section>
         <h1>NØX Lab Services</h1>
         <p>Select a tenant workspace to continue.</p>
-      </main>
+      </section>
     );
   if (!allowed(props.modulePermissions ?? [], permissions.read))
     return (
-      <main>
+      <section>
         <h1>NØX Lab Services</h1>
         <p role="alert">Permission denied.</p>
-      </main>
+      </section>
     );
   return (
     <Routes>

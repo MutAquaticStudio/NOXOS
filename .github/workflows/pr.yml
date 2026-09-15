@@ -92,5 +92,26 @@ jobs:
       - run: pnpm exec supabase start
       - run: pnpm exec supabase db reset --local
       - run: pnpm exec supabase test db
+      - name: Platform revision transaction and conflict probes
+        run: pnpm exec vitest run packages/database/src/platform-revision.postgres.test.ts
+        env:
+          G2_REVISION_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: G4 creation transaction and replay probes
+        run: pnpm exec vitest run packages/database/src/design-studio-creation.postgres.test.ts
+        env:
+          # Disposable Supabase CLI database on this CI runner, never a provider project.
+          G4_CREATION_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: G4 G5 commit evidence and revision replay probes
+        run: pnpm exec vitest run packages/database/src/design-studio-evidence.postgres.test.ts
+        env:
+          G4_EVIDENCE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: G12 Project revision and replay probes
+        run: pnpm exec vitest run packages/database/src/project-command.postgres.test.ts
+        env:
+          G12_COMMAND_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Commercial fulfillment transaction and replay probes
+        run: pnpm exec vitest run packages/database/src/commercial-fulfillment-lines.postgres.test.ts
+        env:
+          G13_FULFILLMENT_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
       - if: always()
         run: pnpm exec supabase stop --no-backup

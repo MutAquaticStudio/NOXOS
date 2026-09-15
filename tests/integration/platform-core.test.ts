@@ -18,6 +18,7 @@ const IDs = {
   tenantA: "10000000-0000-4000-8000-000000000001",
   tenantB: "10000000-0000-4000-8000-000000000002"
 } as const;
+const fixtureStores = new WeakMap<object, InMemoryPlatformStore>();
 
 function fixture() {
   const store = new InMemoryPlatformStore();
@@ -78,6 +79,7 @@ function fixture() {
     environment: { NOX_ENV: "test", VERCEL_GIT_COMMIT_SHA: "g2-test-sha" },
     platformCore: core
   });
+  fixtureStores.set(api, store);
   return { api, core, store };
 }
 
@@ -96,18 +98,108 @@ async function request(
   const headers: Record<string, string> = { "x-correlation-id": "corr_g2_test", ...input.headers };
   if (input.actor) headers.authorization = `Bearer ${input.actor}`;
   if (input.tenantId) headers["x-nox-tenant-id"] = input.tenantId;
+  // Legacy behavior tests act on a freshly loaded fixture. Explicit revisions,
+  // including explicit undefined, are NEVER repaired (negative tests rely on this).
+  let body = input.body;
+  if (
+    input.method === "PATCH" &&
+    body &&
+    typeof body === "object" &&
+    !Object.hasOwn(body, "expectedRevision")
+  ) {
+    const store = fixtureStores.get(api)!;
+    const parts = input.path.split("/");
+    const current =
+      parts[1] === "platform" && parts[2] === "users"
+        ? await store.findPlatformUser(parts[3]!)
+        : input.path.includes("/members/")
+          ? await store.findTenantMembership(
+              parts[1] === "tenant" ? input.tenantId! : parts[3]!,
+              parts.at(-1)!
+            )
+          : await store.findTenant(input.path === "/tenant" ? input.tenantId! : parts[3]!);
+    body = { ...body, expectedRevision: current?.revision ?? "0.000000" };
+  }
   const apiRequest: ApiRequest = {
     method: input.method ?? "GET",
     path: input.path,
     headers,
     query: input.query,
-    body: input.body,
+    body,
     context: createRequestContext(api.identity, headers)
   };
   return api.dispatch(apiRequest);
 }
 
 describe("G2-A Platform Core", () => {
+  it.each(["user", "tenant-name", "tenant-status", "tenant-member", "platform-member"])(
+    "%s revision rejects stale writes, preserves equal replay and rolls back audit failure",
+    async (kind) => {
+      const { api, store } = fixture();
+      const user = kind === "user";
+      const member = kind.endsWith("member");
+      const tenantScope = kind === "tenant-name" || kind === "tenant-member";
+      const path = user
+        ? `/platform/users/${IDs.unprivileged}`
+        : member
+          ? kind === "tenant-member"
+            ? `/tenant/members/${IDs.tenantAMember}`
+            : `/platform/tenants/${IDs.tenantA}/members/${IDs.tenantAMember}`
+          : tenantScope
+            ? "/tenant"
+            : `/platform/tenants/${IDs.tenantA}`;
+      const read = () =>
+        user
+          ? store.findPlatformUser(IDs.unprivileged)
+          : member
+            ? store.findTenantMembership(IDs.tenantA, IDs.tenantAMember)
+            : store.findTenant(IDs.tenantA);
+      const first = user
+        ? { displayName: "First" }
+        : member
+          ? { roleKey: "TENANT_ADMIN" }
+          : tenantScope
+            ? { name: "First" }
+            : { status: "SUSPENDED" };
+      const second = user
+        ? { displayName: "Second" }
+        : member
+          ? { roleKey: "TENANT_OWNER" }
+          : tenantScope
+            ? { name: "Second" }
+            : { status: "ACTIVE" };
+      const send = (body: unknown) =>
+        request(api, {
+          method: "PATCH",
+          path,
+          actor: tenantScope ? IDs.tenantAOwner : IDs.platformOwner,
+          tenantId: tenantScope ? IDs.tenantA : undefined,
+          body
+        });
+      const before = await read();
+      const revision = before!.revision;
+      expect(revision).toMatch(/^\d+\.\d{6}$/);
+      expect((await send({ ...first, expectedRevision: undefined })).status).toBe(400);
+      expect((await send({ ...first, expectedRevision: "not-a-revision" })).status).toBe(400);
+      expect(await read()).toEqual(before);
+      expect((await send({ ...first, expectedRevision: revision })).status).toBe(200);
+      const saved = await read();
+      expect(saved!.revision).not.toBe(revision);
+      const audits = store.auditEvents.length;
+      expect((await send({ ...first, expectedRevision: revision })).status).toBe(200);
+      expect(store.auditEvents).toHaveLength(audits);
+      const stale = await send({ ...second, expectedRevision: revision });
+      expect(stale.status).toBe(409);
+      expect(stale.body).toMatchObject({ error: { code: "PLATFORM_RESOURCE_STALE" } });
+      expect(await read()).toEqual(saved);
+      store.setAuditInsertFailure(true);
+      expect((await send({ ...second, expectedRevision: saved!.revision })).status).toBe(500);
+      expect(await read()).toEqual(saved);
+      expect(store.auditEvents).toHaveLength(audits);
+      store.setAuditInsertFailure(false);
+      expect((await send({ ...second, expectedRevision: saved!.revision })).status).toBe(200);
+    }
+  );
   it("enforces bearer authentication and ignores forged authority headers", async () => {
     const { api } = fixture();
     const missing = await request(api, { path: "/me" });
